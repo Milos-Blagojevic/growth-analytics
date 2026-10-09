@@ -32,6 +32,14 @@ Do not run these without asking: they spend money or send real messages.
 
 `python -m dashboard` is free and read-only; for a smoke run, point it at a temporary directory of sample files instead of the owner's data.
 
+## Git workspaces
+
+Agents work in separate linked folders (git worktrees), each on its own branch. The main checkout (the first entry of `git worktree list`) owns `main` and holds the owner's private files.
+
+- Never check out `main` in a linked folder. `git checkout main` fails while `main` is checked out elsewhere; do not force it with `--ignore-other-worktrees`.
+- To get the latest `main` in a linked folder: `git fetch origin && git switch --detach origin/main`. Start new work with `git switch -c <branch> origin/main`.
+- After a PR merges, update `main` only in the main checkout, and only when asked: `git -C <main checkout> pull --ff-only`.
+
 ## Private files
 
 `.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/` and `hunt.db` hold the owner's secrets and personal data. They are git-ignored; never commit them, and do not read `.env`. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
