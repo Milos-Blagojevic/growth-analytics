@@ -142,6 +142,13 @@ Known limits: Exa is a search engine, not a jobs feed. Open-role coverage varies
 
 Score noise: the scoring model does not accept a temperature setting (`temperature is deprecated for this model`), so the same research can score differently between runs: typically within a few points, occasionally more. Verdict thresholds (75, 50) and the gap rule make borderline companies flip (one company went from 68 stretch to 82 apply on identical input). Read scores as bands, not exact values.
 
+## Parked ideas
+
+Not built yet; recorded so they can be picked up later.
+
+- **Repeat scoring for borderline companies.** Because scores vary between runs (see Score noise), score companies whose first score lands near a verdict threshold (for example within 5 points of 75 or 50, or a stretch/apply split) two or three times and use the median score and the majority verdict. Costs roughly 2-3x the Claude spend for those companies only (a full 19-company run currently costs about $0.27 in Claude).
+- **Watch list for growth roles.** Poll public ATS boards (Ashby's posting API is free and needs no key) for companies you want, such as Buffer and n8n, and send a Telegram message when a matching title opens, so side projects for stretch roles can be built in advance.
+
 ## Files
 
 | File | Purpose |

@@ -53,6 +53,9 @@ background fits. Leave it empty when title and duties match (for example a data 
 data-engineering duties) and when no description is available.
 - Compensation: report salary or benefits only as stated in the posting. Never judge whether pay is high or \
 low unless the candidate states a pay expectation.
+- Preferences: the candidate's notes state preferences (for example individual contributor vs people \
+management). Apply them as a modest score adjustment and mention them in reasons or concerns; a preference \
+alone never makes a role "skip". Treat facts in the notes (for example past mentoring) as experience.
 
 Verdicts: apply >= 75, consider 50-74, skip < 50 ("stretch" replaces apply or consider for gap-area roles). \
 When open roles exist but none are relevant, score below 50 (skip). When the research found NO open roles at \
