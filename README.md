@@ -116,6 +116,7 @@ python hunt.py run --research-only             # Exa only: no Claude, no Telegra
 python hunt.py run --dry-run                   # research + score, print the digest
 python hunt.py run                             # research + score + send to Telegram
 python hunt.py send                            # send the latest saved run's digest to Telegram (no new research or scoring)
+python hunt.py watch                           # send new growth-role postings from watched Ashby boards to Telegram
 ```
 
 Each run saves raw research and scores to `out/<timestamp>/<domain>.json` and prints Exa cost and Claude token usage. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call.
@@ -142,12 +143,21 @@ Known limits: Exa is a search engine, not a jobs feed. Open-role coverage varies
 
 Score noise: the scoring model does not accept a temperature setting (`temperature is deprecated for this model`), so the same research can score differently between runs: typically within a few points, occasionally more. Verdict thresholds (75, 50) and the gap rule make borderline companies flip (one company went from 68 stretch to 82 apply on identical input). Read scores as bands, not exact values.
 
+### Watch list
+
+`python hunt.py watch` polls the Ashby job boards in `[watch].ashby_boards` (the slug in `jobs.ashbyhq.com/<slug>`) through Ashby's free, keyless posting API, which lists only open postings. Postings whose title contains any `title_keywords` entry (case-insensitive) and none of `title_exclude` are sent to Telegram in one message with title, location and link. Already-reported posting IDs are kept in `watch_state.json`, so each posting is sent once; the first run reports everything currently open. State is saved only after a successful send, so a failed send is retried on the next run. `--dry-run` prints matches without sending or saving state. A board that cannot be read (typo, API error) is logged, its state is left unchanged, and the exit code is 1. No Exa or Claude calls, so it costs nothing.
+
+Only Ashby boards are supported. To run it on a schedule while the laptop is on, add a cron entry (`crontab -e`), for example every 6 hours:
+
+```
+0 */6 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py watch >> watch.log 2>&1
+```
+
 ## Parked ideas
 
 Not built yet; recorded so they can be picked up later.
 
 - **Repeat scoring for borderline companies.** Because scores vary between runs (see Score noise), score companies whose first score lands near a verdict threshold (for example within 5 points of 75 or 50, or a stretch/apply split) two or three times and use the median score and the majority verdict. Costs roughly 2-3x the Claude spend for those companies only (a full 19-company run currently costs about $0.27 in Claude).
-- **Watch list for growth roles.** Poll public ATS boards (Ashby's posting API is free and needs no key) for companies you want, such as Buffer and n8n, and send a Telegram message when a matching title opens, so side projects for stretch roles can be built in advance.
 
 ## Files
 
@@ -161,8 +171,11 @@ Not built yet; recorded so they can be picked up later.
 | `research.py` | Per-company Exa research (identity, signals, open roles) |
 | `scoring.py` | Claude fit scoring (structured output) |
 | `telegram.py` | Telegram delivery |
+| `watch.py` | Watch list: poll job boards, report new matching postings |
+| `ashby.py` | Ashby public job-board API client (used by link checks and the watch list) |
 | `profile.example.toml` | Template for `profile.toml` (git-ignored) |
 | `cv.example.md` | Template for `cv.md` (git-ignored) |
 | `companies.example.csv` | Template for `companies.csv` (git-ignored) |
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
+| `watch_state.json` | Postings the watch list has already reported (git-ignored) |

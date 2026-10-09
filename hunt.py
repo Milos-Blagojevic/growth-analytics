@@ -4,6 +4,7 @@
     python hunt.py run [--dry-run]           # research + score + deliver for companies.csv
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
     python hunt.py send [out/<run>]          # send a saved run's digest to Telegram (default: latest)
+    python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
 """
 
 import argparse
@@ -23,6 +24,7 @@ import exa_client
 import research
 import scoring
 import telegram
+import watch
 
 logger = logging.getLogger("hunt")
 WORKERS = 4
@@ -361,6 +363,33 @@ def cmd_send(args):
     return 0
 
 
+def cmd_watch(args):
+    profile = load_profile(args.profile)
+    try:
+        boards, keywords, exclude = watch.load_config(profile)
+    except ValueError as exc:
+        sys.exit(f"{args.profile}: {exc}")
+    if not args.dry_run and not telegram.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
+
+    new_matches, problems, new_state = watch.check(boards, keywords, exclude, watch.load_state(args.state))
+    for problem in problems:
+        logger.warning("watch: %s", problem)
+    if not new_matches:
+        print(f"No new matching postings on {len(boards) - len(problems)}/{len(boards)} board(s).")
+    else:
+        message = watch.format_message(new_matches, problems)
+        if args.dry_run:
+            print(message)
+        else:
+            for part in telegram.pack_blocks([message]):
+                telegram.send(part)
+            print(f"Sent {len(new_matches)} new posting(s) to Telegram.")
+    if not args.dry_run:
+        watch.save_state(args.state, new_state)  # only after a successful send, so failures retry next run
+    return 1 if problems else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", default="profile.toml")
@@ -381,6 +410,11 @@ def main():
     send = sub.add_parser("send", help="send the digest of a saved run to Telegram (no new research or scoring)")
     send.add_argument("run_dir", nargs="?", help="a directory under out/; default: the latest run")
     send.set_defaults(func=cmd_send)
+
+    watch_cmd = sub.add_parser("watch", help="check watched Ashby boards and send new matching postings to Telegram")
+    watch_cmd.add_argument("--state", default="watch_state.json", help="JSON file of postings already reported")
+    watch_cmd.add_argument("--dry-run", action="store_true", help="print new matches; do not send or save state")
+    watch_cmd.set_defaults(func=cmd_watch)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

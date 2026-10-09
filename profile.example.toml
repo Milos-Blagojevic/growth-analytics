@@ -29,3 +29,12 @@ gaps = ""
 # Specific tools or skills where you are weak. If a posting needs one, the digest flags it with a prep
 # step; it does not lower the verdict by itself (unlike gaps). Example: "PySpark: limited experience."
 weak_spots = ""
+
+[watch]
+# `python hunt.py watch` polls these Ashby job boards (the slug in jobs.ashbyhq.com/<slug>) and sends
+# new postings whose title matches a keyword to Telegram. The first run reports everything currently open.
+ashby_boards = []
+# Case-insensitive substrings matched against job titles, e.g. ["growth engineer", "analytics engineer"].
+title_keywords = []
+# Titles containing any of these are ignored, e.g. ["marketing manager"].
+title_exclude = []

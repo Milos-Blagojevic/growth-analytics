@@ -7,14 +7,13 @@ from urllib.parse import urlparse
 
 import requests
 
+import ashby
 import exa_client
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
 }
 DEAD_STATUS = {404, 410}
-ASHBY_HOST = "jobs.ashbyhq.com"
-ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{board}"
 MAX_DESCRIBED_ROLES = 3  # posting texts fetched per company
 DESCRIPTION_CHARS = 4000  # per posting; keeps scorer input small
 
@@ -168,19 +167,9 @@ def _structured(query, schema, system_prompt, **kwargs):
 
 @lru_cache(maxsize=None)
 def _ashby_board(board):
-    """(state, listed job ids): state is "ok", "missing" (no such board) or "unknown" (API error)."""
-    try:
-        response = requests.get(ASHBY_API.format(board=board), headers=BROWSER_HEADERS, timeout=15)
-    except requests.RequestException:
-        return "unknown", frozenset()
-    if response.status_code == 404:
-        return "missing", frozenset()
-    if response.status_code != 200:
-        return "unknown", frozenset()
-    try:
-        return "ok", frozenset(job["id"] for job in response.json()["jobs"])
-    except (ValueError, KeyError, TypeError):
-        return "unknown", frozenset()
+    """(state, listed job ids), cached per run; see ashby.fetch_board for states."""
+    state, jobs = ashby.fetch_board(board)
+    return state, frozenset(job["id"] for job in jobs)
 
 
 def check_posting(url):
@@ -194,9 +183,9 @@ def check_posting(url):
     """
     parsed = urlparse(url)
     segments = [s for s in parsed.path.split("/") if s]
-    if len(segments) < 2 and parsed.netloc != ASHBY_HOST:
+    if len(segments) < 2 and parsed.netloc != ashby.HOST:
         return "unknown"
-    if parsed.netloc == ASHBY_HOST:
+    if parsed.netloc == ashby.HOST:
         if len(segments) < 2:
             return "unknown"
         state, listed = _ashby_board(segments[0].lower())
