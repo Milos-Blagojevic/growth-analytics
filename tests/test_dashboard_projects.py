@@ -70,7 +70,19 @@ def test_a_rescored_company_does_not_resuggest_handled_ideas(root, app_client):
 
     app_client.get("/projects")  # ingests the new run
     _, suggestions = board(root)
-    assert [s["text"] for s in suggestions] == ["Build a pricing-page A/B test"]
+    # Newest run first; the older run's unhandled idea is still offered.
+    assert [s["text"] for s in suggestions] == ["Build a pricing-page A/B test", IDEAS[1]]
+
+
+def test_ideas_stay_suggested_after_a_rescore_drops_the_stretch_verdict(root, app_client):
+    # Score noise: the same company comes back as consider, and the scorer writes no ideas for consider roles.
+    write_run(root, "20260109-090000", [result("PostHog", "posthog.com", fit=fit(68, "consider", "Growth Engineer", "https://posthog.com/g"))])
+
+    page = app_client.get("/projects").text
+    _, suggestions = board(root)
+
+    assert [(s["text"], s["verdict"], s["score"]) for s in suggestions] == [(i, "stretch", 72) for i in IDEAS]
+    assert IDEAS[0] in page and "72 Stretch" in page
 
 
 def test_own_projects_can_be_created_moved_edited_and_deleted(root, app_client):

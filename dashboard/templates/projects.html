@@ -5,7 +5,7 @@
   <h1>Side projects</h1>
   <button class="btn primary" type="button" hx-get="/projects/new" hx-target="#panel">New project</button>
 </div>
-<p class="muted small">Projects that build proof for your gaps: your own, plus ideas the scorer suggested for stretch roles.</p>
+<p class="muted small">Projects that build proof for your gaps: your own, plus ideas the scorer wrote for stretch roles in any saved run.</p>
 
 {% if suggestions %}
 <section class="block">
@@ -17,7 +17,7 @@
       {% if s.gap %}<p class="muted small"><strong>Gap:</strong> {{ s.gap }}</p>{% endif %}
       <div class="suggestion-foot">
         <a class="muted small" href="/c/{{ s.domain }}" hx-get="/c/{{ s.domain }}" hx-target="#panel">
-          for {{ s.name }}{% if s.role %} · {{ s.role }}{% endif %} <span class="badge sm v-{{ s.verdict }}">{{ s.score }}</span>
+          for {{ s.name }}{% if s.role %} · {{ s.role }}{% endif %} <span class="badge sm v-{{ s.verdict }}" title="Score and verdict in that run">{{ s.score }} {{ s.verdict | label }}</span> · {{ s.saved_at | ago }}
         </a>
         <span class="btn-row">
           <button class="btn ghost sm" type="button" hx-post="/projects/suggestions/{{ s.key }}" hx-vals='{"action": "dismiss"}'>Dismiss</button>

@@ -1,14 +1,13 @@
 """Side projects: your own entries plus the scorer's ideas (`Fit.proof_ideas`) that you accept or dismiss.
 
-Scorer ideas are not copied into side_projects until you act on one: `suggestions` lists the ideas in the
-latest scored result of each company that have no side_projects row yet (matched by `idea_key`).
+Scorer ideas are not copied into side_projects until you act on one: `suggestions` lists the ideas from every
+saved scored result that have no side_projects row yet (matched by `idea_key`). Ideas from older runs stay:
+they target your gaps, which a later rescore of the company (verdict noise, a changed role) does not remove.
 """
 
 import hashlib
 import json
 from datetime import datetime
-
-from dashboard import queries
 
 STATUSES = ("idea", "active", "done", "dropped")  # board columns; "dismissed" rows are hidden suggestions
 FIELDS = ("title", "description", "gap", "repo_url")
@@ -19,17 +18,19 @@ def idea_key(domain, text):
 
 
 def suggestions(conn):
-    """Scorer ideas not yet accepted or dismissed: [{key, text, gap, domain, name, role, score, verdict}]."""
+    """Scorer ideas not yet accepted or dismissed, newest run first; an idea repeated across runs is listed once,
+    from its newest run: [{key, text, gap, domain, name, role, score, verdict, saved_at}]."""
     known = {r["idea_key"] for r in conn.execute("SELECT idea_key FROM side_projects WHERE idea_key IS NOT NULL")}
     rows = conn.execute(
-        queries.LATEST + "SELECT * FROM latest WHERE proof_ideas != '[]' ORDER BY score DESC, name"
+        "SELECT r.*, runs.saved_at FROM results r JOIN runs ON runs.id = r.run_id"
+        " WHERE r.proof_ideas != '[]' ORDER BY r.run_id DESC, r.score DESC, r.name"
     ).fetchall()
     found = []
     for row in rows:
         for text in json.loads(row["proof_ideas"]):
             key = idea_key(row["domain"], text)
             if key not in known:
-                known.add(key)  # the same idea twice in one result is shown once
+                known.add(key)
                 found.append(
                     {
                         "key": key,
@@ -40,6 +41,7 @@ def suggestions(conn):
                         "role": row["best_role_title"] or "",
                         "score": row["score"],
                         "verdict": row["verdict"],
+                        "saved_at": row["saved_at"],
                     }
                 )
     return found
