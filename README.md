@@ -153,6 +153,17 @@ Only Ashby boards are supported. To run it on a schedule while the laptop is on,
 0 */6 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py watch >> watch.log 2>&1
 ```
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages and Telegram are mocked the same way; Claude is replaced by a fake client.
+
+CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
+
 ## Parked ideas
 
 Not built yet; recorded so they can be picked up later.
@@ -165,6 +176,9 @@ Not built yet; recorded so they can be picked up later.
 |---|---|
 | `exa_client.py` | Exa search client |
 | `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`) |
+| `requirements-dev.txt` | Test dependencies (`pytest`, `responses`) |
+| `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
+| `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |
 | `hunt.py` | Job-hunt CLI: `discover` and `run` |
