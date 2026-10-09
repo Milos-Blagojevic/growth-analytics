@@ -183,13 +183,16 @@ def contents(urls, *, max_age_hours=None, highlights=True, **kwargs):
     """Fetch content for URLs you already have. Note: highlights is top-level here.
 
     max_age_hours: same semantics as in search().
-    highlights: request query-relevant excerpts (default). Pass False together with e.g.
-    text={"max_characters": 4000} to fetch full text only; requesting both bills both views.
+    highlights: request query-relevant excerpts (default). Full text is then not requested unless
+    `text` is passed; requesting both bills both views. Pass False together with e.g.
+    text={"max_characters": 4000} to fetch full text only.
     """
     if max_age_hours is not None:
         kwargs["max_age_hours"] = max_age_hours
     if highlights:
         kwargs["highlights"] = True
+        # exa-py adds text={"max_characters": 10000} when no text/summary/extras is given; opt out.
+        kwargs.setdefault("text", False)
     return _call("contents", "get_contents", urls, **kwargs)
 
 

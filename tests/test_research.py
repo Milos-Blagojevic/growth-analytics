@@ -51,7 +51,7 @@ def test_research_drops_dead_links_and_describes_live_roles(exa, http, profile):
 
     def contents(body):
         if body.get("maxAgeHours") == 0:  # fresh fetch resolving links the HTTP check could not
-            assert body["urls"] == [careers_page["url"], blocked["url"]]
+            assert body["urls"] == [careers_page["url"], blocked["url"]] and body["text"] is False
             return contents_response(statuses=[(careers_page["url"], "success"), (blocked["url"], "error")])
         assert body["urls"] == [live["url"]] and body["text"] == {"maxCharacters": research.DESCRIPTION_CHARS}
         return contents_response([result(live["url"] + "/", text="  Own the dbt models.  ")])
