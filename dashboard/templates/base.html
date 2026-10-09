@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Job hunt{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Job hunt</a>
+    <nav class="nav">
+      <a href="/" class="{{ 'active' if page == 'board' }}">Board</a>
+      <a href="/inbox" class="{{ 'active' if page == 'inbox' }}">Inbox</a>
+      <a href="/leads" class="{{ 'active' if page == 'leads' }}">Leads</a>
+    </nav>
+    {% if latest_run %}
+    <div class="run-meta" title="Run {{ latest_run.id }}">
+      <span class="dot"></span>
+      Last run {{ latest_run.saved_at | ago }}
+      <span class="sep">·</span>{{ latest_run.companies }} companies
+      {% if latest_run.mode %}<span class="sep">·</span>{{ latest_run.mode | mode }}{% endif %}
+      {% if latest_run.exa_dollars is not none %}<span class="sep">·</span>Exa ${{ '%.2f' | format(latest_run.exa_dollars) }}{% endif %}
+    </div>
+    {% endif %}
+  </header>
+
+  {% if problems %}
+  <div class="banner">
+    Some saved runs could not be read and are not shown:
+    {% for p in problems %}<code>{{ p }}</code>{% endfor %}
+  </div>
+  {% endif %}
+
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="panel"></div>
+
+  <script>
+    function closePanel() { document.getElementById("panel").innerHTML = ""; }
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePanel(); });
+  </script>
+</body>
+</html>

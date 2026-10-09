@@ -99,7 +99,7 @@ Notes: the tally is in-process only (not persisted) and counts successful reques
 
 ## Job-hunt pipeline
 
-Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and delivers a digest to Telegram. Runs locally.
+Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and sends a short notification to Telegram. A local dashboard shows the full results. Runs locally.
 
 ### Configure
 
@@ -113,15 +113,18 @@ Researches companies with Exa, scores how well they and their open roles fit you
 python hunt.py discover --limit 20             # suggests name,domain,why rows; logs them to discovered.csv
 python hunt.py discover "fintech" --limit 20   # same, with an extra focus
 python hunt.py run --research-only             # Exa only: no Claude, no Telegram
-python hunt.py run --dry-run                   # research + score, print the digest
-python hunt.py run                             # research + score + send to Telegram
-python hunt.py send                            # send the latest saved run's digest to Telegram (no new research or scoring)
+python hunt.py run --dry-run                   # research + score, print the full digest
+python hunt.py run                             # research + score + send the notification to Telegram
+python hunt.py send                            # send the latest saved run's notification to Telegram (no new research or scoring)
 python hunt.py watch                           # send new growth-role postings from watched Ashby boards to Telegram
+python -m dashboard                            # browse saved results at http://127.0.0.1:8000 (see Dashboard)
 ```
 
-Each run saves raw research and scores to `out/<timestamp>/<domain>.json` and prints Exa cost and Claude token usage. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call.
+Each run saves raw research and scores to `out/<timestamp>/<domain>.json`, plus `out/<timestamp>/_run.json` with the run's mode (`research_only`, `dry_run` or `deliver`), start and save times, company and error counts, the Exa cost summary and, for scored runs, the scoring model and Claude token totals. It also prints Exa cost and Claude token usage. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call.
 
-`send` rebuilds the digest from a saved run in `out/` (latest by default, or pass a directory). Use it after a `--dry-run` so the digest you reviewed is exactly the one delivered, without paying for a second run.
+The Telegram notification is short: the digest's count header, one entry per apply, consider and stretch role (score, verdict, company, role title and posting URL, so it works away from the laptop), the names of failed companies, and a link to the dashboard (`DASHBOARD_URL` in `.env`, default `http://127.0.0.1:8000`). Reasons, concerns, gap notes and side-project ideas are in the dashboard and in the `--dry-run` digest.
+
+`send` rebuilds the notification from a saved run in `out/` (latest by default, or pass a directory). Use it after a `--dry-run` so what is delivered comes from the run you reviewed, without paying for a second run.
 
 Discovery runs one search per target role plus one deep search (6 searches, roughly $0.15-0.20 for `--limit 20`) because a single search returns only a handful of companies. Results are merged round-robin, filtered (job boards and anonymous employers dropped, `[search].exclude_domains` removed) and appended to `discovered.csv` (`discovered_at,name,domain,why,focus`). Domains already in the history are skipped, so repeated runs only return new companies. The first three columns are in `companies.csv` format. The `why` column is Exa's unverified claim; `run` is what actually researches and scores each company.
 
@@ -145,13 +148,28 @@ Score noise: the scoring model does not accept a temperature setting (`temperatu
 
 ### Watch list
 
-`python hunt.py watch` polls the Ashby job boards in `[watch].ashby_boards` (the slug in `jobs.ashbyhq.com/<slug>`) through Ashby's free, keyless posting API, which lists only open postings. Postings whose title contains any `title_keywords` entry (case-insensitive) and none of `title_exclude` are sent to Telegram in one message with title, location and link. Already-reported posting IDs are kept in `watch_state.json`, so each posting is sent once; the first run reports everything currently open. State is saved only after a successful send, so a failed send is retried on the next run. `--dry-run` prints matches without sending or saving state. A board that cannot be read (typo, API error) is logged, its state is left unchanged, and the exit code is 1. No Exa or Claude calls, so it costs nothing.
+`python hunt.py watch` polls the Ashby job boards in `[watch].ashby_boards` (the slug in `jobs.ashbyhq.com/<slug>`) through Ashby's free, keyless posting API, which lists only open postings. Postings whose title contains any `title_keywords` entry (case-insensitive) and none of `title_exclude` are sent to Telegram in one message with title, location and link. Already-reported postings are kept in `watch_state.json` (ID, title, location, remote flag, link and when first seen; entries saved by older versions have only the title and time), so each posting is sent once and the dashboard can list them; the first run reports everything currently open. State is saved only after a successful send, so a failed send is retried on the next run. `--dry-run` prints matches without sending or saving state. A board that cannot be read (typo, API error) is logged, its state is left unchanged, and the exit code is 1. No Exa or Claude calls, so it costs nothing.
 
 Only Ashby boards are supported. To run it on a schedule while the laptop is on, add a cron entry (`crontab -e`), for example every 6 hours:
 
 ```
 0 */6 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py watch >> watch.log 2>&1
 ```
+
+### Dashboard
+
+```bash
+python -m dashboard              # http://127.0.0.1:8000
+python -m dashboard --port 8001
+```
+
+Run it from the project directory. It is read-only: it reads `out/`, `discovered.csv`, `companies.csv` and `watch_state.json`, makes no Exa, Claude or Telegram calls, and costs nothing. It listens on `127.0.0.1` only because it has no login.
+
+- **Board** (`/`): the latest scored result per company, in tabs for apply, consider, stretch, check careers and skip, with search, a minimum score and sorting. Each card shows the score, best role, location assessment and whether the posting link was confirmed live. A company whose latest run failed keeps its last scored result, and the board names the companies that failed in the most recent run. Click a card for the details: best role, next step, scope and gap notes, reasons and concerns, side-project ideas, score history across runs (with the 75 and 50 thresholds), open roles with link status, dropped dead links, company summary and evidence URLs. `/c/<domain>` opens the same details as a page.
+- **Inbox** (`/inbox`): apply, consider and stretch roles first scored in the last 7, 14 or 30 days or all time (a company counts again when its best role changes), and watch-list postings by when `watch` first reported them.
+- **Leads** (`/leads`): companies from `discovered.csv`, marked new, queued (in `companies.csv`) or researched (with the latest score).
+
+The dashboard copies these files into `hunt.db` (SQLite, git-ignored) and copies them again whenever one of them changes, so a finished run shows up on the next page load. Deleting `hunt.db` is safe; it is rebuilt from the files. A run directory that cannot be read (for example while a run is still writing it) is skipped with a warning banner and read again once it changes. Runs saved before `_run.json` existed show no mode or cost.
 
 ## Tests
 
@@ -160,7 +178,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages and Telegram are mocked the same way; Claude is replaced by a fake client.
+Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages and Telegram are mocked the same way; Claude is replaced by a fake client. Dashboard tests write pipeline files to a temporary directory (`tests/dashboard_data.py`) and call the app in-process with FastAPI's `TestClient`.
 
 CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
 
@@ -175,14 +193,16 @@ Not built yet; recorded so they can be picked up later.
 | File | Purpose |
 |---|---|
 | `exa_client.py` | Exa search client |
-| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`) |
-| `requirements-dev.txt` | Test dependencies (`pytest`, `responses`) |
+| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, and `fastapi`, `uvicorn`, `jinja2` for the dashboard) |
+| `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`) |
 | `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |
 | `hunt.py` | Job-hunt CLI: `discover`, `run`, `send` and `watch` |
+| `runs.py` | Saved-run format shared by `hunt.py` and the dashboard (`out/<timestamp>/`, `_run.json`) |
+| `dashboard/` | Local read-only dashboard (`python -m dashboard`): FastAPI app, SQLite ingest, Jinja templates, CSS and a vendored copy of htmx 2.0.7 |
 | `research.py` | Per-company Exa research (identity, signals, open roles) |
 | `scoring.py` | Claude fit scoring (structured output) |
 | `telegram.py` | Telegram delivery |
@@ -194,3 +214,4 @@ Not built yet; recorded so they can be picked up later.
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |
+| `hunt.db` | Dashboard database, rebuilt from the files above (git-ignored) |

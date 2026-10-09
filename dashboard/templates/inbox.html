@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Inbox · Job hunt{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Inbox</h1>
+  <nav class="pills">
+    {% for d in day_options %}
+    <a class="pill {{ 'active' if d == days }}" href="/inbox?days={{ d }}">{{ 'All time' if d == 0 else 'Last ' ~ d ~ ' days' }}</a>
+    {% endfor %}
+  </nav>
+</div>
+
+<section class="block">
+  <h2>New roles <span class="count">{{ roles | length }}</span></h2>
+  <p class="muted small">Apply, consider and stretch roles first scored in this period (a company whose best role changed counts again).</p>
+  {% if roles %}
+  <div class="grid">{% for c in roles %}{% include "partials/card.html" %}{% endfor %}</div>
+  {% else %}
+  <div class="empty slim">No new roles in this period.</div>
+  {% endif %}
+</section>
+
+<section class="block">
+  <h2>Watch list <span class="count">{{ postings | length }}</span></h2>
+  <p class="muted small">Postings from watched Ashby boards, by when <code>hunt.py watch</code> first reported them.</p>
+  {% if postings %}
+  <table class="table">
+    <thead><tr><th>Role</th><th>Board</th><th>Location</th><th>First seen</th></tr></thead>
+    <tbody>
+      {% for p in postings %}
+      <tr>
+        <td>{% if p.url %}<a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %}</td>
+        <td class="muted">{{ p.board }}</td>
+        <td>{{ p.location or '—' }}{% if p.remote %} <span class="chip link-live">remote</span>{% endif %}</td>
+        <td class="muted">{{ p.first_seen | ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty slim">No watch-list postings in this period.</div>
+  {% endif %}
+</section>
+{% endblock %}

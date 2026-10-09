@@ -66,6 +66,8 @@ def test_check_reports_only_new_matching_postings(boards):
     assert problems == ["gone: no such Ashby board"]
     assert set(new_state) == {"acme"}
     assert set(new_state["acme"]) == {"j1", "j4", "j5"}
+    j1 = new_state["acme"]["j1"]
+    assert (j1["location"], j1["remote"], j1["url"]) == ("Berlin", True, "https://jobs.ashbyhq.com/acme/j1")
     assert set(state["acme"]) == {"j4"}  # input state is not mutated
 
 

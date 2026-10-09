@@ -1,0 +1,135 @@
+{% set r = result %}
+<header class="sheet-head">
+  {% if r.score is not none %}<div class="ring lg" style="--score: {{ r.score }}"><span>{{ r.score }}</span></div>{% endif %}
+  <div class="sheet-id">
+    <h2>{{ r.name }}</h2>
+    <a class="muted" href="https://{{ r.domain }}" target="_blank" rel="noopener">{{ r.domain }} ↗</a>
+  </div>
+  {% if r.verdict %}<span class="badge v-{{ r.verdict }}">{{ r.verdict | label }}</span>{% endif %}
+  {% if in_panel %}<button class="close" type="button" onclick="closePanel()" aria-label="Close">✕</button>{% endif %}
+</header>
+
+<div class="sheet-body">
+  {% if newer %}
+  <div class="note">
+    Newer run{{ 's' if newer | length > 1 }} without a score:
+    {% for h in newer %}{{ h.saved_at | ago }} ({{ 'error' if h.error else h.mode | mode }}){{ ', ' if not loop.last }}{% endfor %}.
+    Showing the run from {{ r.saved_at | ago }}.
+  </div>
+  {% endif %}
+  {% if r.error %}<div class="note error"><strong>Failed:</strong> {{ r.error }}</div>{% endif %}
+
+  {% if r.best_role_title %}
+  <section class="role-hero">
+    <div class="eyebrow">Best role</div>
+    {% if r.best_role_url %}
+    <a class="role-link" href="{{ r.best_role_url }}" target="_blank" rel="noopener">{{ r.best_role_title }} <span>↗</span></a>
+    <div class="muted small">{{ r.best_role_url | host }}{% if r.role_source and r.role_source != 'none' %} · found by {{ r.role_source | replace('_', ' ') }} search{% endif %}</div>
+    {% else %}
+    <div class="role-link">{{ r.best_role_title }}</div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if r.next_step %}
+  <section class="callout next"><div class="eyebrow">Next step</div>{{ r.next_step }}</section>
+  {% endif %}
+  {% if r.scope_note %}
+  <section class="callout"><div class="eyebrow">Scope</div>{{ r.scope_note }}</section>
+  {% endif %}
+  {% if r.gap_note %}
+  <section class="callout gap"><div class="eyebrow">Gap</div>{{ r.gap_note }}</section>
+  {% endif %}
+
+  {% if r.reasons or r.concerns %}
+  <section class="pros-cons">
+    <div>
+      <div class="eyebrow">Why it fits</div>
+      <ul class="pros">{% for x in r.reasons %}<li>{{ x }}</li>{% endfor %}</ul>
+    </div>
+    <div>
+      <div class="eyebrow">Concerns</div>
+      <ul class="cons">{% for x in r.concerns %}<li>{{ x }}</li>{% else %}<li class="muted">None noted</li>{% endfor %}</ul>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if r.location_assessment %}
+  <section><div class="eyebrow">Location</div><p>{{ r.location_assessment }}</p></section>
+  {% endif %}
+
+  {% if r.proof_ideas %}
+  <section>
+    <div class="eyebrow">Side-project ideas</div>
+    <ul class="ideas">{% for x in r.proof_ideas %}<li>{{ x }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+
+  <section>
+    <div class="eyebrow">Score history</div>
+    {% if sparkline %}
+    <div class="history">
+      <svg viewBox="0 0 {{ sparkline.width }} {{ sparkline.height }}" width="{{ sparkline.width }}" height="{{ sparkline.height }}" role="img"
+           aria-label="Scores from {{ sparkline.min }} to {{ sparkline.max }}">
+        <line class="band" x1="0" x2="{{ sparkline.width }}" y1="{{ sparkline.bands.apply }}" y2="{{ sparkline.bands.apply }}"></line>
+        <line class="band" x1="0" x2="{{ sparkline.width }}" y1="{{ sparkline.bands.consider }}" y2="{{ sparkline.bands.consider }}"></line>
+        <polyline points="{{ sparkline.points }}"></polyline>
+        {% for d in sparkline.dots %}<circle cx="{{ d.x }}" cy="{{ d.y }}" r="3"><title>{{ d.score }}</title></circle>{% endfor %}
+      </svg>
+      <span class="muted small">range {{ sparkline.min }}–{{ sparkline.max }}; dashed lines at 75 and 50</span>
+    </div>
+    {% endif %}
+    <table class="table compact">
+      {% for h in history | reverse %}
+      <tr>
+        <td class="muted">{{ h.saved_at[:16] | replace('T', ' ') }}</td>
+        <td>{% if h.score is not none %}<span class="badge sm v-{{ h.verdict }}">{{ h.score }} {{ h.verdict | label }}</span>{% elif h.error %}<span class="badge sm v-error">error</span>{% else %}<span class="badge sm">{{ h.mode | mode }}</span>{% endif %}</td>
+        <td class="muted">{{ h.best_role_title or '' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  {% if roles %}
+  <section>
+    <div class="eyebrow">Open roles found</div>
+    <ul class="roles">
+      {% for role in roles %}
+      <li>
+        <a href="{{ role.url }}" target="_blank" rel="noopener">{{ role.title }}</a>
+        {% if role.link_status %}<span class="chip link-{{ role.link_status }}">{{ role.link_status }}</span>{% endif %}
+        <div class="muted small">{{ role.location }}{% if role.remote_or_relocation %} · {{ role.remote_or_relocation }}{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if r.dead_roles %}
+  <section>
+    <div class="eyebrow">Dead links dropped</div>
+    <ul class="roles dead">{% for d in r.dead_roles %}<li><span>{{ d.title }}</span> <span class="muted small">{{ d.url | host }}</span></li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+
+  {% if r.business_summary or r.signals %}
+  <section>
+    <div class="eyebrow">Company</div>
+    {% if r.verified == 0 %}<div class="note error">Identity not verified: the research may be about a different company.</div>{% endif %}
+    {% if r.business_summary %}<p>{{ r.business_summary }}</p>{% endif %}
+    {% if r.signals %}<p class="muted">{{ r.signals }}</p>{% endif %}
+  </section>
+  {% endif %}
+
+  {% if r.grounding %}
+  <section>
+    <div class="eyebrow">Evidence</div>
+    <dl class="evidence">
+      {% for field, g in r.grounding.items() %}
+      <dt>{{ field | replace('_', ' ') }} <span class="conf conf-{{ g.confidence }}">{{ g.confidence }}</span></dt>
+      <dd>{% for u in g.urls %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u | host }}</a>{% endfor %}</dd>
+      {% endfor %}
+    </dl>
+  </section>
+  {% endif %}
+</div>

@@ -45,7 +45,8 @@ def check(boards, keywords, exclude, state):
 
     new_matches: [{"board", "id", "title", "location", "remote", "url"}] not seen before.
     problems: ["board: reason"] for boards that could not be read; their state is left unchanged.
-    new_state: state with new matches added ({board: {job_id: {"title", "first_seen"}}}).
+    new_state: state with new matches added ({board: {job_id: {"title", "location", "remote", "url", "first_seen"}}};
+    entries written before location/remote/url were stored have only "title" and "first_seen").
     Seen IDs are never removed, so a posting that closes and reopens under the same ID is not re-sent.
     """
     now = datetime.now().isoformat(timespec="seconds")
@@ -63,17 +64,16 @@ def check(boards, keywords, exclude, state):
         for job in jobs:
             if job["id"] in seen or not title_matches(job["title"], keywords, exclude):
                 continue
-            seen[job["id"]] = {"title": job["title"], "first_seen": now}
-            new_matches.append(
-                {
-                    "board": board,
-                    "id": job["id"],
-                    "title": job["title"],
-                    "location": job.get("location") or "unknown",
-                    "remote": bool(job.get("isRemote")),
-                    "url": job.get("jobUrl") or f"https://{ashby.HOST}/{board}/{job['id']}",
-                }
-            )
+            match = {
+                "board": board,
+                "id": job["id"],
+                "title": job["title"],
+                "location": job.get("location") or "unknown",
+                "remote": bool(job.get("isRemote")),
+                "url": job.get("jobUrl") or f"https://{ashby.HOST}/{board}/{job['id']}",
+            }
+            seen[job["id"]] = {k: match[k] for k in ("title", "location", "remote", "url")} | {"first_seen": now}
+            new_matches.append(match)
     return new_matches, problems, new_state
 
 
