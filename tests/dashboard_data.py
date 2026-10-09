@@ -1,6 +1,17 @@
-"""Builders for pipeline files (out/<run>/, watch_state.json, discovered.csv) used by the dashboard tests."""
+"""Builders for pipeline files (out/<run>/, watch_state.json, discovered.csv) and a dashboard test client."""
 
 import json
+
+from fastapi.testclient import TestClient
+
+BASE_URL = "http://127.0.0.1:8000"  # the dashboard only accepts loopback Host headers
+
+
+def client(app):
+    """TestClient that sends the app's CSRF token on every request, as the dashboard's pages do."""
+    test_client = TestClient(app, base_url=BASE_URL)
+    test_client.headers["X-CSRF-Token"] = app.state.csrf_token
+    return test_client
 
 
 def fit(score, verdict, role="", url="", **extra):

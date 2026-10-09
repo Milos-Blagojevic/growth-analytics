@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Side projects · Job hunt{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Side projects</h1>
+  <button class="btn primary" type="button" hx-get="/projects/new" hx-target="#panel">New project</button>
+</div>
+<p class="muted small">Projects that build proof for your gaps: your own, plus ideas the scorer suggested for stretch roles.</p>
+
+{% if suggestions %}
+<section class="block">
+  <h2>Suggested by the scorer <span class="count">{{ suggestions | length }}</span></h2>
+  <div class="suggestions">
+    {% for s in suggestions %}
+    <article class="suggestion">
+      <p class="suggestion-text">{{ s.text }}</p>
+      {% if s.gap %}<p class="muted small"><strong>Gap:</strong> {{ s.gap }}</p>{% endif %}
+      <div class="suggestion-foot">
+        <a class="muted small" href="/c/{{ s.domain }}" hx-get="/c/{{ s.domain }}" hx-target="#panel">
+          for {{ s.name }}{% if s.role %} · {{ s.role }}{% endif %} <span class="badge sm v-{{ s.verdict }}">{{ s.score }}</span>
+        </a>
+        <span class="btn-row">
+          <button class="btn ghost sm" type="button" hx-post="/projects/suggestions/{{ s.key }}" hx-vals='{"action": "dismiss"}'>Dismiss</button>
+          <button class="btn sm" type="button" hx-post="/projects/suggestions/{{ s.key }}" hx-vals='{"action": "accept"}'>Add to ideas</button>
+        </span>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="block">
+  <div class="kanban">
+    {% for status, items in columns.items() %}
+    <section class="column p-{{ status }}">
+      <h2><span class="swatch"></span>{{ status | capitalize }} <span class="count">{{ items | length }}</span></h2>
+      {% for p in items %}
+      <article class="lane-card project">
+        <div class="lane-title">{{ p.title }}</div>
+        {% if p.description %}<p class="lane-notes">{{ p.description }}</p>{% endif %}
+        {% if p.gap %}<p class="muted small"><strong>Gap:</strong> {{ p.gap }}</p>{% endif %}
+        <div class="muted small">
+          {% if p.source == 'scorer' %}Suggested for <a href="/c/{{ p.origin_domain }}" hx-get="/c/{{ p.origin_domain }}" hx-target="#panel">{{ p.origin_name }}</a>{% else %}Your idea{% endif %}
+          {% if p.repo_url %} · <a href="{{ p.repo_url }}" target="_blank" rel="noopener">{{ p.repo_url | host }} ↗</a>{% endif %}
+        </div>
+        <div class="lane-foot">
+          <button class="btn ghost sm" type="button" hx-get="/projects/{{ p.id }}/edit" hx-target="#panel">Edit</button>
+          <select class="status-select p-{{ p.status }}" name="status" aria-label="Status" hx-post="/projects/{{ p.id }}">
+            {% for s in project_statuses %}<option value="{{ s }}" {{ 'selected' if s == p.status }}>{{ s | capitalize }}</option>{% endfor %}
+          </select>
+        </div>
+      </article>
+      {% else %}
+      <div class="lane-empty">—</div>
+      {% endfor %}
+    </section>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

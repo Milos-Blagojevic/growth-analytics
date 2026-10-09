@@ -10,14 +10,23 @@
     {% endfor %}
   </nav>
 </div>
-<p class="muted small">Companies suggested by <code>hunt.py discover</code>. "Why" is Exa's unverified claim; only a run researches and scores a company.</p>
+<p class="muted small">Companies suggested by <code>hunt.py discover</code>. "Why" is Exa's unverified claim; only a run researches and scores a company. Select some to research and score them now.</p>
 
 {% if items %}
+<form id="lead-form" hx-post="/runs/preview" hx-target="#panel">
+<input type="hidden" name="kind" value="run">
+<div class="selection-bar">
+  <label class="check"><input type="checkbox" onclick="document.querySelectorAll('input[name=domains]').forEach(c => { c.checked = this.checked; }); updateSelection()"> Select all</label>
+  <span class="muted small" id="selected-count">0 selected</span>
+  <span class="spacer"></span>
+  <button class="btn primary sm" type="submit" id="run-selected" disabled>Run selected…</button>
+</div>
 <table class="table">
-  <thead><tr><th>Company</th><th>Why</th><th>Focus</th><th>Found</th><th>Status</th></tr></thead>
+  <thead><tr><th></th><th>Company</th><th>Why</th><th>Focus</th><th>Found</th><th>Status</th></tr></thead>
   <tbody>
     {% for l in items %}
     <tr>
+      <td class="pick"><input type="checkbox" name="domains" value="{{ l.domain }}" aria-label="Select {{ l.name }}" onchange="updateSelection()"></td>
       <td>
         <div class="strong">{{ l.name }}</div>
         <a class="muted small" href="https://{{ l.domain }}" target="_blank" rel="noopener">{{ l.domain }}</a>
@@ -39,6 +48,14 @@
     {% endfor %}
   </tbody>
 </table>
+</form>
+<script>
+  function updateSelection() {
+    const n = document.querySelectorAll("input[name=domains]:checked").length;
+    document.getElementById("selected-count").textContent = `${n} selected`;
+    document.getElementById("run-selected").disabled = n === 0;
+  }
+</script>
 {% else %}
 <div class="empty">
   <h2>No leads</h2>

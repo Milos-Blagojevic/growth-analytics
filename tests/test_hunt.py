@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import hunt
+import runs
 import scoring
 from exa_mock import contents_response, error, result, structured_response
 
@@ -249,3 +250,12 @@ def test_send_uses_latest_run_and_ignores_its_manifest(http, workdir, monkeypatc
     assert "| 1 companies | 1 apply" in sent
     assert "[90] APPLY Top: Lead AE" in sent
     assert "Old" not in sent
+
+
+def test_a_second_command_exits_while_one_holds_the_lock(workdir, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["hunt.py", "send"])
+
+    with runs.lock(workdir), pytest.raises(SystemExit, match="Another hunt.py command is running"):
+        hunt.main()
+    with pytest.raises(SystemExit, match="No saved runs"):  # lock released: the command itself runs
+        hunt.main()

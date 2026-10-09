@@ -1,0 +1,50 @@
+<div class="backdrop" onclick="closePanel()"></div>
+<article class="sheet modal">
+  <header class="sheet-head">
+    <div class="sheet-id"><h2>{{ spec.label if spec else 'Cannot start' }}</h2></div>
+    <button class="close" type="button" onclick="closePanel()" aria-label="Close">✕</button>
+  </header>
+  <div class="sheet-body">
+    {% if error %}
+    <div class="note error">{{ error }}</div>
+    <div class="form-foot"><span class="spacer"></span><button class="btn ghost" type="button" onclick="closePanel()">Close</button></div>
+    {% else %}
+    {% if spec.kind == 'run' %}
+    <form class="radios inline" hx-post="/runs/preview" hx-target="#panel" hx-trigger="change">
+      <input type="hidden" name="kind" value="run">
+      {% for d in spec.fields.domains %}<input type="hidden" name="domains" value="{{ d }}">{% endfor %}
+      {% for key, (text, flags) in modes.items() %}
+      <label class="radio"><input type="radio" name="mode" value="{{ key }}" {{ 'checked' if key == spec.fields.mode }}><span>{{ text }}</span></label>
+      {% endfor %}
+    </form>
+    {% endif %}
+
+    <section>
+      <div class="eyebrow">Command</div>
+      <code class="command">python hunt.py {{ spec.args | join(' ') }}{% if spec.companies %} --companies jobs/&lt;id&gt;-companies.csv{% endif %}</code>
+      {% if spec.companies %}<p class="muted small">Companies: {{ spec.companies | map('first') | join(', ') }}</p>{% endif %}
+    </section>
+    <section>
+      <div class="eyebrow">Estimated cost</div>
+      <ul class="plain">{% for line in spec.estimate %}<li>{{ line }}</li>{% endfor %}</ul>
+    </section>
+    {% if spec.warnings %}
+    <section>
+      <div class="eyebrow">Side effects</div>
+      <ul class="plain warn">{% for line in spec.warnings %}<li>{{ line }}</li>{% endfor %}</ul>
+    </section>
+    {% endif %}
+    {% if busy %}<div class="note error">A hunt.py command is running; wait for it to finish before starting another.</div>{% endif %}
+
+    <form class="form-foot" hx-post="/runs">
+      {% for name, value in spec.fields.items() %}
+        {% if value is string %}<input type="hidden" name="{{ name }}" value="{{ value }}">
+        {% else %}{% for v in value %}<input type="hidden" name="{{ name }}" value="{{ v }}">{% endfor %}{% endif %}
+      {% endfor %}
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" onclick="closePanel()">Cancel</button>
+      <button class="btn primary" type="submit" {{ 'disabled' if busy }}>Start</button>
+    </form>
+    {% endif %}
+  </div>
+</article>

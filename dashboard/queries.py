@@ -7,18 +7,23 @@ VERDICTS = ("apply", "consider", "stretch", "check_careers", "skip")  # hunt.VER
 NEW_VERDICTS = ("apply", "consider", "stretch")  # what the inbox and Telegram notification surface
 JSON_FIELDS = ("reasons", "concerns", "proof_ideas", "dead_roles", "grounding")
 
-# The latest scored result per company, with its run time and the best role's link status.
+# The latest scored result per company, with its run time, the best role's link status and your tracking
+# (status "new" when untracked; see tracking.key_for for which key a card uses).
 LATEST = """
 WITH ranked AS (
     SELECT r.*, ROW_NUMBER() OVER (PARTITION BY r.domain ORDER BY r.run_id DESC) AS rank
     FROM results r WHERE r.score IS NOT NULL
 ),
 latest AS (
-    SELECT ranked.*, runs.saved_at, roles.link_status AS best_link_status
+    SELECT ranked.*, runs.saved_at, roles.link_status AS best_link_status,
+        COALESCE(t.status, 'new') AS status, COALESCE(t.notes, '') AS notes
     FROM ranked
     JOIN runs ON runs.id = ranked.run_id
     LEFT JOIN roles ON roles.run_id = ranked.run_id AND roles.domain = ranked.domain
         AND roles.url = ranked.best_role_url
+    LEFT JOIN tracking t ON
+        (t.kind = 'posting' AND t.ref = ranked.best_role_url)
+        OR (t.kind = 'company' AND COALESCE(ranked.best_role_url, '') = '' AND t.ref = ranked.domain)
     WHERE ranked.rank = 1
 )
 """
@@ -34,25 +39,57 @@ def _row(row):
     return d
 
 
-def verdict_counts(conn):
-    rows = conn.execute(LATEST + "SELECT verdict, COUNT(*) AS n FROM latest GROUP BY verdict").fetchall()
+def _status_filter(status):
+    """SQL condition on latest.status: "" hides dismissed items, "all" shows everything, else that status only."""
+    if status == "all":
+        return "1", []
+    if status:
+        return "status = ?", [status]
+    return "status != 'dismissed'", []
+
+
+def verdict_counts(conn, *, status=""):
+    condition, params = _status_filter(status)
+    rows = conn.execute(
+        LATEST + f"SELECT verdict, COUNT(*) AS n FROM latest WHERE {condition} GROUP BY verdict", params
+    ).fetchall()
     counts = {v: 0 for v in VERDICTS}
     counts.update({r["verdict"]: r["n"] for r in rows})
     return counts
 
 
-def board(conn, *, verdict, q="", min_score=0, sort="score"):
-    sql = LATEST + "SELECT * FROM latest WHERE verdict = ? AND score >= ?"
-    params = [verdict, min_score]
+def board(conn, *, verdict, q="", min_score=0, sort="score", status=""):
+    condition, params = _status_filter(status)
+    sql = LATEST + f"SELECT * FROM latest WHERE verdict = ? AND score >= ? AND {condition}"
+    params = [verdict, min_score, *params]
     if q:
-        sql += " AND (name LIKE ? OR domain LIKE ? OR best_role_title LIKE ? OR location_assessment LIKE ?)"
-        params += [f"%{q}%"] * 4
+        sql += " AND (name LIKE ? OR domain LIKE ? OR best_role_title LIKE ? OR location_assessment LIKE ? OR notes LIKE ?)"
+        params += [f"%{q}%"] * 5
     sql += f" ORDER BY {SORTS.get(sort, SORTS['score'])}"
     return [_row(r) for r in conn.execute(sql, params)]
 
 
 def latest_run(conn):
     row = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+_RUN_COUNTS = """
+    SELECT runs.*,
+        SUM(results.verdict = 'apply') AS apply, SUM(results.verdict = 'consider') AS consider,
+        SUM(results.verdict = 'stretch') AS stretch, SUM(results.verdict = 'check_careers') AS check_careers,
+        SUM(results.verdict = 'skip') AS skip, SUM(results.score IS NOT NULL) AS scored
+    FROM runs LEFT JOIN results ON results.run_id = runs.id
+"""
+
+
+def saved_runs(conn, limit=50):
+    """Saved runs, newest first, with verdict counts."""
+    return [dict(r) for r in conn.execute(_RUN_COUNTS + " GROUP BY runs.id ORDER BY runs.id DESC LIMIT ?", [limit])]
+
+
+def run_summary(conn, run_id):
+    row = conn.execute(_RUN_COUNTS + " WHERE runs.id = ? GROUP BY runs.id", [run_id]).fetchone()
     return dict(row) if row else None
 
 
@@ -128,7 +165,10 @@ def inbox(conn, *, days):
     postings = [
         dict(r)
         for r in conn.execute(
-            "SELECT * FROM watch_postings WHERE first_seen >= ? ORDER BY first_seen DESC, board, title", [cutoff]
+            "SELECT w.*, COALESCE(t.status, 'new') AS status FROM watch_postings w"
+            " LEFT JOIN tracking t ON t.kind = 'posting' AND t.ref = w.url"
+            " WHERE w.first_seen >= ? ORDER BY w.first_seen DESC, w.board, w.title",
+            [cutoff],
         )
     ]
     placeholders = ", ".join("?" for _ in NEW_VERDICTS)

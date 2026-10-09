@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Pipeline · Job hunt{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Pipeline</h1>
+  <p class="muted small">Everything you marked saved or beyond. Set a status from a company's details, the inbox, or here.</p>
+</div>
+
+{% set total = columns.values() | map('length') | sum %}
+{% if total %}
+<div class="kanban">
+  {% for status, items in columns.items() %}
+  <section class="column s-{{ status }}">
+    <h2><span class="swatch"></span>{{ status | status }} <span class="count">{{ items | length }}</span></h2>
+    {% for i in items %}
+    <article class="lane-card">
+      <div class="lane-title">
+        {% if i.domain %}
+        <a href="/c/{{ i.domain }}" hx-get="/c/{{ i.domain }}" hx-target="#panel">{{ i.title }}</a>
+        {% else %}{{ i.title }}{% endif %}
+      </div>
+      <div class="muted small">{{ i.name }}{% if i.url %} · <a href="{{ i.url }}" target="_blank" rel="noopener">{{ i.url | host }} ↗</a>{% endif %}</div>
+      {% if i.notes %}<p class="lane-notes">{{ i.notes }}</p>{% endif %}
+      <div class="lane-foot">
+        <span class="muted small">{% if i.applied_at %}applied {{ i.applied_at | ago }}{% else %}updated {{ i.updated_at | ago }}{% endif %}</span>
+        {% with track = i, reload = true %}{% include "partials/track_select.html" %}{% endwith %}
+      </div>
+    </article>
+    {% else %}
+    <div class="lane-empty">—</div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  <h2>Nothing tracked yet</h2>
+  <p>Open a company on the <a class="link" href="/">Board</a> and set its status to Saved, Applied, and so on.</p>
+</div>
+{% endif %}
+{% endblock %}

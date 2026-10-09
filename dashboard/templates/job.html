@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ job.label }} · Job hunt{% endblock %}
+{% block content %}
+<a class="back" href="/runs">← Runs</a>
+<div class="page-head">
+  <h1>{{ job.label }}</h1>
+</div>
+{% include "partials/job_log.html" %}
+{% endblock %}

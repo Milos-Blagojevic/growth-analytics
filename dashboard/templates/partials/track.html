@@ -1,0 +1,15 @@
+<section class="track" id="track">
+  <div class="eyebrow">Your status{% if track.applied_at %} <span class="muted">· applied {{ track.applied_at | ago }}</span>{% endif %}</div>
+  <div class="status-picker" role="group" aria-label="Status">
+    {% for s in statuses %}
+    <button type="button" class="status-btn s-{{ s }} {{ 'active' if s == track.status }}"
+            hx-post="/track" hx-vals='{{ {"kind": track.kind, "ref": track.ref, "status": s} | tojson }}'
+            hx-target="#track" hx-swap="outerHTML">{{ s | status }}</button>
+    {% endfor %}
+  </div>
+  <textarea class="notes" name="notes" rows="3" placeholder="Notes: contacts, dates, interview prep…"
+            hx-post="/track" hx-trigger="input changed delay:700ms, change" hx-swap="none"
+            hx-vals='{{ {"kind": track.kind, "ref": track.ref} | tojson }}'
+            hx-on::after-request="if (event.detail.successful) this.nextElementSibling.textContent = 'Saved'">{{ track.notes }}</textarea>
+  <div class="muted small saved-note"></div>
+</section>
