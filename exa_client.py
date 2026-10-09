@@ -179,14 +179,18 @@ def deep_reasoning_search(query, **kwargs):
     return search(query, type="deep-reasoning", **kwargs)
 
 
-def contents(urls, *, max_age_hours=None, **kwargs):
+def contents(urls, *, max_age_hours=None, highlights=True, **kwargs):
     """Fetch content for URLs you already have. Note: highlights is top-level here.
 
     max_age_hours: same semantics as in search().
+    highlights: request query-relevant excerpts (default). Pass False together with e.g.
+    text={"max_characters": 4000} to fetch full text only; requesting both bills both views.
     """
     if max_age_hours is not None:
         kwargs["max_age_hours"] = max_age_hours
-    return _call("contents", "get_contents", urls, highlights=True, **kwargs)
+    if highlights:
+        kwargs["highlights"] = True
+    return _call("contents", "get_contents", urls, **kwargs)
 
 
 if __name__ == "__main__":

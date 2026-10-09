@@ -1,0 +1,4 @@
+# Copy to companies.csv (git-ignored). One company per line: name,domain
+# Lines starting with # are ignored. `python hunt.py discover` prints rows in this format.
+Ramp,ramp.com
+Notion,notion.so

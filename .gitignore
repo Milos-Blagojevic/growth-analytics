@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .env
+profile.toml
+companies.csv
+out/
+cv.md
+discovered.csv
