@@ -179,9 +179,10 @@ Not built yet; recorded so they can be picked up later.
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`) |
 | `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
+| `AGENTS.md` | Instructions for coding agents working in this repo |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |
-| `hunt.py` | Job-hunt CLI: `discover` and `run` |
+| `hunt.py` | Job-hunt CLI: `discover`, `run`, `send` and `watch` |
 | `research.py` | Per-company Exa research (identity, signals, open roles) |
 | `scoring.py` | Claude fit scoring (structured output) |
 | `telegram.py` | Telegram delivery |
