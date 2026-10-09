@@ -53,19 +53,16 @@ def test_search_structured_parses_output_and_grounding(exa):
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [
+        pytest.param({}, {"urls": ["https://a.com"], "highlights": True, "text": False}, id="highlights-only"),
         pytest.param(
-            {},
-            {"urls": ["https://a.com"], "highlights": True},
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="exa-py adds text={'maxCharacters': 10000} when no text/summary/extras is passed, "
-                "so the default call requests (and bills) full text on top of highlights",
-            ),
-            id="default-highlights-only",
+            {"text": {"max_characters": 4000}},
+            {"urls": ["https://a.com"], "highlights": True, "text": {"maxCharacters": 4000}},
+            id="highlights-and-text",
         ),
-        (
+        pytest.param(
             {"highlights": False, "text": {"max_characters": 4000}, "max_age_hours": 0},
             {"urls": ["https://a.com"], "text": {"maxCharacters": 4000}, "maxAgeHours": 0},
+            id="text-only",
         ),
     ],
 )
