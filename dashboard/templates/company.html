@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ result.name }} · Job hunt{% endblock %}
+{% block content %}
+<a class="back" href="/">← Board</a>
+<article class="sheet page v-{{ result.verdict or 'none' }}">
+  {% include "partials/company_body.html" %}
+</article>
+{% endblock %}

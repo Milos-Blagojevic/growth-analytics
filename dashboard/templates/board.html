@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="filters" action="/" method="get"
+      hx-get="/" hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true"
+      hx-trigger="input changed delay:250ms from:input[name=q], change">
+  <input type="hidden" name="verdict" value="{{ verdict }}">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search company, role or location" autocomplete="off">
+  <label class="select">Min score
+    <select name="min_score">
+      {% for s in (0, 50, 60, 70, 75, 80, 90) %}<option value="{{ s }}" {{ 'selected' if s == min_score }}>{{ s or 'any' }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="select">Sort
+    <select name="sort">
+      {% for key, text in (('score', 'Score'), ('recent', 'Most recent'), ('name', 'Name')) %}<option value="{{ key }}" {{ 'selected' if key == sort }}>{{ text }}</option>{% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+
+<div id="results">
+  <nav class="tabs">
+    {% for v in counts %}
+    <a class="tab v-{{ v }} {{ 'active' if v == verdict }}"
+       href="/?{{ {'verdict': v, 'q': q, 'min_score': min_score, 'sort': sort} | urlencode }}">
+      <span class="swatch"></span>{{ v | label }}<span class="count">{{ counts[v] }}</span>
+    </a>
+    {% endfor %}
+  </nav>
+  {% if failures %}
+  <div class="note error">
+    {{ failures | length }} compan{{ 'ies' if failures | length > 1 else 'y' }} failed in the last run:
+    {% for f in failures %}<a href="/c/{{ f.domain }}" hx-get="/c/{{ f.domain }}" hx-target="#panel" title="{{ f.error }}"><strong>{{ f.name }}</strong></a>{{ ', ' if not loop.last }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if cards %}
+  <div class="grid">
+    {% for c in cards %}{% include "partials/card.html" %}{% endfor %}
+  </div>
+  {% elif not latest_run %}
+  <div class="empty">
+    <h2>No runs yet</h2>
+    <p>Run <code>python hunt.py run --dry-run</code>; results saved to <code>out/</code> show up here.</p>
+  </div>
+  {% else %}
+  <div class="empty">
+    <h2>Nothing here</h2>
+    <p>No company has the verdict <strong>{{ verdict | label }}</strong>{% if q or min_score %} with these filters{% endif %}.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

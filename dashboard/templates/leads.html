@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Leads · Job hunt{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Leads</h1>
+  <nav class="pills">
+    <a class="pill {{ 'active' if not status }}" href="/leads">All <span class="count">{{ counts.values() | sum }}</span></a>
+    {% for s, text in (('new', 'New'), ('queued', 'In companies.csv'), ('researched', 'Researched')) %}
+    <a class="pill {{ 'active' if s == status }}" href="/leads?status={{ s }}">{{ text }} <span class="count">{{ counts[s] }}</span></a>
+    {% endfor %}
+  </nav>
+</div>
+<p class="muted small">Companies suggested by <code>hunt.py discover</code>. "Why" is Exa's unverified claim; only a run researches and scores a company.</p>
+
+{% if items %}
+<table class="table">
+  <thead><tr><th>Company</th><th>Why</th><th>Focus</th><th>Found</th><th>Status</th></tr></thead>
+  <tbody>
+    {% for l in items %}
+    <tr>
+      <td>
+        <div class="strong">{{ l.name }}</div>
+        <a class="muted small" href="https://{{ l.domain }}" target="_blank" rel="noopener">{{ l.domain }}</a>
+      </td>
+      <td class="why">{{ l.why }}</td>
+      <td class="muted">{{ l.focus or '—' }}</td>
+      <td class="muted nowrap">{{ l.discovered_at | ago }}</td>
+      <td class="nowrap">
+        {% if l.status == 'researched' %}
+          {% if l.score is not none %}
+          <a class="badge v-{{ l.verdict }}" href="/c/{{ l.domain }}" hx-get="/c/{{ l.domain }}" hx-target="#panel">{{ l.score }} {{ l.verdict | label }}</a>
+          {% else %}
+          <a class="badge" href="/c/{{ l.domain }}" hx-get="/c/{{ l.domain }}" hx-target="#panel">researched</a>
+          {% endif %}
+        {% elif l.status == 'queued' %}<span class="badge">queued</span>
+        {% else %}<span class="badge v-new">new</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">
+  <h2>No leads</h2>
+  <p>{% if status %}No leads with this status.{% else %}Run <code>python hunt.py discover</code> to fill <code>discovered.csv</code>.{% endif %}</p>
+</div>
+{% endif %}
+{% endblock %}

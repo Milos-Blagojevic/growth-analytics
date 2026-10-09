@@ -3,7 +3,7 @@
     python hunt.py discover [focus]          # suggest companies (name,domain) to research
     python hunt.py run [--dry-run]           # research + score + deliver for companies.csv
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
-    python hunt.py send [out/<run>]          # send a saved run's digest to Telegram (default: latest)
+    python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
     python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
 """
 
@@ -22,6 +22,7 @@ from pathlib import Path
 
 import exa_client
 import research
+import runs
 import scoring
 import telegram
 import watch
@@ -30,6 +31,8 @@ logger = logging.getLogger("hunt")
 WORKERS = 4
 VERDICTS = ("apply", "consider", "stretch", "check_careers", "skip")
 OUT_DIR = Path("out")
+DEFAULT_DASHBOARD_URL = "http://127.0.0.1:8000"
+NOTIFY_VERDICTS = ("apply", "consider", "stretch")
 
 
 def load_profile(path):
@@ -106,22 +109,29 @@ def format_company(result):
     return "\n".join(lines)
 
 
+def _by_verdict(results):
+    scored = sorted((r for r in results if "fit" in r), key=lambda r: r["fit"]["score"], reverse=True)
+    return {v: [r for r in scored if r["fit"]["verdict"] == v] for v in VERDICTS}
+
+
+def _header(results, by_verdict):
+    errors = sum("error" in r for r in results)
+    return (
+        f"Job hunt digest {datetime.now():%Y-%m-%d} | {len(results)} companies | "
+        f"{len(by_verdict['apply'])} apply, {len(by_verdict['consider'])} consider, {len(by_verdict['stretch'])} stretch, "
+        f"{len(by_verdict['check_careers'])} check careers, {len(by_verdict['skip'])} skip, {errors} errors"
+    )
+
+
 def build_digest(results):
     """Returns text blocks: header, apply/consider by score, stretch roles, check-careers leads, skipped, errors."""
-    scored = sorted((r for r in results if "fit" in r), key=lambda r: r["fit"]["score"], reverse=True)
-    by_verdict = {v: [r for r in scored if r["fit"]["verdict"] == v] for v in VERDICTS}
-    shortlist = [r for r in scored if r["fit"]["verdict"] in ("apply", "consider")]
-    stretch = by_verdict["stretch"]
-    check = by_verdict["check_careers"]
+    by_verdict = _by_verdict(results)
+    shortlist = sorted(by_verdict["apply"] + by_verdict["consider"], key=lambda r: r["fit"]["score"], reverse=True)
     skipped = by_verdict["skip"]
     errors = [r for r in results if "error" in r]
 
-    header = (
-        f"Job hunt digest {datetime.now():%Y-%m-%d} | {len(results)} companies | "
-        f"{len(by_verdict['apply'])} apply, {len(by_verdict['consider'])} consider, {len(stretch)} stretch, "
-        f"{len(check)} check careers, {len(skipped)} skip, {len(errors)} errors"
-    )
-    blocks = [header] + [format_company(r) for r in shortlist + stretch + check]
+    blocks = [_header(results, by_verdict)]
+    blocks += [format_company(r) for r in shortlist + by_verdict["stretch"] + by_verdict["check_careers"]]
     if skipped:
         blocks.append(
             "Skipped:\n"
@@ -135,21 +145,60 @@ def build_digest(results):
     return blocks
 
 
-def save_results(results):
-    run_dir = OUT_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
+def build_notification(results):
+    """Short Telegram text blocks: header, one entry per apply/consider/stretch role, failures, dashboard link.
+
+    The full reasoning lives in the dashboard; each entry keeps the posting URL so it works away from the laptop.
+    """
+    by_verdict = _by_verdict(results)
+    blocks = [_header(results, by_verdict)]
+    for verdict in NOTIFY_VERDICTS:
+        for r in by_verdict[verdict]:
+            fit = r["fit"]
+            line = f"[{fit['score']}] {verdict.upper()} {r['name']}: {fit['best_role_title'] or 'no role title'}"
+            blocks.append(f"{line}\n{fit['best_role_url']}" if fit["best_role_url"] else line)
+    failed = [r["name"] for r in results if "error" in r]
+    if failed:
+        blocks.append(f"Failed: {', '.join(failed)}")
+    blocks.append(f"Dashboard: {os.environ.get('DASHBOARD_URL') or DEFAULT_DASHBOARD_URL}")
+    return blocks
+
+
+def _tokens(results):
+    return {
+        "input_tokens": sum(r.get("usage", {}).get("input_tokens", 0) for r in results),
+        "output_tokens": sum(r.get("usage", {}).get("output_tokens", 0) for r in results),
+    }
+
+
+def save_results(results, *, mode, started_at):
+    """Writes out/<timestamp>/<domain>.json per company plus the MANIFEST (mode, times, counts, costs)."""
+    saved_at = datetime.now()
+    run_dir = OUT_DIR / saved_at.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     for result in results:
         (run_dir / f"{result['domain']}.json").write_text(json.dumps(result, indent=2))
+    manifest = {
+        "mode": mode,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "saved_at": saved_at.isoformat(timespec="seconds"),
+        "companies": len(results),
+        "errors": sum("error" in r for r in results),
+        "exa": exa_client.cost_summary(),
+        "claude": {"model": os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL), **_tokens(results)}
+        if mode != "research_only"
+        else None,
+    }
+    (run_dir / runs.MANIFEST).write_text(json.dumps(manifest, indent=2))
     return run_dir
 
 
 def log_costs(results):
     summary = exa_client.cost_summary()
-    tokens_in = sum(r.get("usage", {}).get("input_tokens", 0) for r in results)
-    tokens_out = sum(r.get("usage", {}).get("output_tokens", 0) for r in results)
+    tokens = _tokens(results)
     print(
         f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
-        f" | Claude: {tokens_in} input / {tokens_out} output tokens"
+        f" | Claude: {tokens['input_tokens']} input / {tokens['output_tokens']} output tokens"
     )
 
 
@@ -165,9 +214,11 @@ def cmd_run(args):
     if deliver and not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
 
+    started_at = datetime.now()
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         results = list(pool.map(lambda c: process_company(*c, profile, score=score), companies))
-    run_dir = save_results(results)
+    mode = "research_only" if args.research_only else "deliver" if deliver else "dry_run"
+    run_dir = save_results(results, mode=mode, started_at=started_at)
     print(f"Saved raw results to {run_dir}/")
 
     if args.research_only:
@@ -180,15 +231,13 @@ def cmd_run(args):
             print(f"  roles: {len(c['open_roles'])} (source: {r['research']['role_source']})")
             for role in c["open_roles"]:
                 print(f"  - {role['title']} | {role['location']} | {role['remote_or_relocation']} | {role['url']}")
+    elif deliver:
+        messages = telegram.pack_blocks(build_notification(results))
+        for message in messages:
+            telegram.send(message)
+        print(f"Sent {len(messages)} Telegram message(s)")
     else:
-        blocks = build_digest(results)
-        if deliver:
-            messages = telegram.pack_blocks(blocks)
-            for message in messages:
-                telegram.send(message)
-            print(f"Sent {len(messages)} Telegram message(s)")
-        else:
-            print("\n\n".join(blocks))
+        print("\n\n".join(build_digest(results)))
 
     log_costs(results)
     return 1 if any("error" in r for r in results) else 0
@@ -347,16 +396,16 @@ def cmd_send(args):
     if args.run_dir:
         run_dir = Path(args.run_dir)
     else:
-        runs = sorted(OUT_DIR.iterdir()) if OUT_DIR.is_dir() else []
-        if not runs:
+        saved = runs.run_dirs(OUT_DIR)
+        if not saved:
             sys.exit(f"No saved runs in {OUT_DIR}/")
-        run_dir = runs[-1]
-    results = [json.loads(f.read_text()) for f in sorted(run_dir.glob("*.json"))]
+        run_dir = saved[-1]
+    results = runs.load_results(run_dir)
     if not any("fit" in r for r in results):
         sys.exit(f"{run_dir}: no scored results (was it a --research-only run?)")
     if not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env.")
-    messages = telegram.pack_blocks(build_digest(results))
+    messages = telegram.pack_blocks(build_notification(results))
     for message in messages:
         telegram.send(message)
     print(f"Sent {len(messages)} Telegram message(s) from {run_dir}/")
@@ -407,7 +456,7 @@ def main():
     discover.add_argument("--history", default="discovered.csv", help="CSV log of every discovered company")
     discover.set_defaults(func=cmd_discover)
 
-    send = sub.add_parser("send", help="send the digest of a saved run to Telegram (no new research or scoring)")
+    send = sub.add_parser("send", help="send a saved run's short notification to Telegram (no new research or scoring)")
     send.add_argument("run_dir", nargs="?", help="a directory under out/; default: the latest run")
     send.set_defaults(func=cmd_send)
 

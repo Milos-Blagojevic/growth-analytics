@@ -1,0 +1,20 @@
+<a class="card v-{{ c.verdict }}" href="/c/{{ c.domain }}" hx-get="/c/{{ c.domain }}" hx-target="#panel">
+  <div class="card-top">
+    <div class="ring" style="--score: {{ c.score }}"><span>{{ c.score }}</span></div>
+    <div class="card-id">
+      <h3>{{ c.name }}</h3>
+      <div class="muted small">{{ c.domain }}</div>
+    </div>
+    {% if c.best_link_status %}<span class="chip link-{{ c.best_link_status }}">{{ c.best_link_status }}</span>{% endif %}
+  </div>
+  <div class="card-role">{{ c.best_role_title or 'No matching role found' }}</div>
+  {% if c.location_assessment %}<p class="card-loc">{{ c.location_assessment }}</p>{% endif %}
+  <div class="card-foot">
+    <span class="muted small">{% if c.first_seen is defined %}new {{ c.first_seen | ago }}{% else %}scored {{ c.saved_at | ago }}{% endif %}</span>
+    <span class="tags">
+      {% if c.scope_note %}<span class="tag">scope</span>{% endif %}
+      {% if c.gap_note %}<span class="tag">gap</span>{% endif %}
+      {% if c.proof_ideas %}<span class="tag">{{ c.proof_ideas | length }} project idea{{ 's' if c.proof_ideas | length > 1 }}</span>{% endif %}
+    </span>
+  </div>
+</a>

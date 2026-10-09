@@ -38,6 +38,7 @@ def run_args(**overrides):
 
 
 def saved_results(workdir):
+    """{file name: parsed JSON} of the only saved run, the manifest included."""
     (run_dir,) = (workdir / "out").iterdir()
     return {path.name: json.loads(path.read_text()) for path in run_dir.iterdir()}
 
@@ -140,6 +141,10 @@ def test_research_only_saves_results_and_reports_failures(exa, http, workdir, ca
     results = saved_results(workdir)
     assert results["acme.com.json"]["research"]["content"]["open_roles"][0]["description"] == "dbt, Snowflake, Looker."
     assert "Request failed with status code 400" in results["beta.io.json"]["error"]
+    manifest = results["_run.json"]
+    assert (manifest["mode"], manifest["companies"], manifest["errors"]) == ("research_only", 2, 1)
+    assert manifest["exa"]["requests"] == 2
+    assert manifest["claude"] is None
     assert "Exa: 2 requests" in capsys.readouterr().out  # Acme search + posting text; failures are not tallied
 
 
@@ -156,10 +161,14 @@ def test_run_scores_and_sends_digest_to_telegram(exa, http, workdir, monkeypatch
 
     (sent,) = [json.loads(call.request.body) for call in telegram_api.calls]
     assert sent["chat_id"] == "42"
-    assert "[82] APPLY: Acme (acme.com)" in sent["text"]
-    assert "- Beta: ValueError: Request failed with status code 400" in sent["text"]
+    assert "[82] APPLY Acme: Senior Analytics Engineer\nhttps://jobs.ashbyhq.com/acme/1111" in sent["text"]
+    assert "Failed: Beta" in sent["text"]
     assert "dbt, Snowflake, Looker." in fake.calls[0]["messages"][0]["content"]  # posting text reaches the scorer
-    assert saved_results(workdir)["acme.com.json"]["usage"] == {"input_tokens": 1200, "output_tokens": 300}
+    results = saved_results(workdir)
+    assert results["acme.com.json"]["usage"] == {"input_tokens": 1200, "output_tokens": 300}
+    manifest = results["_run.json"]
+    assert manifest["mode"] == "deliver"
+    assert manifest["claude"] == {"model": scoring.DEFAULT_MODEL, "input_tokens": 1200, "output_tokens": 300}
     assert "Sent 1 Telegram message(s)" in capsys.readouterr().out
 
 
@@ -179,3 +188,64 @@ def test_run_checks_keys_before_any_paid_call(http, workdir, monkeypatch, args, 
         hunt.cmd_run(args)
     assert len(http.calls) == 0
     assert not Path("out").exists()
+
+
+# notification and send --------------------------------------------------------------------------
+
+
+def scored(name, score, verdict, role="", url=""):
+    fit = {
+        "score": score,
+        "verdict": verdict,
+        "best_role_title": role,
+        "best_role_url": url,
+        "reasons": [],
+        "concerns": ["Too junior."],
+        "location_assessment": "Remote EU.",
+        "next_step": "Apply.",
+        "gap_note": "",
+        "proof_ideas": [],
+        "scope_note": "",
+    }
+    return {"name": name, "domain": f"{name.lower()}.com", "fit": fit}
+
+
+def test_notification_lists_only_actionable_roles(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_URL", "http://127.0.0.1:9000")
+    results = [
+        scored("Low", 60, "consider", "Data Analyst", "https://low.com/jobs/1"),
+        scored("Top", 90, "apply", "Lead AE", "https://top.com/jobs/1"),
+        scored("Grow", 70, "stretch", "Growth Engineer"),
+        scored("Careers", 55, "check_careers"),
+        scored("Nope", 20, "skip"),
+        {"name": "Broken", "domain": "broken.com", "error": "ValueError: boom"},
+    ]
+
+    blocks = hunt.build_notification(results)
+
+    assert blocks[0].endswith("| 6 companies | 1 apply, 1 consider, 1 stretch, 1 check careers, 1 skip, 1 errors")
+    assert blocks[1:] == [
+        "[90] APPLY Top: Lead AE\nhttps://top.com/jobs/1",
+        "[60] CONSIDER Low: Data Analyst\nhttps://low.com/jobs/1",
+        "[70] STRETCH Grow: Growth Engineer",
+        "Failed: Broken",
+        "Dashboard: http://127.0.0.1:9000",
+    ]
+
+
+def test_send_uses_latest_run_and_ignores_its_manifest(http, workdir, monkeypatch, capsys):
+    old, new = workdir / "out" / "20260101-090000", workdir / "out" / "20260102-090000"
+    for run_dir, result in ((old, scored("Old", 80, "apply", "Old role")), (new, scored("Top", 90, "apply", "Lead AE"))):
+        run_dir.mkdir(parents=True)
+        (run_dir / f"{result['domain']}.json").write_text(json.dumps(result))
+        (run_dir / "_run.json").write_text(json.dumps({"mode": "dry_run", "companies": 1}))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    telegram_api = http.post("https://api.telegram.org/bottok/sendMessage", json={"ok": True})
+
+    assert hunt.cmd_send(argparse.Namespace(run_dir=None)) == 0
+
+    (sent,) = [json.loads(call.request.body)["text"] for call in telegram_api.calls]
+    assert "| 1 companies | 1 apply" in sent
+    assert "[90] APPLY Top: Lead AE" in sent
+    assert "Old" not in sent

@@ -32,7 +32,7 @@ def http():
 def _isolate(monkeypatch):
     """Fake Exa key, no other credentials (a local .env must not leak in), no retry sleeps, fresh caches."""
     monkeypatch.setenv("EXA_API_KEY", "test-exa-key")
-    for var in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SCORING_MODEL"):
+    for var in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SCORING_MODEL", "DASHBOARD_URL"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(exa_client, "BACKOFF_BASE_SECONDS", 0)
     exa_client.reset_costs()

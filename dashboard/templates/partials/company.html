@@ -1,0 +1,4 @@
+<div class="backdrop" onclick="closePanel()"></div>
+<article class="sheet slide v-{{ result.verdict or 'none' }}">
+  {% with in_panel = true %}{% include "partials/company_body.html" %}{% endwith %}
+</article>
