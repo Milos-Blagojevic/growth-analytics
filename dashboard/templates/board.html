@@ -4,7 +4,14 @@
       hx-get="/" hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true"
       hx-trigger="input changed delay:250ms from:input[name=q], change">
   <input type="hidden" name="verdict" value="{{ verdict }}">
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search company, role or location" autocomplete="off">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search company, role, location or notes" autocomplete="off">
+  <label class="select">Status
+    <select name="status">
+      <option value="" {{ 'selected' if not status }}>Not dismissed</option>
+      <option value="all" {{ 'selected' if status == 'all' }}>All</option>
+      {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if s == status }}>{{ s | status }}</option>{% endfor %}
+    </select>
+  </label>
   <label class="select">Min score
     <select name="min_score">
       {% for s in (0, 50, 60, 70, 75, 80, 90) %}<option value="{{ s }}" {{ 'selected' if s == min_score }}>{{ s or 'any' }}</option>{% endfor %}
@@ -22,7 +29,7 @@
   <nav class="tabs">
     {% for v in counts %}
     <a class="tab v-{{ v }} {{ 'active' if v == verdict }}"
-       href="/?{{ {'verdict': v, 'q': q, 'min_score': min_score, 'sort': sort} | urlencode }}">
+       href="/?{{ {'verdict': v, 'q': q, 'min_score': min_score, 'sort': sort, 'status': status} | urlencode }}">
       <span class="swatch"></span>{{ v | label }}<span class="count">{{ counts[v] }}</span>
     </a>
     {% endfor %}
@@ -41,12 +48,12 @@
   {% elif not latest_run %}
   <div class="empty">
     <h2>No runs yet</h2>
-    <p>Run <code>python hunt.py run --dry-run</code>; results saved to <code>out/</code> show up here.</p>
+    <p>Start one from <a class="link" href="/runs">Runs</a> or run <code>python hunt.py run --dry-run</code>; results saved to <code>out/</code> show up here.</p>
   </div>
   {% else %}
   <div class="empty">
     <h2>Nothing here</h2>
-    <p>No company has the verdict <strong>{{ verdict | label }}</strong>{% if q or min_score %} with these filters{% endif %}.</p>
+    <p>No company has the verdict <strong>{{ verdict | label }}</strong>{% if q or min_score or status %} with these filters{% endif %}.</p>
   </div>
   {% endif %}
 </div>

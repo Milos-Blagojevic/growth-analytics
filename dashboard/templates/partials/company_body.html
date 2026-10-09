@@ -31,6 +31,8 @@
   </section>
   {% endif %}
 
+  {% include "partials/track.html" %}
+
   {% if r.next_step %}
   <section class="callout next"><div class="eyebrow">Next step</div>{{ r.next_step }}</section>
   {% endif %}
@@ -132,4 +134,11 @@
     </dl>
   </section>
   {% endif %}
+
+  <section class="actions">
+    <div class="eyebrow">Research again</div>
+    <p class="muted small">Runs <code>hunt.py run</code> for {{ r.name }} only. You choose the mode and see the cost before it starts.</p>
+    <button class="btn" type="button" hx-post="/runs/preview" hx-target="#panel"
+            hx-vals='{{ {"kind": "run", "domains": r.domain} | tojson }}'>Re-run {{ r.name }}…</button>
+  </section>
 </div>

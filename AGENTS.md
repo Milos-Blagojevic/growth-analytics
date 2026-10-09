@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Python 3.11+ CLI tools: an Exa search client (`exa_client.py`), a job-hunt pipeline built on it (`hunt.py`) and a local read-only dashboard over the pipeline's saved files (`dashboard/`). `README.md` is the user documentation and describes behavior in detail; read the relevant section before changing a feature.
+Python 3.11+ CLI tools: an Exa search client (`exa_client.py`), a job-hunt pipeline built on it (`hunt.py`) and a local dashboard (`dashboard/`) that shows the pipeline's saved files, keeps the owner's statuses, notes and side projects, and starts `hunt.py` commands. `README.md` is the user documentation and describes behavior in detail; read the relevant section before changing a feature.
 
 ## Layout
 
@@ -13,8 +13,8 @@ Python 3.11+ CLI tools: an Exa search client (`exa_client.py`), a job-hunt pipel
 | `ashby.py` | Ashby public job-board API (link checks and watch list) |
 | `watch.py` | Watch list: new matching postings from Ashby boards |
 | `telegram.py` | Telegram delivery |
-| `runs.py` | Saved-run format (`out/<timestamp>/`, `_run.json` manifest) shared by `hunt.py` and the dashboard |
-| `dashboard/` | `python -m dashboard`: FastAPI app (`app.py`), SQLite schema (`db.py`), file ingest (`ingest.py`), page queries (`queries.py`), Jinja templates, CSS, vendored htmx |
+| `runs.py` | Saved-run format (`out/<timestamp>/`, `_run.json` manifest) and the run lock (`.hunt.lock`), shared by `hunt.py` and the dashboard |
+| `dashboard/` | `python -m dashboard`: FastAPI app and CSRF guard (`app.py`), SQLite schema and user migrations (`db.py`), file ingest (`ingest.py`), page queries (`queries.py`), statuses and notes (`tracking.py`), side projects (`projects.py`), job runner and cost estimates (`jobs.py`), Jinja templates, CSS, vendored htmx |
 
 ## Commands
 
@@ -30,7 +30,7 @@ Do not run these without asking: they spend money or send real messages.
 - `python exa_client.py`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude.
 - `hunt.py run` without `--dry-run`, `hunt.py send`, `hunt.py watch` without `--dry-run`: send to Telegram. `watch` also updates `watch_state.json`.
 
-`python -m dashboard` is free and read-only; for a smoke run, point it at a temporary directory of sample files instead of the owner's data.
+`python -m dashboard` costs nothing by itself, but its Runs page, **Run selected** and **Re-run** start real `hunt.py` commands (paid, and possibly Telegram). For a smoke run, use a temporary directory of sample files with a fake `hunt.py` in it, never the owner's folder, and do not start jobs against the real `hunt.py` without asking. Tests pass a stub through `create_app(root, hunt_command=[...])`.
 
 ## Git workspaces
 
@@ -42,7 +42,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 
 ## Private files
 
-`.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/` and `hunt.db` hold the owner's secrets and personal data. They are git-ignored; never commit them, and do not read `.env`. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
+`.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/`, `hunt.db` and `jobs/` hold the owner's secrets and personal data. They are git-ignored; never commit them, and do not read `.env`. `hunt.db` holds the owner's statuses, notes and side projects, which exist nowhere else: never delete it. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
 
 ## Conventions
 
@@ -52,7 +52,10 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 - `scoring.SYSTEM_PROMPT` and the `Fit` model must agree. Verdict names also appear in `hunt.VERDICTS`, the digest code, `dashboard/queries.py` (`VERDICTS`, `NEW_VERDICTS`), `dashboard/app.py` (`VERDICT_LABELS`) and the verdict colours in `dashboard/static/app.css`; change them together.
 - A change to what `hunt.py` saves (result JSON, `_run.json`, `watch_state.json`, `discovered.csv`) must keep `dashboard/ingest.py` reading both the new and the already-saved format, since `out/` keeps old runs.
 - The dashboard does not import `hunt.py` or anything that loads `.env` or the paid clients; shared file-format code lives in `runs.py`.
-- Every `hunt.db` table is rebuilt from files by `ingest.py`; bump `db.SCHEMA_VERSION` when changing the schema.
+- `hunt.db` has two kinds of tables (see `dashboard/db.py`). Derived tables are rebuilt from files by `ingest.py`; bump `db.SCHEMA_VERSION` when changing them. User tables (`tracking`, `side_projects`, `jobs`) are never dropped or cleared: change them only by appending a migration to `db.USER_MIGRATIONS`, and never edit an applied one.
+- `hunt.main` holds `runs.lock()` for every command, so a shell, cron and the dashboard never run two commands at once. Call `cmd_*` functions directly only in tests.
+- Every non-GET dashboard request must pass the guard in `app.py`: loopback `Host`, same-origin `Origin` and the `X-CSRF-Token` header that `base.html` makes htmx send. New actions should be htmx requests from a page extending `base.html`; do not exempt routes from the guard.
+- Dashboard jobs run `hunt.py` as a subprocess (`jobs.Runner`), never in-process: `cmd_*` functions call `sys.exit` and the `exa_client` cost tally is per process.
 - The scoring model rejects `temperature`; do not add it.
 - One failing company must not abort a run: `hunt.process_company` never raises and returns errors in its result.
 - Dependencies are pinned in `requirements.txt` (runtime) and `requirements-dev.txt` (tests).

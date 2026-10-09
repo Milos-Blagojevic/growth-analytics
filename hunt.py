@@ -467,7 +467,13 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    sys.exit(args.func(args))
+    # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
+    try:
+        with runs.lock():
+            code = args.func(args)
+    except runs.Busy:
+        sys.exit(f"Another hunt.py command is running here (lock: {runs.LOCK_FILE}); try again when it finishes.")
+    sys.exit(code)
 
 
 if __name__ == "__main__":

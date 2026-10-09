@@ -25,7 +25,7 @@
   <p class="muted small">Postings from watched Ashby boards, by when <code>hunt.py watch</code> first reported them.</p>
   {% if postings %}
   <table class="table">
-    <thead><tr><th>Role</th><th>Board</th><th>Location</th><th>First seen</th></tr></thead>
+    <thead><tr><th>Role</th><th>Board</th><th>Location</th><th>First seen</th><th>Status</th></tr></thead>
     <tbody>
       {% for p in postings %}
       <tr>
@@ -33,6 +33,7 @@
         <td class="muted">{{ p.board }}</td>
         <td>{{ p.location or '—' }}{% if p.remote %} <span class="chip link-live">remote</span>{% endif %}</td>
         <td class="muted">{{ p.first_seen | ago }}</td>
+        <td>{% if p.url %}{% with track = {"kind": "posting", "ref": p.url, "status": p.status} %}{% include "partials/track_select.html" %}{% endwith %}{% else %}<span class="muted small">no link saved</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

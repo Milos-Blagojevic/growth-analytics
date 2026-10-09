@@ -7,15 +7,20 @@
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
   <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
 </head>
-<body>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
   <header class="topbar">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Job hunt</a>
     <nav class="nav">
-      <a href="/" class="{{ 'active' if page == 'board' }}">Board</a>
-      <a href="/inbox" class="{{ 'active' if page == 'inbox' }}">Inbox</a>
-      <a href="/leads" class="{{ 'active' if page == 'leads' }}">Leads</a>
+      {% for key, href, text in (('board', '/', 'Board'), ('inbox', '/inbox', 'Inbox'), ('pipeline', '/pipeline', 'Pipeline'),
+                                  ('projects', '/projects', 'Projects'), ('leads', '/leads', 'Leads'), ('runs', '/runs', 'Runs')) %}
+      <a href="{{ href }}" class="{{ 'active' if page == key }}">{{ text }}</a>
+      {% endfor %}
     </nav>
-    {% if latest_run %}
+    {% if running_job %}
+    <a class="run-meta live" href="/runs/jobs/{{ running_job.id }}" title="{{ running_job.label }}">
+      <span class="dot pulse"></span>Running: {{ running_job.label }}
+    </a>
+    {% elif latest_run %}
     <div class="run-meta" title="Run {{ latest_run.id }}">
       <span class="dot"></span>
       Last run {{ latest_run.saved_at | ago }}
@@ -38,10 +43,21 @@
   </main>
 
   <div id="panel"></div>
+  <div id="toasts" aria-live="polite"></div>
 
   <script>
     function closePanel() { document.getElementById("panel").innerHTML = ""; }
+    function toast(text) {
+      const el = document.createElement("div");
+      el.className = "toast";
+      el.textContent = text;
+      document.getElementById("toasts").appendChild(el);
+      setTimeout(() => el.remove(), 6000);
+    }
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePanel(); });
+    // Errors from htmx requests (validation, busy, stale page) arrive as plain text.
+    document.addEventListener("htmx:responseError", (e) => toast(e.detail.xhr.responseText || "Request failed."));
+    document.addEventListener("htmx:sendError", () => toast("The dashboard is not reachable."));
   </script>
 </body>
 </html>

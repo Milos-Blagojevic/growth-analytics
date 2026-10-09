@@ -1,0 +1,24 @@
+<div class="backdrop" onclick="closePanel()"></div>
+<article class="sheet modal">
+  <header class="sheet-head">
+    <div class="sheet-id"><h2>{{ 'Edit project' if project else 'New side project' }}</h2></div>
+    <button class="close" type="button" onclick="closePanel()" aria-label="Close">✕</button>
+  </header>
+  <form class="sheet-body form" hx-post="{{ '/projects/%d' % project.id if project else '/projects' }}">
+    <label>Title<input name="title" required maxlength="200" value="{{ project.title if project else '' }}" autofocus></label>
+    <label>What it is and what it proves<textarea name="description" rows="4">{{ project.description if project else '' }}</textarea></label>
+    <label>Gap it covers<input name="gap" maxlength="300" value="{{ project.gap if project else '' }}" placeholder="e.g. Growth engineering: production TypeScript"></label>
+    <label>Repository or write-up URL<input name="repo_url" type="url" value="{{ project.repo_url if project else '' }}" placeholder="https://github.com/…"></label>
+    <div class="form-foot">
+      {% if project %}
+      <button class="btn danger ghost" type="button" hx-post="/projects/{{ project.id }}/delete"
+              hx-confirm="{{ 'Hide this suggested idea?' if project.source == 'scorer' else 'Delete this project?' }}">
+        {{ 'Hide' if project.source == 'scorer' else 'Delete' }}
+      </button>
+      {% endif %}
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" onclick="closePanel()">Cancel</button>
+      <button class="btn primary" type="submit">{{ 'Save' if project else 'Add project' }}</button>
+    </div>
+  </form>
+</article>

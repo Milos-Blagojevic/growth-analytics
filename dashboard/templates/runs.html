@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Runs · Job hunt{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Runs</h1>
+  {% if busy %}<span class="badge v-stretch"><span class="dot pulse"></span> A hunt.py command is running</span>{% endif %}
+</div>
+<p class="muted small">Starts <code>hunt.py</code> commands in this folder, one at a time (a cron <code>watch</code> or a shell command counts too). Paid commands and anything that sends to Telegram ask for confirmation first, with a cost estimate.</p>
+
+<div class="launchers">
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="run">
+    <h2>Research and score</h2>
+    <p class="muted small">Every company in <code>companies.csv</code> ({{ companies }}). To run a few, select them on <a class="link" href="/leads">Leads</a> or use “Re-run” in a company's details.</p>
+    <div class="radios">
+      {% for key, (text, flags) in modes.items() %}
+      <label class="radio"><input type="radio" name="mode" value="{{ key }}" {{ 'checked' if key == 'dry_run' }}>
+        <span><strong>{{ text }}</strong>
+          <span class="muted small">{{ {'dry_run': 'Exa + Claude; nothing sent', 'deliver': 'Exa + Claude; Telegram notification', 'research_only': 'Exa only; no scoring'}[key] }}</span>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    <button class="btn primary" type="submit" {{ 'disabled' if not companies }}>Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="discover">
+    <h2>Discover companies</h2>
+    <p class="muted small">Suggests new companies for your target roles and adds them to <a class="link" href="/leads">Leads</a>.</p>
+    <label class="field">Extra focus <input name="focus" placeholder="optional, e.g. fintech" maxlength="100"></label>
+    <label class="field">Limit <input name="limit" type="number" min="1" max="50" value="15"></label>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="watch">
+    <h2>Check watch list</h2>
+    <p class="muted small">Polls your Ashby boards for new matching postings. Free.</p>
+    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="send">
+    <h2>Resend notification</h2>
+    <p class="muted small">Sends a saved run's short notification to Telegram again. Free.</p>
+    {% set scored = saved | selectattr('scored') | list %}
+    <label class="field">Run
+      <select name="run_id" {{ 'disabled' if not scored }}>
+        {% for r in scored %}<option value="{{ r.id }}">{{ r.saved_at[:16] | replace('T', ' ') }} · {{ r.scored }} scored</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit" {{ 'disabled' if not scored }}>Review and start…</button>
+  </form>
+</div>
+
+<section class="block">
+  <h2>Started from the dashboard <span class="count">{{ jobs | length }}</span></h2>
+  {% if jobs %}
+  <table class="table">
+    <thead><tr><th>Job</th><th>Status</th><th>Started</th><th>Took</th><th>Saved run</th></tr></thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr>
+        <td><a href="/runs/jobs/{{ j.id }}">{{ j.label }}</a></td>
+        <td><span class="badge sm j-{{ j.status }}">{{ j.status | job_status }}</span></td>
+        <td class="muted nowrap">{{ j.started_at | ago }}</td>
+        <td class="muted nowrap">{{ j | duration }}</td>
+        <td class="muted">{{ j.run_id or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty slim">No jobs started from the dashboard yet.</div>
+  {% endif %}
+</section>
+
+<section class="block">
+  <h2>Saved runs <span class="count">{{ saved | length }}</span></h2>
+  <p class="muted small">Every run in <code>out/</code>, from the dashboard, a shell or cron.</p>
+  {% if saved %}
+  <table class="table">
+    <thead><tr><th>Saved</th><th>Mode</th><th>Companies</th><th>Verdicts</th><th>Errors</th><th>Exa</th><th>Claude tokens</th></tr></thead>
+    <tbody>
+      {% for r in saved %}
+      <tr>
+        <td class="nowrap">{{ r.saved_at[:16] | replace('T', ' ') }}</td>
+        <td class="muted">{{ r.mode | mode if r.mode else '—' }}</td>
+        <td>{{ r.companies }}</td>
+        <td class="verdicts">
+          {% for v in ('apply', 'consider', 'stretch', 'check_careers', 'skip') %}{% if r[v] %}<span class="badge sm v-{{ v }}" title="{{ v | label }}">{{ r[v] }} {{ v | label }}</span>{% endif %}{% endfor %}
+          {% if not r.scored %}<span class="muted small">not scored</span>{% endif %}
+        </td>
+        <td class="{{ 'error-text' if r.errors else 'muted' }}">{{ r.errors }}</td>
+        <td class="muted nowrap">{{ '$%.2f' | format(r.exa_dollars) if r.exa_dollars is not none else '—' }}</td>
+        <td class="muted nowrap">{{ '{:,} / {:,}'.format(r.tokens_in, r.tokens_out) if r.tokens_in is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty slim">No saved runs yet.</div>
+  {% endif %}
+</section>
+{% endblock %}

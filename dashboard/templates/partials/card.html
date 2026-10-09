@@ -1,4 +1,4 @@
-<a class="card v-{{ c.verdict }}" href="/c/{{ c.domain }}" hx-get="/c/{{ c.domain }}" hx-target="#panel">
+<a class="card v-{{ c.verdict }} {{ 'is-' ~ c.status if c.status and c.status != 'new' }}" href="/c/{{ c.domain }}" hx-get="/c/{{ c.domain }}" hx-target="#panel">
   <div class="card-top">
     <div class="ring" style="--score: {{ c.score }}"><span>{{ c.score }}</span></div>
     <div class="card-id">
@@ -12,6 +12,8 @@
   <div class="card-foot">
     <span class="muted small">{% if c.first_seen is defined %}new {{ c.first_seen | ago }}{% else %}scored {{ c.saved_at | ago }}{% endif %}</span>
     <span class="tags">
+      {% if c.status and c.status != 'new' %}<span class="tag status s-{{ c.status }}">{{ c.status | status }}</span>{% endif %}
+      {% if c.notes %}<span class="tag" title="{{ c.notes }}">notes</span>{% endif %}
       {% if c.scope_note %}<span class="tag">scope</span>{% endif %}
       {% if c.gap_note %}<span class="tag">gap</span>{% endif %}
       {% if c.proof_ideas %}<span class="tag">{{ c.proof_ideas | length }} project idea{{ 's' if c.proof_ideas | length > 1 }}</span>{% endif %}

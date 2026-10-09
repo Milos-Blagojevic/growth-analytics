@@ -2,9 +2,9 @@ import json
 from datetime import datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 
 from dashboard.app import create_app
+from dashboard_data import client as make_client
 from dashboard_data import fit, result, write_run
 
 
@@ -54,7 +54,7 @@ def root(tmp_path):
 
 @pytest.fixture
 def client(root):
-    return TestClient(create_app(root))
+    return make_client(create_app(root))
 
 
 def test_board_shows_latest_verdict_tab_with_filters(client):
@@ -92,6 +92,6 @@ def test_inbox_window(client):
 
 
 def test_empty_project_explains_how_to_get_data(tmp_path):
-    page = TestClient(create_app(tmp_path)).get("/").text
-    assert "No runs yet" in page
-    assert "hunt.py discover" in TestClient(create_app(tmp_path)).get("/leads").text
+    empty = make_client(create_app(tmp_path))
+    assert "No runs yet" in empty.get("/").text
+    assert "hunt.py discover" in empty.get("/leads").text

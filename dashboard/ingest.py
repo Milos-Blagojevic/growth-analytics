@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import runs
+from dashboard import db
 
 logger = logging.getLogger("dashboard.ingest")
 
@@ -52,7 +53,7 @@ def ingest(conn, root, sig=None):
     root = Path(root)
     problems = []
     with conn:
-        for table in ("runs", "results", "roles", "watch_postings", "leads", "meta"):
+        for table in db.DERIVED_TABLES:  # user tables (tracking, side_projects, jobs) are never touched
             conn.execute(f"DELETE FROM {table}")
         for run_dir in runs.run_dirs(root / OUT_DIR):
             try:
@@ -162,17 +163,23 @@ def _ingest_watch(conn, path):
     )
 
 
+def read_companies(path):
+    """(name, domain) rows of companies.csv as hunt.load_companies reads them; [] if the file is missing."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    with open(path, newline="") as f:
+        return [
+            (row[0].strip(), row[1].strip())
+            for row in csv.reader(f)
+            if len(row) >= 2 and not row[0].strip().startswith("#") and row[0].strip() and row[1].strip()
+        ]
+
+
 def _ingest_leads(conn, discovered, companies):
     if not discovered.exists():
         return
-    queued = set()
-    if companies.exists():
-        with open(companies, newline="") as f:
-            queued = {
-                row[1].strip().lower()
-                for row in csv.reader(f)
-                if len(row) >= 2 and not row[0].strip().startswith("#")
-            }
+    queued = {domain.lower() for _, domain in read_companies(companies)}
     with open(discovered, newline="") as f:
         rows = list(csv.DictReader(f))
     conn.executemany(

@@ -1,0 +1,28 @@
+<div id="job" class="job"
+     {% if job.status == 'running' %}hx-get="/runs/jobs/{{ job.id }}/log" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  <div class="job-meta">
+    <span class="badge j-{{ job.status }}">{% if job.status == 'running' %}<span class="dot pulse"></span> {% endif %}{{ job.status | job_status }}</span>
+    <span class="muted small">started {{ job.started_at | ago }} · {{ job | duration }}{% if job.exit_code is not none %} · exit code {{ job.exit_code }}{% endif %}</span>
+    <code class="command">python hunt.py {{ job.args | join(' ') }}</code>
+    {% if job.status == 'running' %}
+    <button class="btn danger ghost sm" type="button" hx-post="/runs/jobs/{{ job.id }}/cancel" hx-swap="none"
+            hx-confirm="Stop this job? Paid calls already made are not refunded.">Stop</button>
+    {% endif %}
+  </div>
+  {% if job.estimate %}<p class="muted small">Estimate: {{ job.estimate | replace('\n', ' ') }}</p>{% endif %}
+
+  {% if run %}
+  <div class="run-result">
+    <div class="eyebrow">Saved run {{ run.id }}</div>
+    <div class="verdicts">
+      {% for v in ('apply', 'consider', 'stretch', 'check_careers', 'skip') %}{% if run[v] %}<a class="badge v-{{ v }}" href="/?verdict={{ v }}">{{ run[v] }} {{ v | label }}</a>{% endif %}{% endfor %}
+      {% if run.errors %}<span class="badge v-error">{{ run.errors }} failed</span>{% endif %}
+      {% if run.exa_dollars is not none %}<span class="muted small">Exa ${{ '%.3f' | format(run.exa_dollars) }}</span>{% endif %}
+    </div>
+    <a class="link small" href="/inbox?days=7">See what's new in the inbox →</a>
+  </div>
+  {% endif %}
+
+  <pre class="log" id="log">{{ log or 'Waiting for output…' }}</pre>
+  <script>(() => { const log = document.getElementById("log"); if (log) log.scrollTop = log.scrollHeight; })();</script>
+</div>
