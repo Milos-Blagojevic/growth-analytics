@@ -1,1 +1,181 @@
-Everything Growth
+# Everything Growth
+
+Growth analytics tooling: a thin client over the [Exa](https://exa.ai) search API (raw retrieval, schema-grounded structured answers, content fetching) and a job-hunt pipeline built on it.
+
+## Setup
+
+Requires Python 3.11+ (`tomllib`), an Exa API key ([dashboard.exa.ai](https://dashboard.exa.ai)), and for the job-hunt pipeline an Anthropic API key and a Telegram bot.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # then set EXA_API_KEY in .env
+```
+
+Smoke test (searches "what is exa.ai" and prints 3 results with highlights):
+
+```bash
+python exa_client.py
+```
+
+## Usage
+
+All functions live in `exa_client.py`.
+
+```python
+from exa_client import search, search_structured, contents, fast_search, deep_search
+
+# Raw retrieval: results with query-relevant highlights
+results = search("B2B SaaS onboarding benchmarks", num_results=5)
+for r in results.results:
+    print(r.title, r.url, r.highlights)
+
+# Extra Exa options pass through kwargs
+search("PLG pricing teardown", include_domains=["lennysnewsletter.com"], category="news")
+
+# Override the contents view (default is {"highlights": True})
+search("inference outage postmortems", num_results=5, contents={"text": {"max_characters": 10000}})
+
+# Freshness: max_age_hours (not a publication-date filter)
+search("serverless GPU pricing", max_age_hours=24)     # cached content must be < 24h old
+search("current competitor pricing", max_age_hours=0)  # always fetch fresh
+
+# Search-type wrappers
+fast_search("who is hiring growth PMs", num_results=5)
+deep_search("how are PLG companies pricing AI features", num_results=5)
+
+# Synthesized search: grounded JSON in .output.content, citations in .output.grounding
+schema = {
+    "type": "object",
+    "properties": {"summary": {"type": "string"}},
+}
+out = search_structured("What is product-led growth?", schema)
+print(out.output.content, out.output.grounding)
+
+# Fetch content for URLs you already have
+page = contents(["https://exa.ai"])
+```
+
+### API
+
+| Function | Purpose |
+|---|---|
+| `get_client()` | Returns an `Exa` client. Raises `RuntimeError` if `EXA_API_KEY` is unset. |
+| `search(query, *, type="auto", num_results=10, contents=None, max_age_hours=None, **kwargs)` | Raw search results. `contents` defaults to highlights. |
+| `search_structured(query, output_schema, *, type="auto", system_prompt=None, contents=None, max_age_hours=None, **kwargs)` | Synthesized, grounded JSON output. `contents` defaults to highlights. |
+| `instant_search` / `fast_search` / `deep_lite_search` / `deep_search` / `deep_reasoning_search` `(query, **kwargs)` | `search()` with `type` preset (see below). |
+| `contents(urls, *, max_age_hours=None, **kwargs)` | Page contents (with highlights) for given URLs. |
+
+`max_age_hours` controls content freshness, not publication date: `0` always fetches fresh, `-1` uses cache only, `N` uses cache if newer than `N` hours, `None` lets Exa decide. It overrides any `max_age_hours` inside `contents`.
+
+| Wrapper | `type` | Approx. latency |
+|---|---|---|
+| `instant_search` | `instant` | ~250 ms |
+| `fast_search` | `fast` | ~450 ms |
+| `deep_lite_search` | `deep-lite` | ~4 s |
+| `deep_search` | `deep` | 4-15 s |
+| `deep_reasoning_search` | `deep-reasoning` | 12-40 s |
+
+`search_structured` schema limits: max nesting depth 2, max 10 total properties. Don't add citation or confidence fields; grounding is returned automatically.
+
+### Retries and cost logging
+
+Every request made through the module functions goes through one internal path that:
+
+- **Retries** transient failures with exponential backoff (jittered, capped): HTTP 408/429/500/502/503/504 and `requests` connection/timeout errors. Other errors (400s, invalid options) raise immediately. Tune via module constants `MAX_ATTEMPTS` (default 4 total tries), `BACKOFF_BASE_SECONDS` (1.0), `BACKOFF_MAX_SECONDS` (30.0) and `RETRYABLE_STATUS`.
+- **Logs cost** at INFO on the `exa_client` logger, one line per request (`search:fast cost=$0.0070 search_time=450ms`), and retries at WARNING. Enable with `logging.basicConfig(level=logging.INFO)`.
+- **Tallies cost** per label (`search:<type>`, `search_structured:<type>`, `contents`), using the `costDollars` Exa reports.
+
+```python
+from exa_client import cost_summary, reset_costs
+
+cost_summary()
+# {"requests": 3, "dollars": 0.021, "by_label": {"search:fast": {"requests": 2, "dollars": 0.014}, ...}}
+reset_costs()
+```
+
+Notes: the tally is in-process only (not persisted) and counts successful requests; responses without cost data count as requests but add $0. The Exa SDK sets no HTTP timeout on sync requests, so a hung connection is never retried.
+
+## Job-hunt pipeline
+
+Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and delivers a digest to Telegram. Runs locally.
+
+### Configure
+
+1. Add keys to `.env`: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (see `.env.example` for how to get the Telegram values).
+2. `cp profile.example.toml profile.toml`, set `[candidate].location`, and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). Optionally fill `gaps` (see Stretch below).
+3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies).
+
+### Run
+
+```bash
+python hunt.py discover --limit 20             # suggests name,domain,why rows; logs them to discovered.csv
+python hunt.py discover "fintech" --limit 20   # same, with an extra focus
+python hunt.py run --research-only             # Exa only: no Claude, no Telegram
+python hunt.py run --dry-run                   # research + score, print the digest
+python hunt.py run                             # research + score + send to Telegram
+python hunt.py send                            # send the latest saved run's digest to Telegram (no new research or scoring)
+python hunt.py watch                           # send new growth-role postings from watched Ashby boards to Telegram
+```
+
+Each run saves raw research and scores to `out/<timestamp>/<domain>.json` and prints Exa cost and Claude token usage. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call.
+
+`send` rebuilds the digest from a saved run in `out/` (latest by default, or pass a directory). Use it after a `--dry-run` so the digest you reviewed is exactly the one delivered, without paying for a second run.
+
+Discovery runs one search per target role plus one deep search (6 searches, roughly $0.15-0.20 for `--limit 20`) because a single search returns only a handful of companies. Results are merged round-robin, filtered (job boards and anonymous employers dropped, `[search].exclude_domains` removed) and appended to `discovered.csv` (`discovered_at,name,domain,why,focus`). Domains already in the history are skipped, so repeated runs only return new companies. The first three columns are in `companies.csv` format. The `why` column is Exa's unverified claim; `run` is what actually researches and scores each company.
+
+Scoring model: `claude-sonnet-5-5` by default, override with `SCORING_MODEL` in `.env`.
+
+Verdicts in the digest: **apply** (score 75+), **consider** (50-74), **stretch** (a role centred on one of your declared gaps; see below), **check careers** (no live role found, but the company scores 50+ on its own: look at its careers page), **skip** (below 50, identity not verified, or the posting excludes your location without relocation support). A live posting is required for apply/consider/stretch.
+
+Stretch: list areas where your experience is thin in `[candidate].gaps` (for example growth engineering with about 6 months of experience). When a posting's core work falls in such an area, the digest shows **STRETCH** instead of apply, with a `Gap:` line stating what you have, up to two `Build:` side-project ideas that would build credible proof, and a score reduced for the gap. Roles outside the gaps are unaffected.
+
+Weak spots and scope: `[candidate].weak_spots` lists specific tools you are weak in (for example PySpark). If a posting requires one, the digest adds it as a concern and gives one preparation step in `Next:`; unlike a gap, it does not change the verdict. When a posting's title and duties disagree (an analyst title with ETL/dbt work, say), the digest adds a `* Scope:` line saying which part of your background fits. The scorer reports compensation only as stated in the posting and never judges whether it is high or low.
+
+Role search: the main Exa call looks for postings. If it finds none for a verified company, a second call restricted to ATS/job-board domains (Ashby, Greenhouse, Lever, Workable, SmartRecruiters, Recruitee, Teamtailor, Personio) runs, costing about $0.007 extra. Only postings Exa marks as belonging to the company are kept; `role_source` in `out/` records which call supplied them (`main`, `ats_fallback`, `none`). The research step only quotes what each posting says about remote regions and relocation; judging eligibility for your `location` is the scorer's job.
+
+Link verification: Exa often returns stale posting URLs (about 30% were dead in one run, including top-scored roles), so every posting is checked before scoring and dead ones are dropped (recorded as `dead_roles` in `out/`). Ashby (`jobs.ashbyhq.com`) answers HTTP 200 for any URL, so its links are checked against Ashby's public posting API, which lists only open jobs. For other sites, 404/410 or a redirect away from the posting (a soft 404, e.g. Workable `?not_found=true`, Greenhouse `?error=true`) means dead. A URL that is only a board or careers homepage, or a check that is blocked or times out, is resolved with a fresh Exa fetch (about $0.001 per link); if that cannot confirm it either, the role is kept as `link_status: "unverified"` and the scorer tells you to confirm it. If every link for a company is dead, the ATS fallback search runs, and a company with no live role becomes "check careers". Not covered: sites that answer 200 for closed postings other than Ashby (none seen yet).
+
+Posting text: for up to 3 live roles per company, the posting text (first 4,000 characters, about $0.001 per page) is fetched and given to the scorer, because search summaries rarely contain responsibilities and required tools. Without it most concerns read "responsibilities not in the evidence". Roles whose link is only unverified are not fetched.
+
+Known limits: Exa is a search engine, not a jobs feed. Open-role coverage varies between runs, and "no roles found" does not mean no roles exist. Posting URLs may point to third-party job boards (for example a VC portfolio board) rather than the company's own ATS. Treat the digest as leads and confirm on the company's careers page.
+
+Score noise: the scoring model does not accept a temperature setting (`temperature is deprecated for this model`), so the same research can score differently between runs: typically within a few points, occasionally more. Verdict thresholds (75, 50) and the gap rule make borderline companies flip (one company went from 68 stretch to 82 apply on identical input). Read scores as bands, not exact values.
+
+### Watch list
+
+`python hunt.py watch` polls the Ashby job boards in `[watch].ashby_boards` (the slug in `jobs.ashbyhq.com/<slug>`) through Ashby's free, keyless posting API, which lists only open postings. Postings whose title contains any `title_keywords` entry (case-insensitive) and none of `title_exclude` are sent to Telegram in one message with title, location and link. Already-reported posting IDs are kept in `watch_state.json`, so each posting is sent once; the first run reports everything currently open. State is saved only after a successful send, so a failed send is retried on the next run. `--dry-run` prints matches without sending or saving state. A board that cannot be read (typo, API error) is logged, its state is left unchanged, and the exit code is 1. No Exa or Claude calls, so it costs nothing.
+
+Only Ashby boards are supported. To run it on a schedule while the laptop is on, add a cron entry (`crontab -e`), for example every 6 hours:
+
+```
+0 */6 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py watch >> watch.log 2>&1
+```
+
+## Parked ideas
+
+Not built yet; recorded so they can be picked up later.
+
+- **Repeat scoring for borderline companies.** Because scores vary between runs (see Score noise), score companies whose first score lands near a verdict threshold (for example within 5 points of 75 or 50, or a stretch/apply split) two or three times and use the median score and the majority verdict. Costs roughly 2-3x the Claude spend for those companies only (a full 19-company run currently costs about $0.27 in Claude).
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `exa_client.py` | Exa search client |
+| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`) |
+| `.env.example` | Template for required environment variables |
+| `.env` | Local secrets (git-ignored) |
+| `hunt.py` | Job-hunt CLI: `discover` and `run` |
+| `research.py` | Per-company Exa research (identity, signals, open roles) |
+| `scoring.py` | Claude fit scoring (structured output) |
+| `telegram.py` | Telegram delivery |
+| `watch.py` | Watch list: poll job boards, report new matching postings |
+| `ashby.py` | Ashby public job-board API client (used by link checks and the watch list) |
+| `profile.example.toml` | Template for `profile.toml` (git-ignored) |
+| `cv.example.md` | Template for `cv.md` (git-ignored) |
+| `companies.example.csv` | Template for `companies.csv` (git-ignored) |
+| `out/` | Raw per-run JSON results (git-ignored) |
+| `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
+| `watch_state.json` | Postings the watch list has already reported (git-ignored) |

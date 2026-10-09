@@ -1,0 +1,40 @@
+# Copy to profile.toml (git-ignored) and edit.
+
+[search]
+roles = [
+  "data engineer",
+  "data analyst",
+  "analytics engineer",
+  "growth analytics engineer",
+  "growth engineer",
+]
+seniority = ["senior", "lead"]
+work_mode = "Prefer fully remote roles. Roles that are on-site or hybrid are acceptable only if the company offers relocation support."
+# Companies never to suggest in discovery, e.g. your current employer.
+exclude_domains = []
+
+[candidate]
+# Where you are based; used to judge whether "remote" roles are open to you.
+location = "City, Country"
+# Path to your CV as markdown/text (git-ignored; see cv.example.md). Sent to the scoring model.
+# cv_file = "cv.md"
+# Free text. The more concrete (stack, domains, scale, achievements), the better the fit scoring.
+experience = """
+"""
+# Extra preferences or deal-breakers, free text.
+notes = ""
+# Areas where your experience is thin. Roles centred on these are flagged "stretch", with a gap note
+# and side-project ideas, instead of "apply". Example: "Growth engineering: about 6 months of experience."
+gaps = ""
+# Specific tools or skills where you are weak. If a posting needs one, the digest flags it with a prep
+# step; it does not lower the verdict by itself (unlike gaps). Example: "PySpark: limited experience."
+weak_spots = ""
+
+[watch]
+# `python hunt.py watch` polls these Ashby job boards (the slug in jobs.ashbyhq.com/<slug>) and sends
+# new postings whose title matches a keyword to Telegram. The first run reports everything currently open.
+ashby_boards = []
+# Case-insensitive substrings matched against job titles, e.g. ["growth engineer", "analytics engineer"].
+title_keywords = []
+# Titles containing any of these are ignored, e.g. ["marketing manager"].
+title_exclude = []
