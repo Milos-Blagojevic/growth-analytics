@@ -234,6 +234,15 @@ def test_notification_lists_only_actionable_roles(monkeypatch):
     ]
 
 
+def test_notification_links_the_railway_dashboard_unless_dashboard_url_is_set(monkeypatch):
+    results = [scored("Top", 90, "apply", "Lead AE", "https://top.com/jobs/1")]
+    assert hunt.build_notification(results)[-1] == "Dashboard: http://127.0.0.1:8000"
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "hunt-production.up.railway.app")
+    assert hunt.build_notification(results)[-1] == "Dashboard: https://hunt-production.up.railway.app"
+    monkeypatch.setenv("DASHBOARD_URL", "https://jobs.example.com")
+    assert hunt.build_notification(results)[-1] == "Dashboard: https://jobs.example.com"
+
+
 def test_send_uses_latest_run_and_ignores_its_manifest(http, workdir, monkeypatch, capsys):
     old, new = workdir / "out" / "20260101-090000", workdir / "out" / "20260102-090000"
     for run_dir, result in ((old, scored("Old", 80, "apply", "Old role")), (new, scored("Top", 90, "apply", "Lead AE"))):

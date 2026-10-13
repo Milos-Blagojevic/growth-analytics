@@ -160,8 +160,16 @@ def build_notification(results):
     failed = [r["name"] for r in results if "error" in r]
     if failed:
         blocks.append(f"Failed: {', '.join(failed)}")
-    blocks.append(f"Dashboard: {os.environ.get('DASHBOARD_URL') or DEFAULT_DASHBOARD_URL}")
+    blocks.append(f"Dashboard: {dashboard_url()}")
     return blocks
+
+
+def dashboard_url():
+    """DASHBOARD_URL, else the Railway service's public domain (Railway sets RAILWAY_PUBLIC_DOMAIN), else local."""
+    if os.environ.get("DASHBOARD_URL"):
+        return os.environ["DASHBOARD_URL"]
+    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+    return f"https://{domain}" if domain else DEFAULT_DASHBOARD_URL
 
 
 def _tokens(results):

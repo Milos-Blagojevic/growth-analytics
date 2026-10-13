@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Log in · Job hunt{% endblock %}
+{% block topbar %}{% endblock %}
+{% block content %}
+<form class="login" hx-post="/login">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Job hunt</div>
+  <input type="hidden" name="next" value="{{ next }}">
+  <label class="field">Password
+    <input type="password" name="password" autocomplete="current-password" required autofocus>
+  </label>
+  <button class="btn primary" type="submit">Log in</button>
+</form>
+{% endblock %}

@@ -56,6 +56,33 @@
 </div>
 
 <section class="block">
+  <h2>Schedule <span class="count">{{ schedules | length if schedules else 0 }}</span></h2>
+  {% if schedules %}
+  <p class="muted small">From <code>HUNT_SCHEDULE</code>, in the dashboard's local time. A command due while another runs starts when it finishes.</p>
+  <table class="table">
+    <thead><tr><th>Entry</th><th>Next</th><th>Last started</th></tr></thead>
+    <tbody>
+      {% for s in schedules %}
+      <tr>
+        <td><code>{{ s.text }}</code></td>
+        <td class="nowrap">{% if s.pending %}<span class="badge sm j-running">waiting for the running command</span>{% else %}{{ s.next.strftime('%a %d %b %H:%M') if s.next else '—' }}{% endif %}</td>
+        <td>
+          {% if not s.last %}<span class="muted">not since the dashboard started</span>
+          {% else %}{% set when, job_id, error = s.last %}
+            {% if job_id %}<a class="link" href="/runs/jobs/{{ job_id }}">job {{ job_id }}</a>{% else %}<span class="error-text">did not start: {{ error }}</span>{% endif %}
+            <span class="muted small">{{ when.isoformat(timespec='seconds') | ago }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">Nothing scheduled. Set <code>HUNT_SCHEDULE</code> to start commands on a schedule (see the README).</p>
+  {% endif %}
+</section>
+
+<section class="block">
   <h2>Started from the dashboard <span class="count">{{ jobs | length }}</span></h2>
   {% if jobs %}
   <table class="table">

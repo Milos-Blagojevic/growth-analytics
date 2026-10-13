@@ -95,3 +95,21 @@ def test_empty_project_explains_how_to_get_data(tmp_path):
     empty = make_client(create_app(tmp_path))
     assert "No runs yet" in empty.get("/").text
     assert "hunt.py discover" in empty.get("/leads").text
+
+
+def test_leads_can_be_added_to_companies_csv(tmp_path):
+    (tmp_path / "companies.csv").write_text("# name,domain\nAcme,acme.com")  # no trailing newline
+    (tmp_path / "discovered.csv").write_text(
+        "discovered_at,name,domain,why,focus\n"
+        "2026-01-01T08:00:00,Delta,delta.ai,Growth team,\n2026-01-01T08:00:00,\"Echo, Inc\",echo.so,Data team,\n"
+    )
+    c = make_client(create_app(tmp_path))
+
+    response = c.post("/leads/queue", data={"domains": ["delta.ai", "echo.so"]})
+    assert (response.status_code, response.headers["HX-Refresh"]) == (204, "true")
+    assert c.post("/leads/queue", data={"domains": ["delta.ai"]}).status_code == 204  # already listed: no duplicate
+    assert (tmp_path / "companies.csv").read_text() == '# name,domain\nAcme,acme.com\nDelta,delta.ai\n"Echo, Inc",echo.so\n'
+    assert "Echo, Inc" in c.get("/leads", params={"status": "queued"}).text
+
+    assert c.post("/leads/queue", data={"domains": ["nope.com"]}).status_code == 400
+    assert c.post("/leads/queue", data={}).status_code == 400

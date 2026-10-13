@@ -80,6 +80,9 @@ p { margin: 0.35em 0; }
 .run-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
 .run-meta .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--apply); box-shadow: 0 0 8px var(--apply); }
 .run-meta .sep { opacity: 0.5; margin: 0 2px; }
+.logout { margin-left: auto; }
+.run-meta + .logout { margin-left: 0; }
+.login { max-width: 360px; margin: 12vh auto 0; display: grid; gap: 18px; padding: 28px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
 
 .banner { margin: 16px 32px 0; padding: 10px 14px; border-radius: 10px; background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.3); color: #fecaca; font-size: 13px; }
 .banner code { margin-left: 6px; }
@@ -386,9 +389,14 @@ ul.plain.warn li::before { content: "⚠ "; color: var(--stretch); }
 .toast { max-width: 380px; padding: 11px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid rgba(248, 113, 113, 0.45); color: #fecaca; box-shadow: var(--shadow); animation: fade 0.2s ease; }
 
 @media (max-width: 720px) {
-  .topbar { padding: 12px 16px; gap: 14px; flex-wrap: wrap; }
+  /* Brand and Log out on the first row, the nav as one sideways-scrolling row below; not sticky, to keep the screen */
+  .topbar { position: static; padding: 12px 16px; gap: 10px 14px; flex-wrap: wrap; }
   .run-meta { display: none; }
-  .nav { flex-wrap: wrap; }
+  .run-meta + .logout { margin-left: auto; }
+  .nav { order: 1; width: 100%; overflow-x: auto; }
+  .nav a { white-space: nowrap; }
+  .selection-bar { top: 8px; flex-wrap: wrap; }
   .main { padding: 20px 16px 60px; }
   .pros-cons { grid-template-columns: 1fr; }
+  .table { display: block; overflow-x: auto; }  /* wide tables scroll sideways instead of being cut off */
 }

@@ -1,25 +1,26 @@
-"""Local dashboard over the job-hunt pipeline (served by `python -m dashboard`).
+"""Job-hunt dashboard over the pipeline's files (served by `python -m dashboard`).
 
 Pages read the pipeline's saved files (through hunt.db); your statuses, notes and side projects live in hunt.db;
-jobs start hunt.py commands as subprocesses. Every POST needs the per-process CSRF token (sent by htmx as the
-X-CSRF-Token header) and a matching Origin, and every request a loopback Host, so other websites open in the
-browser cannot start paid runs.
+jobs start hunt.py commands as subprocesses, from a button or from HUNT_SCHEDULE. Every request needs an allowed
+Host (loopback, plus the deployment's own host name), and with a password every page needs the login cookie. Every
+POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token header) and a matching Origin, so other
+websites open in the browser cannot start paid runs.
 """
 
 import secrets
 import threading
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import runs
-from dashboard import db, ingest, jobs, projects, queries, tracking
+from dashboard import auth, db, ingest, jobs, projects, queries, schedule, tracking
 
 HERE = Path(__file__).parent
 VERDICT_LABELS = {
@@ -48,7 +49,8 @@ JOB_LABELS = {
 }
 MODE_LABELS = {"research_only": "research only", "dry_run": "dry run", "deliver": "sent to Telegram"}
 INBOX_DAYS = (7, 14, 30, 0)
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+PUBLIC_PATHS = ("/login", "/static/")  # reachable without logging in
 
 
 def _ago(iso):
@@ -73,15 +75,34 @@ def _host(url):
     return urlparse(url).netloc.removeprefix("www.") if url else ""
 
 
-def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS):
-    """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names."""
+def _safe_next(url):
+    """Only same-site paths, so the login page cannot be used to redirect elsewhere."""
+    return url if url.startswith("/") and not url.startswith(("//", "/\\")) else "/"
+
+
+def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=()):
+    """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
+    `password` turns on the login (required when serving beyond loopback); `schedule_entries` come from
+    schedule.parse(HUNT_SCHEDULE)."""
     root = Path(root).resolve()
-    app = FastAPI(title="Job hunt dashboard", docs_url=None, redoc_url=None, openapi_url=None)
+    login = auth.Auth(password) if password else None
+    scheduler = None  # set below, once the job helpers exist
+
+    @asynccontextmanager
+    async def lifespan(app):
+        if scheduler:
+            scheduler.start()
+        yield
+        if scheduler:
+            scheduler.stop()
+
+    app = FastAPI(title="Job hunt dashboard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     csrf_token = secrets.token_urlsafe(32)
     templates.env.globals.update(
         csrf_token=csrf_token,
+        login_required=login is not None,
         statuses=tracking.STATUSES,
         project_statuses=projects.STATUSES,
         key_for=tracking.key_for,
@@ -106,7 +127,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS):
     @app.middleware("http")
     async def guard(request: Request, call_next):
         host = request.headers.get("host", "")
-        if urlparse(f"//{host}").hostname not in allowed_hosts:
+        hostname = urlparse(f"//{host}").hostname
+        if hostname not in allowed_hosts:
             return PlainTextResponse("Unknown host.", status_code=400)  # also blocks DNS rebinding
         if request.method not in ("GET", "HEAD"):
             origin = request.headers.get("origin")
@@ -114,7 +136,45 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS):
                 return PlainTextResponse("Cross-origin request refused.", status_code=403)
             if not secrets.compare_digest(request.headers.get("x-csrf-token", ""), csrf_token):
                 return PlainTextResponse("This page is out of date (the dashboard restarted). Reload it.", status_code=403)
+        path = request.url.path
+        if login and not path.startswith(PUBLIC_PATHS) and not login.valid(request.cookies.get(auth.COOKIE)):
+            here = path + (f"?{request.url.query}" if request.url.query else "")
+            to_login = f"/login?next={quote(here if request.method in ('GET', 'HEAD') else '/')}"
+            if request.headers.get("HX-Request"):  # htmx follows HX-Redirect even on an error status
+                return PlainTextResponse("Log in again.", status_code=401, headers={"HX-Redirect": to_login})
+            if request.method in ("GET", "HEAD"):
+                return RedirectResponse(to_login, status_code=303)
+            return PlainTextResponse("Log in again.", status_code=401)
         return await call_next(request)
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, next: str = "/"):
+        if login is None or login.valid(request.cookies.get(auth.COOKIE)):
+            return RedirectResponse(_safe_next(next), status_code=303)
+        return templates.TemplateResponse(request, "login.html", {"next": _safe_next(next)})
+
+    @app.post("/login")
+    async def login_submit(request: Request):
+        if login is None:
+            return redirect("/")
+        form = await request.form()
+        try:
+            token = login.login(form.get("password", ""))
+        except auth.TooManyAttempts as exc:
+            minutes = -(-exc.retry_after // 60)
+            return PlainTextResponse(f"Too many failed logins. Try again in {minutes} min.", status_code=429)
+        if token is None:
+            return PlainTextResponse("Wrong password.", status_code=401)
+        response = redirect(_safe_next(form.get("next", "/")))
+        response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                            secure=request.url.hostname not in LOOPBACK_HOSTS)
+        return response
+
+    @app.post("/logout")
+    def logout():
+        response = redirect("/login")
+        response.delete_cookie(auth.COOKIE)
+        return response
 
     @contextmanager
     def connection():
@@ -202,6 +262,19 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS):
         with connection() as conn:
             return render(request, "leads.html", conn, page="leads", status=status, **queries.leads(conn, status=status))
 
+    @app.post("/leads/queue")
+    async def leads_queue(request: Request):
+        """Appends the selected leads to companies.csv, so the next full run (scheduled or not) researches them."""
+        domains = [d for d in (await request.form()).getlist("domains") if d]
+        with connection() as conn:
+            names = {r["domain"]: r["name"] for r in conn.execute("SELECT domain, name FROM leads")}
+        unknown = [d for d in domains if d not in names]
+        if not domains or unknown:
+            return PlainTextResponse(f"Unknown companies: {', '.join(unknown)}" if unknown else "Select companies first.",
+                                     status_code=400)
+        ingest.add_companies(root / ingest.COMPANIES, [(names[d], d) for d in domains])
+        return Response(status_code=204, headers={"HX-Refresh": "true"})
+
     # Pipeline and side projects -----------------------------------------------------------------------------
 
     @app.get("/pipeline", response_class=HTMLResponse)
@@ -283,6 +356,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS):
                 saved=queries.saved_runs(conn),
                 companies=len(ingest.read_companies(root / ingest.COMPANIES)),
                 modes=jobs.RUN_MODES,
+                schedules=scheduler.status() if scheduler else None,
             )
 
     @app.post("/runs/preview", response_class=HTMLResponse)
@@ -344,5 +418,15 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS):
         if not runner.cancel(job_id):
             return PlainTextResponse("This job is not running.", status_code=409)
         return Response(status_code=204)
+
+    def start_scheduled(form):
+        with connection() as conn:
+            spec = jobs.build(conn, root, form)
+            spec.label = f"Scheduled · {spec.label}"
+            return runner.start(conn, spec)
+
+    if schedule_entries:
+        scheduler = schedule.Scheduler(schedule_entries, start_scheduled)
+        app.state.scheduler = scheduler
 
     return app
