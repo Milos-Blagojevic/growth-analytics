@@ -31,6 +31,16 @@ def test_pages_and_actions_need_the_login(client):
     assert 'type="password"' in client.get("/login").text
 
 
+def test_login_page_works_behind_an_https_proxy(tmp_path):
+    """Railway ends TLS at its proxy and forwards plain HTTP. Absolute http:// asset URLs on the https page are
+    blocked as mixed content: htmx never loads and the browser submits the form natively instead."""
+    app = create_app(tmp_path, allowed_hosts=("hunt-production.up.railway.app",), password=PASSWORD)
+    page = make_client(app).get("/login", headers={"Host": "hunt-production.up.railway.app"}).text
+    assert 'href="/static/app.css"' in page and 'src="/static/htmx.min.js"' in page
+    # Without htmx the password must still never end up in the URL (and the server's access log).
+    assert '<form class="login" method="post" action="/login"' in page
+
+
 def test_login_sets_a_session_and_logout_ends_it(client):
     assert log_in(client, "wrong password!").status_code == 401
     assert client.get("/", follow_redirects=False).status_code == 303

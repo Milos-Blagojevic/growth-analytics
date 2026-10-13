@@ -2,7 +2,8 @@
 {% block title %}Log in · Job hunt{% endblock %}
 {% block topbar %}{% endblock %}
 {% block content %}
-<form class="login" hx-post="/login">
+{# method/action only matter if htmx fails to load: the password then goes in the body, never the URL. #}
+<form class="login" method="post" action="/login" hx-post="/login">
   <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Job hunt</div>
   <input type="hidden" name="next" value="{{ next }}">
   <label class="field">Password
