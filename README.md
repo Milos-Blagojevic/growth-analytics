@@ -210,6 +210,7 @@ Not built yet; recorded so they can be picked up later.
 | `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
+| `docs/specs/` | Specs handed to coding agents; `gtm-attribution-model.md` is the side project for a public attribution, CAC and payback model |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |
 | `hunt.py` | Job-hunt CLI: `discover`, `run`, `send` and `watch` |
