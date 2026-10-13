@@ -1,8 +1,8 @@
 """hunt.py commands started from the dashboard: validation, cost estimates, and a one-at-a-time subprocess runner.
 
-Each job runs `python hunt.py ...` in the project root, exactly as from a shell, so retries, cost logging, the
-run lock (runs.LOCK_FILE) and Telegram delivery behave the same. Its output goes to jobs/<id>.log and its
-outcome to the jobs table.
+Each job runs `python hunt.py ...` (the hunt.py next to this package) with the data folder (root) as working
+directory, exactly as from a shell there, so retries, cost logging, the run lock (runs.LOCK_FILE) and Telegram
+delivery behave the same. Its output goes to jobs/<id>.log and its outcome to the jobs table.
 """
 
 import csv
@@ -20,6 +20,7 @@ import runs
 from dashboard import db, ingest
 
 JOBS_DIR = "jobs"
+HUNT_SCRIPT = Path(__file__).resolve().parent.parent / "hunt.py"
 SAVED_RUN = re.compile(r"Saved raw results to out/([^/\s]+)/")
 LOG_TAIL_BYTES = 200_000
 
@@ -138,7 +139,7 @@ class Runner:
 
     def __init__(self, root, command=None):
         self.root = Path(root)
-        self.command = list(command or [sys.executable, "hunt.py"])
+        self.command = list(command or [sys.executable, str(HUNT_SCRIPT)])
         self._lock = threading.Lock()
         self._procs = {}  # job id -> Popen
         self._cancelled = set()

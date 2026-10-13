@@ -8,6 +8,7 @@
   <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+  {% block topbar %}
   <header class="topbar">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Job hunt</a>
     <nav class="nav">
@@ -29,7 +30,9 @@
       {% if latest_run.exa_dollars is not none %}<span class="sep">·</span>Exa ${{ '%.2f' | format(latest_run.exa_dollars) }}{% endif %}
     </div>
     {% endif %}
+    {% if login_required %}<button class="btn ghost sm logout" hx-post="/logout">Log out</button>{% endif %}
   </header>
+  {% endblock %}
 
   {% if problems %}
   <div class="banner">

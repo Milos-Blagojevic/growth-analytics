@@ -176,6 +176,22 @@ def read_companies(path):
         ]
 
 
+def add_companies(path, companies):
+    """Appends (name, domain) rows not yet in companies.csv (domains compared case-insensitively); creates the file
+    if needed. Returns the rows added."""
+    path = Path(path)
+    listed = {domain.lower() for _, domain in read_companies(path)}
+    new = [(name, domain) for name, domain in dict.fromkeys(companies) if domain.lower() not in listed]
+    if not new:
+        return []
+    text = path.read_text() if path.exists() else ""
+    with open(path, "a", newline="") as f:
+        if text and not text.endswith("\n"):
+            f.write("\n")
+        csv.writer(f, lineterminator="\n").writerows(new)
+    return new
+
+
 def _ingest_leads(conn, discovered, companies):
     if not discovered.exists():
         return

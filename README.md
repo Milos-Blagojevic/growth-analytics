@@ -99,7 +99,7 @@ Notes: the tally is in-process only (not persisted) and counts successful reques
 
 ## Job-hunt pipeline
 
-Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and sends a short notification to Telegram. A local dashboard shows the full results. Runs locally.
+Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and sends a short notification to Telegram. A dashboard shows the full results. Runs locally, or on Railway with scheduled commands and a login so you can use it from your phone (see Deploy to Railway).
 
 ### Configure
 
@@ -124,7 +124,7 @@ Each run saves raw research and scores to `out/<timestamp>/<domain>.json`, plus 
 
 One `hunt.py` command runs at a time per project folder: each command holds a lock (`.hunt.lock`, git-ignored) while it runs, and a second one exits at once with "Another hunt.py command is running here". This covers commands from a shell, cron and the dashboard alike. A cron `watch` that starts during a run exits with that message and checks again at its next scheduled time. The OS releases the lock when a command exits, so a crashed command never leaves it stuck.
 
-The Telegram notification is short: the digest's count header, one entry per apply, consider and stretch role (score, verdict, company, role title and posting URL, so it works away from the laptop), the names of failed companies, and a link to the dashboard (`DASHBOARD_URL` in `.env`, default `http://127.0.0.1:8000`). Reasons, concerns, gap notes and side-project ideas are in the dashboard and in the `--dry-run` digest.
+The Telegram notification is short: the digest's count header, one entry per apply, consider and stretch role (score, verdict, company, role title and posting URL, so it works away from the laptop), the names of failed companies, and a link to the dashboard (`DASHBOARD_URL` in `.env`; default `https://<RAILWAY_PUBLIC_DOMAIN>` on Railway, otherwise `http://127.0.0.1:8000`). Reasons, concerns, gap notes and side-project ideas are in the dashboard and in the `--dry-run` digest.
 
 `send` rebuilds the notification from a saved run in `out/` (latest by default, or pass a directory). Use it after a `--dry-run` so what is delivered comes from the run you reviewed, without paying for a second run.
 
@@ -163,25 +163,75 @@ Only Ashby boards are supported. To run it on a schedule while the laptop is on,
 ```bash
 python -m dashboard              # http://127.0.0.1:8000
 python -m dashboard --port 8001
+python -m dashboard --root ~/hunt-data   # data folder other than the current directory
 ```
 
-Run it from the project directory. It listens on `127.0.0.1` only. It has no login, so every request must name a loopback host, and every change (status, notes, projects, starting a job) must carry a token from the page and come from the dashboard's own origin. Another website open in your browser therefore cannot start a paid run. If the dashboard restarts, open pages hold an old token: changes then show "This page is out of date… Reload it".
+Run it from the project directory, or point `--root` at the folder holding `profile.toml`, `companies.csv`, `out/` and the other data files (jobs then run `hunt.py` with that folder as working directory). By default it listens on `127.0.0.1` only and has no login, so every request must name a loopback host. Every change (status, notes, projects, starting a job) must carry a token from the page and come from the dashboard's own origin, so another website open in your browser cannot start a paid run. If the dashboard restarts, open pages hold an old token: changes then show "This page is out of date… Reload it".
 
-Reading pages costs nothing. Only jobs you start on Runs, or with "Re-run" or "Run selected", call Exa, Claude or Telegram, and each one asks for confirmation first.
+With `DASHBOARD_PASSWORD` set (at least 12 characters), every page asks for that password first, and a session lasts 30 days on that browser; **Log out** ends it. Changing the password logs every browser out. After 10 wrong passwords in 15 minutes, logins are refused for everyone, you included, until the 15 minutes pass. Serving beyond this machine (`--host` other than loopback) refuses to start without a password. Besides loopback, the dashboard accepts the host names in `RAILWAY_PUBLIC_DOMAIN` and `DASHBOARD_URL`.
+
+Reading pages costs nothing. Only jobs you start on Runs, or with "Re-run" or "Run selected", and the commands in `HUNT_SCHEDULE` call Exa, Claude or Telegram. Jobs you start ask for confirmation first.
 
 - **Board** (`/`): the latest scored result per company, in tabs for apply, consider, stretch, check careers and skip, with search (company, role, location and your notes), a status filter (dismissed cards are hidden unless you choose All or Dismissed), a minimum score and sorting. Each card shows the score, best role, location assessment, whether the posting link was confirmed live, and your status. A company whose latest run failed keeps its last scored result, and the board names the companies that failed in the most recent run. Click a card for the details: best role, your status and notes, next step, scope and gap notes, reasons and concerns, side-project ideas, score history across runs (with the 75 and 50 thresholds), open roles with link status, dropped dead links, company summary, evidence URLs, and a **Re-run** button that researches just that company. `/c/<domain>` opens the same details as a page.
 - **Your status and notes**: set a status (new, saved, applied, interviewing, offer, rejected, dismissed) and free-text notes in a company's details, or a status for watch-list postings in the inbox. Notes save as you type. A role is tracked by its posting URL, so when a later run picks a different best role for a company, the card starts as new again. A company without a posting (check careers) is tracked by its domain. The first time an item reaches applied or later, the date is kept as "applied".
 - **Inbox** (`/inbox`): apply, consider and stretch roles first scored in the last 7, 14 or 30 days or all time (a company counts again when its best role changes), and watch-list postings by when `watch` first reported them, each with a status menu.
 - **Pipeline** (`/pipeline`): everything you marked saved, applied, interviewing, offer or rejected, in columns, with your notes and applied date. Change a status there to move the card.
 - **Projects** (`/projects`): side projects that build proof for your gaps, in idea, active, done and dropped columns. The scorer writes side-project ideas only for stretch roles (a role centred on one of your `[candidate].gaps`). Every idea from any saved run appears as a suggestion, newest run first, with the company, role, that run's score and verdict, and its age. Ideas from older runs stay even when a later run scores the company differently, because they are about your gap, not the company. **Add to ideas** turns one into a project, and **Dismiss** hides it. A handled idea is not suggested again, even if a later run repeats it with different case or spacing. **New project** adds your own, with a title, description, the gap it covers and a repository or write-up link. Deleting a project the scorer suggested hides it rather than letting it come back.
-- **Leads** (`/leads`): companies from `discovered.csv`, marked new, queued (in `companies.csv`) or researched (with the latest score). Tick companies and press **Run selected…** to research and score just those. They do not need to be in `companies.csv`.
+- **Leads** (`/leads`): companies from `discovered.csv`, marked new, queued (in `companies.csv`) or researched (with the latest score). Tick companies and press **Run selected…** to research and score just those (they do not need to be in `companies.csv`), or **Add to companies.csv** to append them to `companies.csv`, so every full run (scheduled ones too) covers them. Companies already listed are not added twice; removing one means editing `companies.csv`.
 - **Runs** (`/runs`): start `hunt.py run` (dry run, run and notify, or research only) for every company in `companies.csv`, `discover` (focus, limit), `watch` (optionally dry run) or `send` (pick a saved scored run). Each opens a confirmation first. It shows the exact command, an estimated cost and side effects such as Telegram messages or file updates; for a run you can switch the mode there.
+  - **Schedule:** the commands in `HUNT_SCHEDULE` (see Deploy to Railway) with their next time and the job each last started, or why it could not start.
   - **Estimates:** Exa is the average cost per company of saved runs that recorded it (`_run.json`). Claude is the README figure of $0.27 per 19 companies. Discover is the README figure of $0.15–0.20.
   - **Job pages:** each job gets a live log page with a Stop button (which sends SIGTERM; paid calls already made still cost). When the job finishes, the page shows the saved run's verdict counts and cost.
-  - **History:** the page lists jobs started from the dashboard, plus every saved run in `out/` (from the dashboard, a shell or cron) with its mode, verdict counts, errors, Exa cost and Claude tokens.
-  - **Mechanics:** jobs run `python hunt.py …` in the project folder as a separate process, so they behave exactly like the CLI. Logs go to `jobs/<id>.log` and selected-company lists to `jobs/<id>-companies.csv` (both git-ignored). Only one job runs at a time (see the lock above). If the dashboard stops while a job runs, the job shows as interrupted after a restart. Ctrl+C in the dashboard's terminal stops the job too. A job that outlives the dashboard (for example after `kill` of the server process) keeps running and holds the lock until it finishes.
+  - **History:** the page lists jobs started from the dashboard (scheduled ones are labelled "Scheduled ·"), plus every saved run in `out/` (from the dashboard, a shell or cron) with its mode, verdict counts, errors, Exa cost and Claude tokens.
+  - **Mechanics:** jobs run `python hunt.py …` in the data folder (`--root`) as a separate process, so they behave exactly like the CLI. Logs go to `jobs/<id>.log` and selected-company lists to `jobs/<id>-companies.csv` (both git-ignored). Only one job runs at a time (see the lock above). If the dashboard stops while a job runs, the job shows as interrupted after a restart. Ctrl+C in the dashboard's terminal stops the job too. A job that outlives the dashboard (for example after `kill` of the server process) keeps running and holds the lock until it finishes.
 
 The dashboard copies the pipeline files into `hunt.db` (SQLite, git-ignored) and copies them again whenever one of them changes, so a finished run shows up on the next page load. A run directory that cannot be read (for example while a run is still writing it) is skipped with a warning banner and read again once it changes. Runs saved before `_run.json` existed show no mode or cost. `hunt.db` also holds your statuses, notes, side projects and job history, which exist nowhere else: back it up if they matter, and do not delete it. The copied pipeline data is rebuilt automatically when needed; your own data is never touched by that.
+
+### Deploy to Railway
+
+Runs the dashboard on [Railway](https://railway.com), so you can open it from your phone and have it start `discover`, `run` (with its Telegram notification) and `watch` on a schedule. Railway builds the `Dockerfile`: the code lives in `/app`, and your data (the same files as in the project folder) on a volume mounted at `/data`. Railway bills the always-on service and the volume; scheduled commands cost the same Exa and Claude money as from the laptop.
+
+Railway's own cron services cannot share a volume with the dashboard, so the dashboard process starts the scheduled commands itself, as jobs on the Runs page with the same one-at-a-time lock, logs and history.
+
+1. In Railway: **New project → Deploy from GitHub repo**, pick this repository.
+2. Attach a volume to the service with mount path `/data` (right-click the service → **Attach volume**, or `railway volume add --mount-path /data`). Without it the service does not start (`--root /data is not a directory`), so a missing volume never silently loses your data on the next deploy.
+3. Set the service variables:
+
+   | Variable | Value |
+   |---|---|
+   | `DASHBOARD_PASSWORD` | Required: the login password, at least 12 characters. A random one: `python -c "import secrets; print(secrets.token_urlsafe(18))"`. Anyone with it can start paid runs, so keep it to yourself. |
+   | `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optionally `SCORING_MODEL` | As in your `.env` (the container has no `.env`). |
+   | `TZ` | Your time zone, for example `Europe/Belgrade`. Schedules and saved-run times use it; default UTC. |
+   | `HUNT_SCHEDULE` | Optional: scheduled commands (below). |
+   | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
+
+4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.
+5. Upload your files to the volume with the [Railway CLI](https://docs.railway.com/cli/volume) (volume paths start at `/data`, so `/profile.toml` is `/data/profile.toml`):
+
+   ```bash
+   railway volume files upload profile.toml /profile.toml
+   railway volume files upload cv.md /cv.md              # paths in profile.toml are relative to /data
+   railway volume files upload companies.csv /companies.csv
+   # optional: your history, so nothing is reported or suggested twice
+   railway volume files upload discovered.csv /discovered.csv
+   railway volume files upload watch_state.json /watch_state.json
+   railway volume files upload out /out
+   ```
+
+   `railway volume browse` opens an interactive browser for editing these files later (for example to remove a company from `companies.csv`). To keep your statuses, notes and side projects, stop the local dashboard, then `railway volume files upload --overwrite hunt.db /hunt.db` while no job runs on Railway, and restart the service (**Deployments → Restart**).
+6. Open the domain, log in, and check the Runs page: the Schedule section lists what will run and when.
+
+`HUNT_SCHEDULE` holds one entry per line, or entries separated by `;` (easier in Railway's variable editor): five cron fields (minute, hour, day of month, month, day of week with 0 or 7 for Sunday; numbers, `*`, ranges, lists and `*/n` steps), then a `hunt.py` command. Supported commands are the ones the Runs page starts: `run`, `run --dry-run`, `run --research-only`, `discover [focus] [--limit N]`, `watch` and `watch --dry-run`. For example, discovery every Monday at 07:00, a scored run with its Telegram notification every day at 07:30, and the watch list every 6 hours:
+
+```
+0 7 * * 1 discover --limit 15; 30 7 * * * run; 0 */6 * * * watch
+```
+
+An entry that is not valid stops the dashboard from starting, with the reason in the deploy logs. A command that comes due while another one runs waits and starts as soon as that one finishes; one that cannot start (for example `companies.csv` is empty) shows the reason on the Runs page and in the logs. Commands due while the service is down (during a redeploy) are skipped, not caught up. Changing a variable redeploys the service, which interrupts a running job. `discover` only adds leads: use **Add to companies.csv** on Leads so the next scheduled `run` researches them.
+
+Railway and a laptop do not share files: once Railway runs `watch` on a schedule, remove the laptop's cron entry, or both will send the same postings. Railway can [back up the volume](https://docs.railway.com/volumes/backups); `railway volume files download /hunt.db` copies your tracking data to the laptop.
+
+To try the image on the laptop: `docker build -t hunt . && docker run -p 8000:8000 -e DASHBOARD_PASSWORD=… -v "$PWD":/data hunt`, then open `http://127.0.0.1:8000`. The container reads and writes this folder's data files, and its jobs see only the keys you pass with `-e`.
 
 ## Tests
 
@@ -214,7 +264,8 @@ Not built yet; recorded so they can be picked up later.
 | `.env` | Local secrets (git-ignored) |
 | `hunt.py` | Job-hunt CLI: `discover`, `run`, `send` and `watch` |
 | `runs.py` | Saved-run format and the one-command-at-a-time lock, shared by `hunt.py` and the dashboard (`out/<timestamp>/`, `_run.json`, `.hunt.lock`) |
-| `dashboard/` | Local dashboard (`python -m dashboard`): FastAPI app, SQLite store and ingest, status tracking, side projects, job runner, Jinja templates, CSS and a vendored copy of htmx 2.0.7 |
+| `dashboard/` | Dashboard (`python -m dashboard`): FastAPI app, login, scheduler, SQLite store and ingest, status tracking, side projects, job runner, Jinja templates, CSS and a vendored copy of htmx 2.0.7 |
+| `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
 | `research.py` | Per-company Exa research (identity, signals, open roles) |
 | `scoring.py` | Claude fit scoring (structured output) |
 | `telegram.py` | Telegram delivery |
