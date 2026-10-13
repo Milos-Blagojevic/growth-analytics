@@ -44,7 +44,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 
 ## Private files
 
-`.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/`, `hunt.db` and `jobs/` hold the owner's secrets and personal data. They are git-ignored and kept out of the Docker image (`.dockerignore`); never commit them, and do not read `.env`. On Railway the same files live on the `/data` volume and the keys are service variables. `hunt.db` holds the owner's statuses, notes and side projects, which exist nowhere else: never delete it, locally or on the volume. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
+`.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/`, `hunt.db` (with its `hunt.db-wal` and `hunt.db-shm` files) and `jobs/` hold the owner's secrets and personal data. They are git-ignored and kept out of the Docker image (`.dockerignore`); never commit them, and do not read `.env`. On Railway the same files live on the `/data` volume and the keys are service variables. `hunt.db` holds the owner's statuses, notes and side projects, which exist nowhere else: never delete it or its `-wal` file (recent writes may still be there), locally or on the volume. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
 
 ## Conventions
 
