@@ -278,6 +278,6 @@ Not built yet; recorded so they can be picked up later.
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |
-| `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects and job history (git-ignored; back it up) |
+| `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects and job history (git-ignored; back it up). SQLite also keeps `hunt.db-wal` and `hunt.db-shm` next to it while the dashboard runs; recent writes may sit in the `-wal` file, so copy all three or use `sqlite3 hunt.db ".backup hunt.db.backup"` (also git-ignored) |
 | `jobs/` | Logs and company lists of jobs started from the dashboard (git-ignored) |
 | `.hunt.lock` | Lock file that lets one `hunt.py` command run at a time (git-ignored) |
