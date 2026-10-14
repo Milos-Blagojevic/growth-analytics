@@ -498,6 +498,20 @@ The report layer may read only marts, the `evaluation` schema and `reports/` exp
   - `ANTHROPIC_API_KEY` from the new repository's own environment; total spend for development and recording at most $5,
   - a non-deterministic step, so it stays out of `make all`, and CI scores recorded outputs.
 
+### 17.4 Implementation decisions (resolved during phase 1–2)
+
+The binding detail lives in the repository's `docs/data-contract.md`. Departures from this spec:
+
+- **Kestrel fees are all billed in EUR:** Faster Payments €0.30 instead of £0.25; SWIFT 0.10% of the EUR equivalent at the execution-hour mid, minimum €8 and cap €40 instead of $8/$40. Keeps every provider fee in one currency, so M02 needs no FX.
+- **All card payments are in EUR** (new assumption A11), so tiers and card fees need no conversion; FX applies to payouts only.
+- **Kestrel amendment (v2, 2026-04-01) adds a Polish Elixir rail** (€0.30). It is the "rail launched mid-period" that L01 needs; client agreements get a matching version 2.
+- **Tier bounds are integer minor units** (`up_to_minor`), exclusive upper bounds.
+- **Refund markup credit** is minus the *expected* markup of the original payment, so an overcharge on the original is counted once, on the original.
+- **FX check is a cap:** the expected FX row is the largest EUR debit the cap allows; only a debit above it is a finding. D12 is detected from the rate timestamp on the Kestrel statement.
+- **Brightpay volume discount** is billed at 1.40% per transaction and settled as a monthly adjustment credit for EEA consumer volume above €1.5M.
+- **N08 added:** Brightpay sometimes rounds ties half-up instead of half-even. These become `rounding` findings, never overcharges, so the `rounding` category is exercised.
+- **Repository-level shape:** raw tables are all `VARCHAR` as in the source files (parsing only in staging and the reference engine); the ledger is exported in daily files that lag one day.
+
 ## 18. Phases and acceptance criteria
 
 | Phase | Done when |
