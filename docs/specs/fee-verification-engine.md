@@ -1,6 +1,6 @@
 # Spec: payment fee verification engine on synthetic data
 
-Status: in progress. The owner's decisions on section 17 are recorded there (2026-10-14).
+Status: phases 1–9 built in the private repository `Milos-Blagojevic/payments-fee-audit` as stacked pull requests #1–#10 (2026-10-14); phase 9 still needs its recorded extraction run, and phase 10 (going public, Pages, dashboard link) waits for the owner. The owner's decisions are recorded in section 17.
 Owner: Milos Blagojevic. Implementer: a coding agent working from this document alone.
 
 ## 1. Motivation
