@@ -1,69 +1,70 @@
 {% extends "base.html" %}
 {% block title %}Interviews · Job hunt{% endblock %}
-{% macro row(r) %}
-<tr>
-  <td class="nowrap">{{ r.scheduled_at | replace('T', ' ') if r.scheduled_at else '—' }}</td>
-  <td>
-    <a href="/interviews/{{ r.id }}"><span class="strong">{{ r.company }}</span>
-      <div class="muted small">{{ r.role }} · {{ r.stage | stage }}</div></a>
-    <div class="tags start">
-      {% if r.prep %}<span class="badge sm v-apply">prep</span>{% endif %}
-      {% if r.transcript %}<span class="badge sm">transcript</span>{% endif %}
-      {% if r.review %}<span class="badge sm v-consider">reviewed {{ r.overall }}/5</span>{% endif %}
-      {% if r.review_stale %}<span class="badge sm v-stretch">review outdated</span>{% endif %}
-    </div>
-  </td>
-</tr>
+{% macro tile(r) %}
+<a class="tile" href="/interviews/{{ r.id }}">
+  <div class="tile-top"><strong>{{ r.company }}</strong>
+    {% if r.review_stale %}<span class="badge sm v-stretch">review outdated</span>{% elif r.review %}<span class="score-pill">{{ r.overall }}</span>{% endif %}</div>
+  <div class="muted small">{{ r.role }}</div>
+  <div class="tile-foot"><span class="muted small">{{ r.stage | stage }}</span><span class="muted small">{{ r.scheduled_at | replace('T', ' ') if r.scheduled_at else 'no date' }}</span></div>
+</a>
 {% endmacro %}
 {% block content %}
+{% set all = upcoming + past %}
+{% set lanes = [
+  ('Needs prep', 'p-idea', all | rejectattr('prep') | rejectattr('transcript') | list),
+  ('Ready for the call', 'p-active', all | selectattr('prep') | rejectattr('transcript') | list),
+  ('To review', 's-applied', all | selectattr('transcript') | rejectattr('review') | list),
+  ('Reviewed', 'p-done', all | selectattr('review') | list),
+] %}
 <div class="page-head">
   <h1>Interviews</h1>
   <button class="btn primary sm" type="button" hx-get="/interviews/new" hx-target="#panel">New interview…</button>
 </div>
-<p class="muted small">Each interview gets a prep brief written for that role and stage, which you can open during the call, and afterwards a review of its transcript. Every review feeds the next prep's watch-outs and the progress table below.</p>
 
-<section class="block">
-  <h2>Upcoming <span class="count">{{ upcoming | length }}</span></h2>
-  {% if upcoming %}
-  <table class="table"><thead><tr><th>When</th><th>Interview</th></tr></thead>
-    <tbody>{% for r in upcoming %}{{ row(r) }}{% endfor %}</tbody></table>
-  {% else %}
-  <div class="empty slim">No upcoming interviews. Add one to get a prep brief for it.</div>
-  {% endif %}
+{# Watch-outs: the next interview's prep turns past reviews into reminders; without one, the latest review's actions. #}
+{% set next_prep = upcoming | selectattr('prep') | first %}
+{% set latest = progress[-1] if progress else none %}
+{% if next_prep and next_prep.prep.prep.watch_outs %}
+<section class="panel warnp watch">
+  <div class="eyebrow">Watch out · for <a class="link" href="/interviews/{{ next_prep.id }}">{{ next_prep.company }}</a>{% if next_prep.scheduled_at %}, {{ next_prep.scheduled_at | replace('T', ' ') }}{% endif %}</div>
+  <ul class="plain warn">{% for w in next_prep.prep.prep.watch_outs %}<li>{{ w }}</li>{% endfor %}</ul>
 </section>
-
-{% if past %}
-<section class="block">
-  <h2>Past <span class="count">{{ past | length }}</span></h2>
-  <table class="table"><thead><tr><th>When</th><th>Interview</th></tr></thead>
-    <tbody>{% for r in past %}{{ row(r) }}{% endfor %}</tbody></table>
+{% elif latest %}
+<section class="panel warnp watch">
+  <div class="eyebrow">Watch out · from your review of <a class="link" href="/interviews/{{ latest.id }}#review">{{ latest.company }}</a></div>
+  <ul class="plain warn">{% for w in latest.review.review.next_time %}<li>{{ w }}</li>{% endfor %}</ul>
 </section>
 {% endif %}
 
+<div class="lanes">
+  {% for title, cls, items in lanes %}
+  <div class="column {{ cls }}">
+    <h2><span class="swatch"></span>{{ title }} <span class="count">{{ items | length }}</span></h2>
+    {% for r in items %}{{ tile(r) }}{% else %}<div class="lane-empty">—</div>{% endfor %}
+  </div>
+  {% endfor %}
+</div>
+
 <section class="block">
-  <h2>Progress <span class="count">{{ progress | length }}</span></h2>
+  <h2>Progress</h2>
   {% if progress %}
-  <p class="muted small">Latest review of each interview, oldest first. Scores are Claude's (1–5); talk share, longest answer and filler words are measured from the transcript.</p>
-  <table class="table">
-    <thead><tr>
-      <th>Date</th><th>Interview</th><th>Overall</th>
-      {% for key, text in score_labels.items() %}<th title="{{ text }}">{{ text.split(':')[0] }}</th>{% endfor %}
-    </tr></thead>
-    <tbody>
-      {% for r in progress %}
-      {% set s = r.review.review.scores %}{% set m = r.review.metrics %}
-      <tr>
-        <td class="nowrap muted">{{ r.sort_at[:10] }}</td>
-        <td><a href="/interviews/{{ r.id }}#review">{{ r.company }}</a><div class="muted small">{{ r.stage | stage }}</div></td>
-        <td class="strong">{{ r.overall }}</td>
-        {% for key in score_labels %}<td>{{ s[key] }}</td>{% endfor %}
-        <td>{{ (m.time_share if m.time_share is not none else m.word_share) | pct }}</td>
-        <td class="nowrap">{{ m.longest_answer_s | clock if m.longest_answer_s is not none else '—' }}</td>
-        <td>{{ m.fillers_per_100_words if m.fillers_per_100_words is not none else '—' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="spark-grid">
+    {% for key, text in score_labels.items() %}
+    <div class="spark-card">
+      <div class="muted small">{{ text.split(':')[0] }}</div>
+      <div class="spark-val">{{ latest.review.review.scores[key] }}<span class="muted">/5</span></div>
+      <div class="spark">{% for r in progress %}<i style="--v: {{ r.review.review.scores[key] }}" title="{{ r.company }}: {{ r.review.review.scores[key] }}/5"></i>{% endfor %}</div>
+    </div>
+    {% endfor %}
+    {% set m = latest.review.metrics %}
+    <div class="spark-card"><div class="muted small">Your talk share</div><div class="spark-val">{{ (m.time_share if m.time_share is not none else m.word_share) | pct }}</div>
+      <div class="spark">{% for r in progress %}{% set rm = r.review.metrics %}<i style="--v: {{ (5 * (rm.time_share if rm.time_share is not none else rm.word_share)) | round(1) }}" title="{{ r.company }}: {{ (rm.time_share if rm.time_share is not none else rm.word_share) | pct }}"></i>{% endfor %}</div></div>
+    <div class="spark-card"><div class="muted small">Longest answer</div><div class="spark-val">{{ m.longest_answer_s | clock if m.longest_answer_s is not none else '—' }}</div>
+      <div class="muted small">{% if m.longest_answer_at %}starting at {{ m.longest_answer_at }}{% endif %}</div></div>
+    <div class="spark-card"><div class="muted small">Filler words</div><div class="spark-val">{{ m.fillers_per_100_words if m.fillers_per_100_words is not none else '—' }}</div>
+      <div class="muted small">per 100 words</div></div>
+  </div>
+  <p class="muted small">Latest values from {{ latest.company }} ({{ latest.sort_at[:10] }}); the small bars show every reviewed interview, oldest first. Scores are Claude's; the rest is measured from the transcript.</p>
   {% else %}
   <div class="empty slim">No reviewed interviews yet. Upload a transcript on an interview's page and review it.</div>
   {% endif %}

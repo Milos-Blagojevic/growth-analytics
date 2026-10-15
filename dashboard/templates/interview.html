@@ -1,161 +1,118 @@
 {% extends "base.html" %}
 {% block title %}{{ iv.interview.company }} · {{ iv.interview.role }} · Job hunt{% endblock %}
 {% block content %}
-{% set i = iv.interview %}
-<a class="back" href="/interviews">← Interviews</a>
-<div class="page-head">
-  <div>
+{% set i = iv.interview %}{% set p = iv.prep.prep if iv.prep else none %}{% set t = iv.transcript %}{% set r = iv.review.review if iv.review else none %}
+<div class="cockpit">
+  <aside class="side">
+    <a class="back" href="/interviews">← Interviews</a>
     <h1>{{ i.company }}</h1>
-    <div class="muted">{{ i.role }} · {{ i.stage | stage }}{% if i.scheduled_at %} · {{ i.scheduled_at | replace('T', ' ') }}{% endif %}{% if i.interviewer %} · with {{ i.interviewer }}{% endif %} · {{ i.language }}</div>
-  </div>
-  <div class="btn-row">
-    {% if i.posting_url %}<a class="btn sm ghost" href="{{ i.posting_url }}" target="_blank" rel="noopener">Posting ↗</a>{% endif %}
-    {% if iv.researched %}<a class="btn sm ghost" href="/c/{{ iv.domain }}">Company research</a>{% endif %}
-    <button class="btn sm" type="button" hx-get="/interviews/{{ iv.id }}/edit" hx-target="#panel">Edit</button>
+    <div class="muted">{{ i.role }}</div>
+    <dl class="facts">
+      <dt>Stage</dt><dd>{{ i.stage | stage }}</dd>
+      <dt>When</dt><dd>{{ i.scheduled_at | replace('T', ' ') if i.scheduled_at else '—' }}</dd>
+      <dt>Language</dt><dd>{{ i.language }}</dd>
+      {% if i.interviewer %}<dt>With</dt><dd>{{ i.interviewer }}</dd>{% endif %}
+      {% if i.focus %}<dt>Focus</dt><dd class="muted">{{ i.focus }}</dd>{% endif %}
+    </dl>
+    <ol class="flow">
+      <li class="{{ 'done' if p }}"><a href="#prep">Prep brief</a></li>
+      <li class="{{ 'done' if t and t.me }}"><a href="#transcript">Transcript</a></li>
+      <li class="{{ 'done' if r and not iv.review_stale }}"><a href="#review">Review{% if r %} · {{ iv.overall }}/5{% endif %}</a></li>
+    </ol>
+    <div class="side-actions">
+      <button class="btn sm {{ 'primary' if not p }}" type="button" hx-post="/runs/preview" hx-target="#panel"
+              hx-vals='{{ {"kind": "interview_prep", "interview": iv.id} | tojson }}'>{{ 'Rewrite prep…' if p else 'Write prep…' }}</button>
+      {% if t and t.me %}
+      <button class="btn sm {{ 'primary' if p and (not r or iv.review_stale) }}" type="button" hx-post="/runs/preview" hx-target="#panel"
+              hx-vals='{{ {"kind": "interview_review", "interview": iv.id} | tojson }}'>{{ 'Review again…' if r else 'Review the interview…' }}</button>
+      {% endif %}
+      <button class="btn sm ghost" type="button" hx-get="/interviews/{{ iv.id }}/edit" hx-target="#panel">Edit</button>
+      {% if i.posting_url %}<a class="btn sm ghost" href="{{ i.posting_url }}" target="_blank" rel="noopener">Posting ↗</a>{% endif %}
+      {% if iv.researched %}<a class="btn sm ghost" href="/c/{{ iv.domain }}">Company research</a>{% endif %}
+    </div>
+  </aside>
+
+  <div class="main-col">
+    <div id="prep" class="grid2">
+      {% if p %}
+      <div class="panel wide accent"><div class="eyebrow">Positioning</div><p class="lead">{{ p.positioning }}</p></div>
+      <div class="panel wide"><div class="eyebrow">Tell me about yourself</div><p class="script">{{ p.intro }}</p></div>
+      <div class="panel"><div class="eyebrow">Stories</div>
+        {% for s in p.stories %}<details class="fold" {{ 'open' if loop.first }}><summary><strong>{{ s.title }}</strong> <span class="muted small">{{ s.use_when }}</span></summary>
+          <ul>{% for x in s.points %}<li>{{ x }}</li>{% endfor %}</ul></details>{% endfor %}</div>
+      <div class="panel"><div class="eyebrow">Likely questions</div>
+        {% for q in p.questions %}<details class="fold"><summary>{{ q.question }}</summary><ul>{% for x in q.points %}<li>{{ x }}</li>{% endfor %}</ul></details>{% endfor %}</div>
+      <div class="panel"><div class="eyebrow">Ask them</div><ol class="tight">{% for x in p.ask_them %}<li>{{ x }}</li>{% endfor %}</ol></div>
+      <div class="panel"><div class="eyebrow">Salary and contract</div><p class="muted">{{ p.compensation }}</p></div>
+      {% if p.role_match %}
+      <div class="panel wide"><div class="eyebrow">What they ask for → what you have</div>
+        <table class="table compact">{% for m in p.role_match %}<tr><td class="strong">{{ m.requirement }}</td><td>{{ m.evidence }}</td></tr>{% endfor %}</table></div>
+      {% endif %}
+      {% if p.gaps %}
+      <div class="panel wide"><div class="eyebrow">Gaps and how to handle them</div>
+        <ul class="plain">{% for g in p.gaps %}<li><strong>{{ g.gap }}</strong> {{ g.handle }}</li>{% endfor %}</ul></div>
+      {% endif %}
+      <p class="muted small wide">Brief written {{ iv.prep.created_at | ago }} · posting {{ iv.prep.posting_source }}
+        {% if iv.prep.lessons_from %} · uses {{ iv.prep.lessons_from | length }} past review{{ 's' if iv.prep.lessons_from | length > 1 }} (watch-outs are on the Interviews page){% endif %}
+        · {{ '{:,}'.format(iv.prep.usage.input_tokens) }} / {{ '{:,}'.format(iv.prep.usage.output_tokens) }} tokens</p>
+      {% else %}
+      <div class="panel wide"><div class="empty slim">No prep yet. Use “Write prep…”; it is tailored to this role and stage{% if not i.posting_text %}, and sharper with the posting text pasted in (Edit){% endif %}.</div></div>
+      {% endif %}
+    </div>
+
+    <div id="transcript" class="grid2">
+      <div class="panel wide">
+        <div class="eyebrow">Transcript</div>
+        {% if t %}
+        <p class="muted small">{{ t.filename }} · uploaded {{ t.uploaded_at | ago }} · {{ t.turn_count }} turns{% if t.source == 'wispr_flow' %} · Wispr Flow{% endif %}</p>
+        <form class="speakers" hx-post="/interviews/{{ iv.id }}/me">
+          <div class="muted small">Which speaker is you?</div>
+          {% for key, s in t.speakers.items() %}
+          <label class="radio"><input type="radio" name="me" value="{{ key }}" {{ 'checked' if key == t.me }} onchange="this.form.requestSubmit()">
+            <span><strong>{{ s.label }}</strong> <span class="muted small">{{ '{:,}'.format(s.words) }} words</span>
+              {% if not t.me %}{% for line in s.sample %}<span class="muted small">“{{ line }}”</span>{% endfor %}{% endif %}</span>
+          </label>
+          {% endfor %}
+        </form>
+        {% if t.metrics %}{% with m = t.metrics %}{% include "partials/interview_metrics.html" %}{% endwith %}{% endif %}
+        {% endif %}
+        <details class="fold" {{ 'open' if not t }}>
+          <summary>{{ 'Replace the transcript' if t else 'Upload a transcript' }}</summary>
+          <form class="form" hx-post="/interviews/{{ iv.id }}/transcript" hx-encoding="multipart/form-data">
+            <label>Wispr Flow meeting file or text file<input type="file" name="file" accept=".ndjson,.json,.txt,.md"></label>
+            <p class="muted small">Wispr Flow keeps each meeting in <code>~/Library/Application Support/Wispr Flow/meetings/&lt;id&gt;/refined.ndjson</code>; in the file picker press ⌘⇧G and paste that folder path.</p>
+            <label>…or paste it, one <code>Name: text</code> line per turn (optionally starting with <code>[mm:ss]</code>)
+              <textarea name="text" rows="4"></textarea>
+            </label>
+            <div class="form-foot"><span class="spacer"></span><button class="btn primary" type="submit">Upload</button></div>
+          </form>
+        </details>
+      </div>
+    </div>
+
+    <div id="review" class="grid2">
+      {% if r %}
+      <div class="panel wide">
+        <div class="eyebrow">Review</div>
+        {% if iv.review_stale %}<div class="note">The transcript changed after this review. Review it again to update the findings.</div>{% endif %}
+        <p>{{ r.summary }}</p>
+        <div class="scores">
+          {% for key, text in score_labels.items() %}
+          <div class="score-row"><span>{{ text }}</span><span class="scorebar" style="--n: {{ r.scores[key] }}"></span><span class="strong">{{ r.scores[key] }}/5</span></div>
+          {% endfor %}
+        </div>
+        <p class="muted small">Reviewed {{ iv.review.created_at | ago }} · {{ '{:,}'.format(iv.review.usage.input_tokens) }} / {{ '{:,}'.format(iv.review.usage.output_tokens) }} tokens</p>
+      </div>
+      <div class="panel"><div class="eyebrow">Next time</div><ol class="tight">{% for x in r.next_time %}<li>{{ x }}</li>{% endfor %}</ol></div>
+      <div class="panel"><div class="eyebrow">Worked well</div>
+        <ul class="moments good">{% for x in r.strengths %}<li><blockquote>{% if x.at %}<span class="muted small">{{ x.at }}</span> {% endif %}“{{ x.quote }}”</blockquote><p>{{ x.note }}</p></li>{% endfor %}</ul></div>
+      <div class="panel wide"><div class="eyebrow">To improve</div>
+        <ul class="moments">{% for x in r.improvements %}<li><blockquote>{% if x.at %}<span class="muted small">{{ x.at }}</span> {% endif %}“{{ x.quote }}”</blockquote>
+          <p>{{ x.note }}</p>{% if x.better %}<p class="better"><span class="eyebrow">Say instead</span> {{ x.better }}</p>{% endif %}</li>{% endfor %}</ul></div>
+      {% elif t and t.me %}
+      <div class="panel wide"><div class="empty slim">Not reviewed yet. Use “Review the interview…”.</div></div>
+      {% endif %}
+    </div>
   </div>
 </div>
-{% if i.focus %}<p class="muted small">Your focus: {{ i.focus }}</p>{% endif %}
-<nav class="pills">
-  <a class="pill" href="#prep">Prep</a><a class="pill" href="#transcript">Transcript</a><a class="pill" href="#review">Review</a>
-</nav>
-
-{# ---------------------------------------------------------------- prep #}
-<section class="block" id="prep">
-  <h2>Prep brief</h2>
-  {% set p = iv.prep.prep if iv.prep else none %}
-  {% if p %}
-  <p class="muted small">
-    Written {{ iv.prep.created_at | ago }} · posting {{ iv.prep.posting_source }}
-    {% if iv.prep.lessons_from %} · uses {{ iv.prep.lessons_from | length }} past review{{ 's' if iv.prep.lessons_from | length > 1 }}{% endif %}
-    · {{ '{:,}'.format(iv.prep.usage.input_tokens) }} / {{ '{:,}'.format(iv.prep.usage.output_tokens) }} tokens
-  </p>
-  <div class="prep">
-    <section class="callout next"><div class="eyebrow">Positioning</div>{{ p.positioning }}</section>
-    <section class="callout"><div class="eyebrow">Tell me about yourself</div><p class="script">{{ p.intro }}</p></section>
-
-    {% if p.watch_outs %}
-    <section><div class="eyebrow">Watch out</div><ul class="plain warn">{% for w in p.watch_outs %}<li>{{ w }}</li>{% endfor %}</ul></section>
-    {% endif %}
-
-    <section>
-      <div class="eyebrow">Stories</div>
-      {% for s in p.stories %}
-      <details class="fold" {{ 'open' if loop.first }}>
-        <summary><strong>{{ s.title }}</strong> <span class="muted small">{{ s.use_when }}</span></summary>
-        <ul>{% for x in s.points %}<li>{{ x }}</li>{% endfor %}</ul>
-      </details>
-      {% endfor %}
-    </section>
-
-    <section>
-      <div class="eyebrow">Likely questions</div>
-      {% for q in p.questions %}
-      <details class="fold">
-        <summary>{{ q.question }}</summary>
-        <ul>{% for x in q.points %}<li>{{ x }}</li>{% endfor %}</ul>
-      </details>
-      {% endfor %}
-    </section>
-
-    {% if p.role_match %}
-    <section>
-      <div class="eyebrow">What they ask for → what you have</div>
-      <table class="table compact">
-        {% for m in p.role_match %}<tr><td class="strong">{{ m.requirement }}</td><td>{{ m.evidence }}</td></tr>{% endfor %}
-      </table>
-    </section>
-    {% endif %}
-
-    {% if p.gaps %}
-    <section>
-      <div class="eyebrow">Gaps and how to handle them</div>
-      <ul class="plain">{% for g in p.gaps %}<li><strong>{{ g.gap }}</strong>: {{ g.handle }}</li>{% endfor %}</ul>
-    </section>
-    {% endif %}
-
-    <section><div class="eyebrow">Ask them</div><ul class="plain">{% for x in p.ask_them %}<li>{{ x }}</li>{% endfor %}</ul></section>
-    {% if p.compensation %}<section><div class="eyebrow">Salary and contract</div><p>{{ p.compensation }}</p></section>{% endif %}
-  </div>
-  {% else %}
-  <div class="empty slim">No prep yet. It is tailored to this role and stage{% if not i.posting_text %}; paste the posting text (Edit) for a sharper brief{% endif %}.</div>
-  {% endif %}
-  <p><button class="btn {{ 'primary' if not p }}" type="button" hx-post="/runs/preview" hx-target="#panel"
-          hx-vals='{{ {"kind": "interview_prep", "interview": iv.id} | tojson }}'>{{ 'Rewrite prep…' if p else 'Write prep…' }}</button></p>
-</section>
-
-{# ---------------------------------------------------------------- transcript #}
-<section class="block" id="transcript">
-  <h2>Transcript</h2>
-  {% set t = iv.transcript %}
-  {% if t %}
-  <p class="muted small">{{ t.filename }} · uploaded {{ t.uploaded_at | ago }} · {{ t.turn_count }} turns{% if t.source == 'wispr_flow' %} · Wispr Flow{% endif %}</p>
-  <form class="speakers" hx-post="/interviews/{{ iv.id }}/me">
-    <div class="eyebrow">Which speaker is you?</div>
-    {% for key, s in t.speakers.items() %}
-    <label class="radio"><input type="radio" name="me" value="{{ key }}" {{ 'checked' if key == t.me }} onchange="this.form.requestSubmit()">
-      <span><strong>{{ s.label }}</strong> <span class="muted small">{{ '{:,}'.format(s.words) }} words</span>
-        {% for line in s.sample %}<span class="muted small">“{{ line }}”</span>{% endfor %}
-      </span>
-    </label>
-    {% endfor %}
-  </form>
-  {% if t.metrics %}{% with m = t.metrics %}{% include "partials/interview_metrics.html" %}{% endwith %}{% endif %}
-  {% endif %}
-  <details class="fold" {{ 'open' if not t }}>
-    <summary>{{ 'Replace the transcript' if t else 'Upload a transcript' }}</summary>
-    <form class="form" hx-post="/interviews/{{ iv.id }}/transcript" hx-encoding="multipart/form-data">
-      <label>Wispr Flow meeting file or text file<input type="file" name="file" accept=".ndjson,.json,.txt,.md"></label>
-      <p class="muted small">Wispr Flow keeps each meeting in <code>~/Library/Application Support/Wispr Flow/meetings/&lt;id&gt;/refined.ndjson</code>; in the file picker press ⌘⇧G and paste that folder path.</p>
-      <label>…or paste it, one <code>Name: text</code> line per turn (optionally starting with <code>[mm:ss]</code>)
-        <textarea name="text" rows="5"></textarea>
-      </label>
-      <div class="form-foot"><span class="spacer"></span><button class="btn primary" type="submit">Upload</button></div>
-    </form>
-  </details>
-</section>
-
-{# ---------------------------------------------------------------- review #}
-<section class="block" id="review">
-  <h2>Review</h2>
-  {% set r = iv.review.review if iv.review else none %}
-  {% if iv.review_stale %}<div class="note">The transcript changed after this review. Review it again to update the findings.</div>{% endif %}
-  {% if r %}
-  <p class="muted small">Reviewed {{ iv.review.created_at | ago }} · {{ '{:,}'.format(iv.review.usage.input_tokens) }} / {{ '{:,}'.format(iv.review.usage.output_tokens) }} tokens</p>
-  <p>{{ r.summary }}</p>
-  <div class="scores">
-    {% for key, text in score_labels.items() %}
-    <div class="score-row"><span>{{ text }}</span><span class="scorebar" style="--n: {{ r.scores[key] }}"></span><span class="strong">{{ r.scores[key] }}/5</span></div>
-    {% endfor %}
-  </div>
-  {% if iv.review.metrics %}{% with m = iv.review.metrics %}{% include "partials/interview_metrics.html" %}{% endwith %}{% endif %}
-
-  <section>
-    <div class="eyebrow">Next time</div>
-    <ol class="next-time">{% for x in r.next_time %}<li>{{ x }}</li>{% endfor %}</ol>
-  </section>
-  <section>
-    <div class="eyebrow">To improve</div>
-    <ul class="moments">
-      {% for x in r.improvements %}
-      <li><blockquote>{% if x.at %}<span class="muted small">{{ x.at }}</span> {% endif %}“{{ x.quote }}”</blockquote>
-        <p>{{ x.note }}</p>{% if x.better %}<p class="better"><span class="eyebrow">Say instead</span> {{ x.better }}</p>{% endif %}</li>
-      {% endfor %}
-    </ul>
-  </section>
-  <section>
-    <div class="eyebrow">Worked well</div>
-    <ul class="moments good">
-      {% for x in r.strengths %}
-      <li><blockquote>{% if x.at %}<span class="muted small">{{ x.at }}</span> {% endif %}“{{ x.quote }}”</blockquote><p>{{ x.note }}</p></li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% elif not (t and t.me) %}
-  <div class="empty slim">Upload the transcript and choose which speaker is you, then review it.</div>
-  {% endif %}
-  {% if t and t.me %}
-  <p><button class="btn {{ 'primary' if not r or iv.review_stale }}" type="button" hx-post="/runs/preview" hx-target="#panel"
-          hx-vals='{{ {"kind": "interview_review", "interview": iv.id} | tojson }}'>{{ 'Review again…' if r else 'Review the interview…' }}</button></p>
-  {% endif %}
-</section>
 {% endblock %}
