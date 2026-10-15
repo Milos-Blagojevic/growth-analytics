@@ -76,7 +76,8 @@ have, write "[add: <what>]" instead of a number.
 for moves, logistics and salary handling, with technical detail kept light. Hiring-manager rounds are about \
 impact stories and how the candidate works. Technical rounds go deep on the tools and design choices the posting \
 names.
-- Positioning says who the candidate is for THIS role, using the posting's own priorities, in 2-3 sentences.
+- Address the candidate as "you" everywhere except the intro. Positioning says who you are for THIS role \
+("You are…"), using the posting's own priorities, in 2-3 sentences.
 - The intro is spoken: plain first-person sentences, no buzzwords, 60-90 seconds (about 150-220 words), ending \
 with why this role. Keep the most recent role current only if the CV says so.
 - Stories are the candidate's real projects mapped to what this role needs, as short spoken bullet points.
