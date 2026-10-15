@@ -77,26 +77,36 @@ def test_prep_and_review_start_hunt_with_the_interview_folder(root, c):
     assert f'href="/interviews/{SER}"' in c.get(f"/runs/jobs/{job_id}").text
 
 
-def test_saved_prep_and_review_show_on_the_page_and_in_progress(root, c):
-    write_interview(root, "20261013-rho-senior-data-engineer", company="Rho", scheduled_at="2026-10-13T10:00",
+def test_prep_and_review_pages_and_the_watch_outs_on_the_interviews_page(root, c):
+    rho = "20261013-rho-senior-data-engineer"
+    write_interview(root, rho, company="Rho", scheduled_at="2026-10-13T10:00",
                     transcript=wispr(*INTERVIEW_TURNS), me="2", review=review_fields(score=2))
-    write_interview(root, SER, transcript=wispr(*INTERVIEW_TURNS), me="2", prep=PREP, review=review_fields(score=4))
+    write_interview(root, SER, scheduled_at="2099-10-20T14:00", prep=PREP)
 
     page = c.get(f"/interviews/{SER}").text
-    for text in (PREP["positioning"], PREP["intro"], "AI analyst in Slack", "Why are you leaving?",
-                 "Keep the intro under two minutes", "Let me walk you through it.", "4/5"):
+    for text in (PREP["positioning"], PREP["intro"], "AI analyst in Slack", "Why are you leaving?", "Looker"):
         assert text in page
-    assert "The transcript changed" not in page
+    assert PREP["watch_outs"][0] not in page  # watch-outs live on the Interviews page
+    review_page = c.get(f"/interviews/{rho}").text
+    assert "Let me walk you through it." in review_page and "2/5" in review_page
+    assert "The transcript changed" not in review_page
 
-    progress = c.get("/interviews").text.split("Progress")[1]
-    assert progress.index("Rho") < progress.index("SE Ranking")  # oldest first
-    assert ">2.0<" in progress and ">4.0<" in progress and "5:59" in progress
+    listing = c.get("/interviews").text
+    assert "Watch out · for" in listing and PREP["watch_outs"][0] in listing  # from the next interview's prep
+    ready, reviewed = listing.split("Ready for the call")[1], listing.split("Reviewed")[1]
+    assert ready.index("SE Ranking") < ready.index("To review") and "Rho" in reviewed
+    progress = listing.split("Progress")[1]
+    assert 'title="Rho: 2/5"' in progress and "5:59" in progress
 
-    write_interview(root, SER, transcript=wispr(*INTERVIEW_TURNS[:4]), me="2", prep=PREP, review=review_fields())
-    transcript = json.loads((root / "interviews" / SER / "transcript.json").read_text())
+    (root / "interviews" / SER / "prep.json").unlink()  # no upcoming prep: the latest review's actions instead
+    listing = c.get("/interviews").text
+    assert "from your review of" in listing and "Keep the intro to 90 seconds." in listing
+
+    transcript = json.loads((root / "interviews" / rho / "transcript.json").read_text())
     transcript["uploaded_at"] = "2026-10-21T09:00:00"  # uploaded again after the review
-    (root / "interviews" / SER / "transcript.json").write_text(json.dumps(transcript))
-    assert "The transcript changed after this review" in c.get(f"/interviews/{SER}").text
+    (root / "interviews" / rho / "transcript.json").write_text(json.dumps(transcript))
+    assert "The transcript changed after this review" in c.get(f"/interviews/{rho}").text
+    assert "review outdated" in c.get("/interviews").text
 
 
 def test_a_new_interview_can_start_from_a_researched_company(root, c):
