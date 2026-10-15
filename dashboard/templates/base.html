@@ -14,7 +14,8 @@
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Job hunt</a>
     <nav class="nav">
       {% for key, href, text in (('board', '/', 'Board'), ('inbox', '/inbox', 'Inbox'), ('pipeline', '/pipeline', 'Pipeline'),
-                                  ('projects', '/projects', 'Projects'), ('leads', '/leads', 'Leads'), ('runs', '/runs', 'Runs')) %}
+                                  ('interviews', '/interviews', 'Interviews'), ('projects', '/projects', 'Projects'),
+                                  ('leads', '/leads', 'Leads'), ('runs', '/runs', 'Runs')) %}
       <a href="{{ href }}" class="{{ 'active' if page == key }}">{{ text }}</a>
       {% endfor %}
     </nav>
@@ -37,7 +38,7 @@
 
   {% if problems %}
   <div class="banner">
-    Some saved runs could not be read and are not shown:
+    Some saved files could not be read and are not shown:
     {% for p in problems %}<code>{{ p }}</code>{% endfor %}
   </div>
   {% endif %}

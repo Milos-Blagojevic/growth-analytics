@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import interviews
 import runs
 from dashboard import db, ingest
 
@@ -92,7 +93,42 @@ def build(conn, root, form):
         return Spec("send", ["send", f"{ingest.OUT_DIR}/{run_id}"], f"Send notification for run {run_id}",
                     {"kind": kind, "run_id": run_id}, estimate=["Free: no research or scoring."],
                     warnings=["Sends the run's notification to Telegram."])
+    if kind in ("interview_prep", "interview_review"):
+        return _build_interview(root, kind, form.get("interview", ""))
     raise ValueError(f"unknown job kind {kind!r}")
+
+
+CLAUDE_INTERVIEW_ESTIMATE = "Claude: one call, a few cents; the saved result records the actual tokens."
+
+
+def _build_interview(root, kind, interview_id):
+    try:
+        path = interviews.directory(root, interview_id)
+    except LookupError as exc:
+        raise ValueError(str(exc)) from None
+    interview = interviews.load_json(path, interviews.INTERVIEW)
+    name = f"{interview['company']} · {interview['role']}"
+    fields = {"kind": kind, "interview": interview_id}
+    args = [kind.replace("_", "-"), f"{interviews.DIR}/{interview_id}"]
+    if kind == "interview_prep":
+        estimate = [CLAUDE_INTERVIEW_ESTIMATE]
+        if not interview.get("posting_text") and interview.get("posting_url"):
+            estimate.append("Exa: about $0.001 to fetch the posting text.")
+        warnings = ["Sends your profile, CV, the posting and the findings of your past interview reviews to Claude."]
+        if (path / interviews.PREP).exists():
+            warnings.append("Replaces the current prep brief.")
+        return Spec(kind, args, f"Interview prep · {name}", fields, estimate=estimate, warnings=warnings)
+    transcript = interviews.load_json(path, interviews.TRANSCRIPT)
+    if transcript is None:
+        raise ValueError("upload a transcript first")
+    if transcript.get("me") is None:
+        raise ValueError("choose which speaker is you first")
+    words = sum(s["words"] for s in transcript["speakers"].values())
+    warnings = ["Sends the whole transcript, including the interviewer's words, to Claude."]
+    if (path / interviews.REVIEW).exists():
+        warnings.append("Replaces the current review (the progress table keeps only the latest one).")
+    return Spec(kind, args, f"Interview review · {name}", fields,
+                estimate=[f"{CLAUDE_INTERVIEW_ESTIMATE} The transcript has about {words:,} words."], warnings=warnings)
 
 
 def _build_run(conn, root, form):

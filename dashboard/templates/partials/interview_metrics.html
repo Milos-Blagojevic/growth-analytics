@@ -1,0 +1,12 @@
+{# m: interviews.metrics() output #}
+<dl class="metrics">
+  <div><dt>Your share of the talking</dt><dd>{{ (m.time_share if m.time_share is not none else m.word_share) | pct }}</dd>
+    <span class="muted small">{{ 'of the time' if m.time_share is not none else 'of the words' }}{% if m.duration_s %} · {{ m.duration_s | clock }} in total{% endif %}</span></div>
+  <div><dt>Longest answer</dt>
+    <dd>{% if m.longest_answer_s is not none %}{{ m.longest_answer_s | clock }}{% else %}{{ m.longest_answer_words }} words{% endif %}</dd>
+    <span class="muted small">{% if m.longest_answer_at %}starting at {{ m.longest_answer_at }} · {% endif %}{{ m.longest_answer_words }} words</span></div>
+  <div><dt>Answers</dt><dd>{{ m.answers }}</dd><span class="muted small">median {{ m.median_answer_words }} words</span></div>
+  <div><dt>Filler words</dt>
+    <dd>{{ m.fillers_per_100_words if m.fillers_per_100_words is not none else '—' }}</dd>
+    <span class="muted small">{% if m.fillers_per_100_words is not none %}per 100 words{% if m.fillers %}: {% for w, n in m.fillers.items() %}{{ w }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}{% else %}not counted for this language{% endif %}</span></div>
+</dl>

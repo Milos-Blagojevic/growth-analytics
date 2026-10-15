@@ -66,18 +66,25 @@ def profile():
 
 
 class FakeClaude:
-    """Stands in for anthropic.Anthropic: messages.parse returns a fresh Fit built from `fit_fields`."""
+    """Stands in for anthropic.Anthropic: messages.parse returns a fresh instance of the requested output_format
+    (scoring.Fit, coaching.Prep, ...) built from `fields`."""
 
-    def __init__(self, fit_fields):
-        self.fit_fields = fit_fields
+    def __init__(self, fields):
+        self.fields = fields
         self.calls = []
         self.messages = self
 
     def parse(self, **kwargs):
         self.calls.append(kwargs)
-        fit = None if self.fit_fields is None else scoring.Fit(**self.fit_fields)
+        parsed = None if self.fields is None else kwargs["output_format"](**self.fields)
         usage = SimpleNamespace(input_tokens=1200, output_tokens=300)
-        return SimpleNamespace(parsed_output=fit, stop_reason="end_turn", usage=usage)
+        return SimpleNamespace(parsed_output=parsed, stop_reason="end_turn", usage=usage)
+
+
+@pytest.fixture
+def fake_claude():
+    """The FakeClaude class, for output models other than Fit: fake_claude(fields) or fake_claude(None)."""
+    return FakeClaude
 
 
 @pytest.fixture

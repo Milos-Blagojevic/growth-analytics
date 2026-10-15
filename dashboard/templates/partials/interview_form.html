@@ -1,0 +1,33 @@
+<div class="backdrop" onclick="closePanel()"></div>
+<article class="sheet modal">
+  <header class="sheet-head">
+    <div class="sheet-id"><h2>{{ 'Edit interview' if interview_id else 'New interview' }}</h2></div>
+    <button class="close" type="button" onclick="closePanel()" aria-label="Close">✕</button>
+  </header>
+  <form class="sheet-body form" hx-post="{{ '/interviews/' ~ interview_id if interview_id else '/interviews' }}">
+    <label>Company<input name="company" required maxlength="120" value="{{ values.company or '' }}" autofocus></label>
+    <label>Role<input name="role" required maxlength="160" value="{{ values.role or '' }}" placeholder="e.g. Senior Data Analyst"></label>
+    <label>Stage
+      <select name="stage">
+        {% for key, text in interview_stages.items() %}<option value="{{ key }}" {{ 'selected' if key == values.stage }}>{{ text }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Date and time<input name="scheduled_at" type="datetime-local" value="{{ values.scheduled_at or '' }}"></label>
+    <label>Interview language<input name="language" list="languages" maxlength="40" value="{{ values.language or 'English' }}"></label>
+    <datalist id="languages"><option value="English"><option value="Serbian"></datalist>
+    <label>Interviewer (optional)<input name="interviewer" maxlength="120" value="{{ values.interviewer or '' }}" placeholder="name and role"></label>
+    <label>Company website (optional)<input name="domain" maxlength="120" value="{{ values.domain or '' }}" placeholder="seranking.com: links the company's research"></label>
+    <label>Posting URL (optional)<input name="posting_url" type="url" maxlength="500" value="{{ values.posting_url or '' }}" placeholder="https://…"></label>
+    <label>Posting text (recommended)
+      <textarea name="posting_text" rows="5" maxlength="20000" placeholder="Paste the job description. Some job pages cannot be fetched, and the prep is only as specific as the posting.">{{ values.posting_text or '' }}</textarea>
+    </label>
+    <label>What you want to emphasise (optional)
+      <textarea name="focus" rows="3" maxlength="2000" placeholder="e.g. the AI analyst I built at Tenderly; salary range 4,000–5,000 net">{{ values.focus or '' }}</textarea>
+    </label>
+    <div class="form-foot">
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" onclick="closePanel()">Cancel</button>
+      <button class="btn primary" type="submit">{{ 'Save' if interview_id else 'Add interview' }}</button>
+    </div>
+  </form>
+</article>

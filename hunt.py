@@ -5,6 +5,8 @@
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
     python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
+    python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
+    python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
 """
 
 import argparse
@@ -20,7 +22,9 @@ from datetime import datetime
 from itertools import zip_longest
 from pathlib import Path
 
+import coaching
 import exa_client
+import interviews
 import research
 import runs
 import scoring
@@ -447,6 +451,106 @@ def cmd_watch(args):
     return 1 if problems else 0
 
 
+POSTING_CHARS = 8000  # posting text sent to the interview prep
+
+
+def _interview_dir(arg):
+    path = Path(arg)
+    interview = interviews.load_json(path, interviews.INTERVIEW)
+    if interview is None:
+        sys.exit(f"{path}: no {interviews.INTERVIEW} (create the interview on the dashboard's Interviews page)")
+    return path, interview
+
+
+def _require_claude():
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("ANTHROPIC_API_KEY is not set. Add it to .env.")
+
+
+def fetch_posting(url):
+    """Posting text from Exa (about $0.001), or "" when it cannot be fetched."""
+    try:
+        response = exa_client.contents([url], highlights=False, text={"max_characters": POSTING_CHARS})
+    except Exception as exc:
+        logger.warning("fetching the posting failed (%s: %s); preparing without it", type(exc).__name__, exc)
+        return ""
+    return next(((r.text or "").strip() for r in response.results if (r.text or "").strip()), "")
+
+
+def company_notes(domain):
+    """What earlier runs found about the company: summary, signals and the fit judgement, or None."""
+    if not domain:
+        return None
+    for run_dir in reversed(runs.run_dirs(OUT_DIR)):
+        for r in runs.load_results(run_dir):
+            if r.get("domain") == domain and "research" in r:
+                content, fit = r["research"].get("content", {}), r.get("fit") or {}
+                return {
+                    "business_summary": content.get("business_summary"),
+                    "signals": content.get("signals"),
+                    "fit_reasons": fit.get("reasons", []),
+                    "fit_concerns": fit.get("concerns", []),
+                    "scope_note": fit.get("scope_note", ""),
+                    "gap_note": fit.get("gap_note", ""),
+                    "researched_in_run": run_dir.name,
+                }
+    return None
+
+
+def cmd_interview_prep(args):
+    profile = load_profile(args.profile)
+    path, interview = _interview_dir(args.interview)
+    _require_claude()
+    posting, source = interview.get("posting_text", ""), "pasted"
+    if not posting and interview.get("posting_url"):
+        posting, source = fetch_posting(interview["posting_url"]), "fetched"
+    posting = posting[:POSTING_CHARS * 2]
+    lessons = interviews.past_reviews(".", exclude=path.name)  # hunt.py runs in the data folder
+    prep, usage = coaching.prepare(interview, posting, profile, company_notes(interview.get("domain")), lessons)
+    interviews.save_json(path, interviews.PREP, {
+        "created_at": interviews.now(),
+        "model": os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
+        "usage": usage,
+        "posting_source": source if posting else "none",
+        "posting_text": posting,
+        "lessons_from": [lesson["id"] for lesson in lessons],
+        "prep": prep.model_dump(),
+    })
+    print(f"Saved interview prep to {path / interviews.PREP}")
+    print(f"\nPositioning: {prep.positioning}")
+    summary = exa_client.cost_summary()
+    print(f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
+          f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+    return 0
+
+
+def cmd_interview_review(args):
+    profile = load_profile(args.profile)
+    path, interview = _interview_dir(args.interview)
+    transcript = interviews.load_json(path, interviews.TRANSCRIPT)
+    if transcript is None:
+        sys.exit(f"{path}: no transcript; upload one on the interview's page")
+    if transcript.get("me") is None:
+        sys.exit(f"{path}: choose which speaker is you on the interview's page first")
+    _require_claude()
+    prep_file = interviews.load_json(path, interviews.PREP) or {}
+    posting = interview.get("posting_text") or prep_file.get("posting_text", "")
+    metrics = interviews.metrics(transcript, interview["language"])
+    result, usage = coaching.review(interview, transcript, metrics, prep_file.get("prep"), posting, profile)
+    interviews.save_json(path, interviews.REVIEW, {
+        "created_at": interviews.now(),
+        "model": os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
+        "usage": usage,
+        "transcript_uploaded_at": transcript["uploaded_at"],
+        "metrics": metrics,
+        "review": result.model_dump(),
+    })
+    print(f"Saved interview review to {path / interviews.REVIEW}")
+    print(f"\n{result.summary}")
+    print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", default="profile.toml")
@@ -472,6 +576,14 @@ def main():
     watch_cmd.add_argument("--state", default="watch_state.json", help="JSON file of postings already reported")
     watch_cmd.add_argument("--dry-run", action="store_true", help="print new matches; do not send or save state")
     watch_cmd.set_defaults(func=cmd_watch)
+
+    prep_cmd = sub.add_parser("interview-prep", help="write a prep brief for one interview (Claude)")
+    prep_cmd.add_argument("interview", help="the interview's folder, interviews/<id>")
+    prep_cmd.set_defaults(func=cmd_interview_prep)
+
+    review_cmd = sub.add_parser("interview-review", help="review one interview's transcript (Claude)")
+    review_cmd.add_argument("interview", help="the interview's folder, interviews/<id>")
+    review_cmd.set_defaults(func=cmd_interview_review)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

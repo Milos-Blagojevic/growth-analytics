@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ job.label }} · Job hunt{% endblock %}
 {% block content %}
+{% if job.kind.startswith('interview') and job.args | length > 1 %}
+<a class="back" href="/{{ job.args[1] }}">← Interview</a>
+{% else %}
 <a class="back" href="/runs">← Runs</a>
+{% endif %}
 <div class="page-head">
   <h1>{{ job.label }}</h1>
 </div>
