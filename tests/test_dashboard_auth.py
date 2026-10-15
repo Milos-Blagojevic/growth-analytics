@@ -1,8 +1,11 @@
+import hashlib
 import sys
+from pathlib import Path
 
 import pytest
 import uvicorn
 
+import dashboard
 from dashboard import __main__ as entry
 from dashboard import auth
 from dashboard.app import create_app
@@ -36,7 +39,8 @@ def test_login_page_works_behind_an_https_proxy(tmp_path):
     blocked as mixed content: htmx never loads and the browser submits the form natively instead."""
     app = create_app(tmp_path, allowed_hosts=("hunt-production.up.railway.app",), password=PASSWORD)
     page = make_client(app).get("/login", headers={"Host": "hunt-production.up.railway.app"}).text
-    assert 'href="/static/app.css"' in page and 'src="/static/htmx.min.js"' in page
+    css = hashlib.sha256((Path(dashboard.__file__).parent / "static" / "app.css").read_bytes()).hexdigest()[:12]
+    assert f'href="/static/app.css?v={css}"' in page and 'src="/static/htmx.min.js?v=' in page  # new CSS, new URL
     # Without htmx the password must still never end up in the URL (and the server's access log).
     assert '<form class="login" method="post" action="/login"' in page
 

@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Job hunt{% endblock %}</title>
-  {# Paths, not absolute URLs: behind an HTTPS proxy (Railway) the app sees http, and http:// assets would be blocked. #}
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}">
-  <script src="{{ url_for('static', path='htmx.min.js').path }}" defer></script>
+  {# Paths, not absolute URLs: behind an HTTPS proxy (Railway) the app sees http, and http:// assets would be blocked.
+     ?v= changes with the file's content, so a deploy never leaves a cached old stylesheet in place. #}
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}?v={{ asset_version['app.css'] }}">
+  <script src="{{ url_for('static', path='htmx.min.js').path }}?v={{ asset_version['htmx.min.js'] }}" defer></script>
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
   {% block topbar %}

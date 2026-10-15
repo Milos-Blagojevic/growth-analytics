@@ -7,6 +7,7 @@ POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token hea
 websites open in the browser cannot start paid runs.
 """
 
+import hashlib
 import secrets
 import threading
 from contextlib import asynccontextmanager, contextmanager
@@ -102,6 +103,10 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     csrf_token = secrets.token_urlsafe(32)
+    # ?v=<content hash> on the CSS and JS URLs: a deploy that changes them gives new URLs, so browsers never keep
+    # an old stylesheet next to new pages (static files carry no Cache-Control, so browsers cache them heuristically).
+    asset_version = {name: hashlib.sha256((HERE / "static" / name).read_bytes()).hexdigest()[:12]
+                     for name in ("app.css", "htmx.min.js")}
     templates.env.globals.update(
         csrf_token=csrf_token,
         login_required=login is not None,
@@ -109,6 +114,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         project_statuses=projects.STATUSES,
         key_for=tracking.key_for,
         interview_stages=interviews.STAGES,
+        asset_version=asset_version,
         score_labels=interviews.SCORES,
     )
     templates.env.filters.update(
