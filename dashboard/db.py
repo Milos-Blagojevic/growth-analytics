@@ -1,8 +1,8 @@
 """SQLite store for the dashboard (hunt.db).
 
 Two kinds of tables:
-- Derived (DERIVED_TABLES): copies of the pipeline files (out/, discovered.csv, watch_state.json, companies.csv),
-  rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
+- Derived (DERIVED_TABLES): copies of the pipeline files (out/, discovered.csv, watch_state.json, companies.csv,
+  interviews/), rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
 - User (tracking, side_projects, jobs): the owner's statuses, notes, side projects and dashboard-started jobs.
   They cannot be rebuilt, so they are never dropped; change them only by appending to USER_MIGRATIONS.
 """
@@ -11,9 +11,9 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "meta")
+DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "meta")
 
 # Applied in order, each once; the number applied is kept in user_schema. Never edit an applied entry.
 USER_MIGRATIONS = [
@@ -122,6 +122,19 @@ CREATE TABLE leads (
     focus TEXT,
     discovered_at TEXT,
     in_companies INTEGER NOT NULL -- listed in companies.csv, so the next run researches it
+);
+CREATE TABLE interviews (
+    id TEXT PRIMARY KEY,          -- interviews/<id>/
+    company TEXT NOT NULL,
+    domain TEXT,
+    role TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    scheduled_at TEXT,            -- local date and time; NULL if not set
+    sort_at TEXT NOT NULL,        -- scheduled_at, else created_at
+    interview TEXT NOT NULL,      -- JSON: interview.json
+    transcript TEXT,              -- JSON: transcript.json without its turns, plus measured metrics; NULL if none
+    prep TEXT,                    -- JSON: prep.json; NULL if none
+    review TEXT                   -- JSON: review.json; NULL if none
 );
 CREATE TABLE meta (
     key TEXT PRIMARY KEY,

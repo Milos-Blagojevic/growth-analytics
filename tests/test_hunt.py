@@ -8,6 +8,7 @@ import pytest
 import hunt
 import runs
 import scoring
+from dashboard_data import INTERVIEW_TURNS, PREP, review_fields, wispr, write_interview
 from exa_mock import contents_response, error, result, structured_response
 
 PROFILE_TOML = """
@@ -268,3 +269,48 @@ def test_a_second_command_exits_while_one_holds_the_lock(workdir, monkeypatch):
         hunt.main()
     with pytest.raises(SystemExit, match="No saved runs"):  # lock released: the command itself runs
         hunt.main()
+
+
+RHO = "20261013-rho-senior-data-engineer"
+SER = "20261020-se-ranking-senior-data-analyst"
+
+
+def interview_args(interview_id):
+    return argparse.Namespace(profile="profile.toml", interview=f"interviews/{interview_id}")
+
+
+def test_interview_prep_fetches_the_posting_and_learns_from_past_reviews(workdir, exa, fake_claude, monkeypatch):
+    write_interview(workdir, RHO, company="Rho", transcript=wispr(*INTERVIEW_TURNS), me="2", review=review_fields())
+    posting_url = "https://seranking.com/vacancies/senior-data-analyst.html"
+    write_interview(workdir, SER, posting_text="", posting_url=posting_url, focus="the AI analyst at Tenderly")
+    exa.on_contents(contents_response([result(posting_url, text="Senior Data Analyst: experiments and AI Analyst.")]))
+    fake = fake_claude(PREP)
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+    assert hunt.cmd_interview_prep(interview_args(SER)) == 0
+
+    saved = json.loads((workdir / "interviews" / SER / "prep.json").read_text())
+    assert (saved["posting_source"], saved["lessons_from"], saved["prep"]) == ("fetched", [RHO], PREP)
+    prompt = fake.calls[0]["messages"][0]["content"]
+    for expected in ("experiments and AI Analyst", "Keep the intro to 90 seconds.", "the AI analyst at Tenderly",
+                     "8 years of analytics engineering"):
+        assert expected in prompt
+
+
+def test_interview_review_needs_your_speaker_and_saves_metrics_and_bounded_scores(workdir, fake_claude, monkeypatch):
+    write_interview(workdir, RHO, company="Rho", transcript=wispr(*INTERVIEW_TURNS))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    with pytest.raises(SystemExit, match="which speaker is you"):
+        hunt.cmd_interview_review(interview_args(RHO))
+
+    write_interview(workdir, RHO, company="Rho", transcript=wispr(*INTERVIEW_TURNS), me="2")
+    fake = fake_claude(review_fields(score=9))
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+
+    assert hunt.cmd_interview_review(interview_args(RHO)) == 0
+
+    saved = json.loads((workdir / "interviews" / RHO / "review.json").read_text())
+    assert set(saved["review"]["scores"].values()) == {5}  # Claude said 9; scores are 1-5
+    assert (saved["metrics"]["answers"], saved["transcript_uploaded_at"]) == (2, "2026-10-20T15:00:00")
+    assert "] YOU: Sure, mislim" in fake.calls[0]["messages"][0]["content"]

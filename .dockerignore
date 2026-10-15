@@ -10,6 +10,7 @@ out/
 hunt.db*
 jobs/
 .hunt.lock
+interviews/
 # Not needed at runtime
 .git/
 .github/

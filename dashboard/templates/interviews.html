@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Interviews · Job hunt{% endblock %}
+{% macro row(r) %}
+<tr>
+  <td class="nowrap">{{ r.scheduled_at | replace('T', ' ') if r.scheduled_at else '—' }}</td>
+  <td>
+    <a href="/interviews/{{ r.id }}"><span class="strong">{{ r.company }}</span>
+      <div class="muted small">{{ r.role }} · {{ r.stage | stage }}</div></a>
+    <div class="tags start">
+      {% if r.prep %}<span class="badge sm v-apply">prep</span>{% endif %}
+      {% if r.transcript %}<span class="badge sm">transcript</span>{% endif %}
+      {% if r.review %}<span class="badge sm v-consider">reviewed {{ r.overall }}/5</span>{% endif %}
+      {% if r.review_stale %}<span class="badge sm v-stretch">review outdated</span>{% endif %}
+    </div>
+  </td>
+</tr>
+{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <h1>Interviews</h1>
+  <button class="btn primary sm" type="button" hx-get="/interviews/new" hx-target="#panel">New interview…</button>
+</div>
+<p class="muted small">Each interview gets a prep brief written for that role and stage, which you can open during the call, and afterwards a review of its transcript. Every review feeds the next prep's watch-outs and the progress table below.</p>
+
+<section class="block">
+  <h2>Upcoming <span class="count">{{ upcoming | length }}</span></h2>
+  {% if upcoming %}
+  <table class="table"><thead><tr><th>When</th><th>Interview</th></tr></thead>
+    <tbody>{% for r in upcoming %}{{ row(r) }}{% endfor %}</tbody></table>
+  {% else %}
+  <div class="empty slim">No upcoming interviews. Add one to get a prep brief for it.</div>
+  {% endif %}
+</section>
+
+{% if past %}
+<section class="block">
+  <h2>Past <span class="count">{{ past | length }}</span></h2>
+  <table class="table"><thead><tr><th>When</th><th>Interview</th></tr></thead>
+    <tbody>{% for r in past %}{{ row(r) }}{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
+<section class="block">
+  <h2>Progress <span class="count">{{ progress | length }}</span></h2>
+  {% if progress %}
+  <p class="muted small">Latest review of each interview, oldest first. Scores are Claude's (1–5); talk share, longest answer and filler words are measured from the transcript.</p>
+  <table class="table">
+    <thead><tr>
+      <th>Date</th><th>Interview</th><th>Overall</th>
+      {% for key, text in score_labels.items() %}<th title="{{ text }}">{{ text.split(':')[0] }}</th>{% endfor %}
+    </tr></thead>
+    <tbody>
+      {% for r in progress %}
+      {% set s = r.review.review.scores %}{% set m = r.review.metrics %}
+      <tr>
+        <td class="nowrap muted">{{ r.sort_at[:10] }}</td>
+        <td><a href="/interviews/{{ r.id }}#review">{{ r.company }}</a><div class="muted small">{{ r.stage | stage }}</div></td>
+        <td class="strong">{{ r.overall }}</td>
+        {% for key in score_labels %}<td>{{ s[key] }}</td>{% endfor %}
+        <td>{{ (m.time_share if m.time_share is not none else m.word_share) | pct }}</td>
+        <td class="nowrap">{{ m.longest_answer_s | clock if m.longest_answer_s is not none else '—' }}</td>
+        <td>{{ m.fillers_per_100_words if m.fillers_per_100_words is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty slim">No reviewed interviews yet. Upload a transcript on an interview's page and review it.</div>
+  {% endif %}
+</section>
+{% endblock %}

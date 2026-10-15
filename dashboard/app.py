@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import interviews
 import runs
 from dashboard import auth, db, ingest, jobs, projects, queries, schedule, tracking
 
@@ -49,6 +50,7 @@ JOB_LABELS = {
 }
 MODE_LABELS = {"research_only": "research only", "dry_run": "dry run", "deliver": "sent to Telegram"}
 INBOX_DAYS = (7, 14, 30, 0)
+MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 PUBLIC_PATHS = ("/login", "/static/")  # reachable without logging in
 
@@ -106,6 +108,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         statuses=tracking.STATUSES,
         project_statuses=projects.STATUSES,
         key_for=tracking.key_for,
+        interview_stages=interviews.STAGES,
+        score_labels=interviews.SCORES,
     )
     templates.env.filters.update(
         ago=_ago,
@@ -115,6 +119,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         mode=lambda m: MODE_LABELS.get(m, "unscored"),
         status=lambda s: STATUS_LABELS.get(s, s),
         job_status=lambda s: JOB_LABELS.get(s, s),
+        stage=lambda s: interviews.STAGES.get(s, s),
+        clock=interviews.fmt_time,
+        pct=lambda v: f"{v:.0%}" if v is not None else "—",
     )
     ingest_lock = threading.Lock()  # one ingest at a time; requests run in a thread pool
     runner = jobs.Runner(root, hunt_command)
@@ -201,6 +208,10 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     def redirect(url):
         """Full navigation after an htmx POST."""
         return Response(status_code=204, headers={"HX-Redirect": url})
+
+    def reload():
+        """Reload the current page after an htmx POST (HX-Redirect to the same URL with a #fragment would only scroll)."""
+        return Response(status_code=204, headers={"HX-Refresh": "true"})
 
     # Board, detail, inbox, leads ----------------------------------------------------------------------------
 
@@ -340,6 +351,95 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             except LookupError as exc:
                 return PlainTextResponse(str(exc), status_code=404)
         return redirect("/projects")
+
+    # Interviews ---------------------------------------------------------------------------------------------
+
+    @app.get("/interviews", response_class=HTMLResponse)
+    def interviews_page(request: Request):
+        with connection() as conn:
+            return render(request, "interviews.html", conn, page="interviews",
+                          progress=queries.interview_progress(conn), **queries.interview_list(conn))
+
+    @app.get("/interviews/new", response_class=HTMLResponse)
+    def interview_new(request: Request, domain: str = ""):
+        """The new-interview form; from a company's details it starts with that company and its best role."""
+        values = {"stage": "hr", "language": "English"}
+        if domain:
+            with connection() as conn:
+                detail = queries.company(conn, domain)
+            if detail:
+                r = detail["result"]
+                values |= {"company": r["name"], "domain": domain, "role": r["best_role_title"] or "",
+                           "posting_url": r["best_role_url"] or ""}
+        return templates.TemplateResponse(request, "partials/interview_form.html", {"interview_id": None, "values": values})
+
+    def interview_dir_or_404(interview_id):
+        try:
+            return interviews.directory(root, interview_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+
+    @app.get("/interviews/{interview_id}/edit", response_class=HTMLResponse)
+    def interview_edit(request: Request, interview_id: str):
+        values = interviews.load_json(interview_dir_or_404(interview_id), interviews.INTERVIEW)
+        return templates.TemplateResponse(request, "partials/interview_form.html",
+                                          {"interview_id": interview_id, "values": values})
+
+    @app.post("/interviews")
+    async def interview_create(request: Request):
+        try:
+            interview_id = interviews.create(root, await request.form())
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+        return redirect(f"/interviews/{interview_id}")
+
+    @app.post("/interviews/{interview_id}")
+    async def interview_update(request: Request, interview_id: str):
+        interview_dir_or_404(interview_id)
+        try:
+            interviews.update(root, interview_id, await request.form())
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+        return redirect(f"/interviews/{interview_id}")
+
+    @app.get("/interviews/{interview_id}", response_class=HTMLResponse)
+    def interview_page(request: Request, interview_id: str):
+        with connection() as conn:
+            detail = queries.interview_detail(conn, interview_id)
+            if detail is None:
+                raise HTTPException(404, "No such interview")
+            return render(request, "interview.html", conn, page="interviews", iv=detail)
+
+    @app.post("/interviews/{interview_id}/transcript")
+    async def interview_transcript(request: Request, interview_id: str):
+        """Upload a Wispr Flow meeting file (refined.ndjson) or paste `Name: text` lines. Replaces any transcript."""
+        path = interview_dir_or_404(interview_id)
+        form = await request.form(max_part_size=MAX_TRANSCRIPT_BYTES)
+        upload = form.get("file")
+        if upload is not None and getattr(upload, "filename", ""):
+            raw, filename = await upload.read(MAX_TRANSCRIPT_BYTES + 1), upload.filename
+        else:
+            raw, filename = (form.get("text") or "").encode(), "pasted text"
+        if len(raw) > MAX_TRANSCRIPT_BYTES:
+            return PlainTextResponse("The transcript is larger than 2 MB.", status_code=400)
+        if not raw.strip():
+            return PlainTextResponse("Choose a file or paste the transcript first.", status_code=400)
+        try:
+            transcript = interviews.parse_transcript(raw, filename)
+        except (ValueError, UnicodeDecodeError) as exc:
+            return PlainTextResponse(f"Could not read the transcript: {exc}", status_code=400)
+        interviews.save_json(path, interviews.TRANSCRIPT, transcript)
+        return reload()
+
+    @app.post("/interviews/{interview_id}/me")
+    async def interview_me(request: Request, interview_id: str):
+        path = interview_dir_or_404(interview_id)
+        transcript = interviews.load_json(path, interviews.TRANSCRIPT)
+        me = (await request.form()).get("me", "")
+        if transcript is None or me not in transcript["speakers"]:
+            return PlainTextResponse("Choose one of the transcript's speakers.", status_code=400)
+        interviews.save_json(path, interviews.TRANSCRIPT, transcript | {"me": me})
+        return reload()
 
     # Runs ---------------------------------------------------------------------------------------------------
 

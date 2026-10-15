@@ -212,6 +212,45 @@ def leads(conn, *, status=""):
     return {"items": items, "counts": counts}
 
 
+_INTERVIEWS = """SELECT i.*, EXISTS (SELECT 1 FROM results WHERE results.domain = i.domain) AS researched
+FROM interviews i"""
+UPCOMING_GRACE = timedelta(hours=3)  # an interview stays "upcoming" while it is happening
+
+
+def _interview(row):
+    d = dict(row)
+    for key in ("interview", "transcript", "prep", "review"):
+        d[key] = json.loads(d[key]) if d[key] else None
+    scores = d["review"]["review"]["scores"] if d["review"] else None
+    d["overall"] = round(sum(scores.values()) / len(scores), 1) if scores else None
+    d["review_stale"] = bool(
+        d["review"] and d["transcript"] and d["review"].get("transcript_uploaded_at") != d["transcript"]["uploaded_at"]
+    )
+    return d
+
+
+def interview_list(conn):
+    """Upcoming interviews (soonest first) and past ones (latest first). Without a date, an interview counts as
+    upcoming until it has a transcript."""
+    rows = [_interview(r) for r in conn.execute(_INTERVIEWS + " ORDER BY sort_at")]
+    cutoff = (datetime.now() - UPCOMING_GRACE).isoformat(timespec="minutes")
+
+    def upcoming(r):
+        return r["scheduled_at"] >= cutoff if r["scheduled_at"] else r["transcript"] is None
+
+    return {"upcoming": [r for r in rows if upcoming(r)], "past": [r for r in reversed(rows) if not upcoming(r)]}
+
+
+def interview_detail(conn, interview_id):
+    row = conn.execute(_INTERVIEWS + " WHERE i.id = ?", [interview_id]).fetchone()
+    return _interview(row) if row else None
+
+
+def interview_progress(conn):
+    """Reviewed interviews, oldest first, with scores and measured metrics, to track improvement."""
+    return [r for r in (_interview(row) for row in conn.execute(_INTERVIEWS + " ORDER BY sort_at")) if r["review"]]
+
+
 def problems(conn):
     row = conn.execute("SELECT value FROM meta WHERE key = 'problems'").fetchone()
     return json.loads(row["value"]) if row else []

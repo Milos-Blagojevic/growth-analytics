@@ -87,10 +87,9 @@ def _client():
     return anthropic.Anthropic(api_key=api_key)
 
 
-def score_company(research, profile, *, model=None, client=None):
-    """Returns (Fit, usage) where usage is {"input_tokens", "output_tokens"}."""
-    client = client or _client()
-    candidate = {
+def candidate(profile):
+    """What Claude is told about the candidate, for fit scoring and interview coaching."""
+    return {
         "target_roles": profile["search"]["roles"],
         "seniority": profile["search"]["seniority"],
         "work_mode": profile["search"]["work_mode"],
@@ -100,9 +99,14 @@ def score_company(research, profile, *, model=None, client=None):
         "gaps": profile["candidate"]["gaps"].strip() or "(none)",
         "weak_spots": profile["candidate"]["weak_spots"].strip() or "(none)",
     }
+
+
+def score_company(research, profile, *, model=None, client=None):
+    """Returns (Fit, usage) where usage is {"input_tokens", "output_tokens"}."""
+    client = client or _client()
     user_content = (
         "Candidate:\n"
-        + json.dumps(candidate, indent=2)
+        + json.dumps(candidate(profile), indent=2)
         + "\n\nCompany research (with source grounding):\n"
         + json.dumps({"research": research["content"], "grounding": research["grounding"]}, indent=2)
     )

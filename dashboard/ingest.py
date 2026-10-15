@@ -1,6 +1,7 @@
 """Rebuilds the derived tables of hunt.db from the pipeline's files.
 
-Sources (all relative to the project root): out/<run>/*.json, discovered.csv, companies.csv, watch_state.json.
+Sources (all relative to the project root): out/<run>/*.json, discovered.csv, companies.csv, watch_state.json,
+interviews/<id>/*.json.
 A full rebuild is cheap at this size and keeps ingest idempotent; `refresh` skips it when no source changed.
 """
 
@@ -11,6 +12,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import interviews
 import runs
 from dashboard import db
 
@@ -27,6 +29,7 @@ def signature(root):
     root = Path(root)
     files = [p for d in runs.run_dirs(root / OUT_DIR) for p in sorted(d.glob("*.json"))]
     files += [root / name for name in (DISCOVERED, COMPANIES, WATCH_STATE) if (root / name).exists()]
+    files += [p for d in interviews.interview_dirs(root) for p in sorted(d.glob("*.json"))]
     digest = hashlib.sha256()
     for path in files:
         stat = path.stat()
@@ -63,6 +66,12 @@ def ingest(conn, root, sig=None):
                 problems.append(f"{run_dir.name}: {type(exc).__name__}: {exc}")
         _ingest_watch(conn, root / WATCH_STATE)
         _ingest_leads(conn, root / DISCOVERED, root / COMPANIES)
+        for path in interviews.interview_dirs(root):
+            try:
+                _ingest_interview(conn, path)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("skipping %s: %s", path, exc)
+                problems.append(f"{interviews.DIR}/{path.name}: {type(exc).__name__}: {exc}")
         meta = {
             "signature": sig or signature(root),
             "ingested_at": datetime.now().isoformat(timespec="seconds"),
@@ -159,6 +168,32 @@ def _ingest_watch(conn, path):
             (board, job_id, e["title"], e.get("location"), e.get("remote"), e.get("url"), e["first_seen"])
             for board, seen in state.items()
             for job_id, e in seen.items()
+        ],
+    )
+
+
+def _ingest_interview(conn, path):
+    interview = interviews.load_json(path, interviews.INTERVIEW)
+    transcript = interviews.load_json(path, interviews.TRANSCRIPT)
+    if transcript is not None:
+        metrics = interviews.metrics(transcript, interview.get("language"))
+        transcript = {k: v for k, v in transcript.items() if k != "turns"} | {
+            "turn_count": len(transcript["turns"]), "metrics": metrics}
+    prep, review = interviews.load_json(path, interviews.PREP), interviews.load_json(path, interviews.REVIEW)
+    conn.execute(
+        "INSERT INTO interviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            path.name,
+            interview["company"],
+            interview.get("domain") or None,
+            interview["role"],
+            interview["stage"],
+            interview.get("scheduled_at") or None,
+            interview.get("scheduled_at") or interview["created_at"],
+            json.dumps(interview),
+            json.dumps(transcript) if transcript is not None else None,
+            json.dumps(prep) if prep is not None else None,
+            json.dumps(review) if review is not None else None,
         ],
     )
 

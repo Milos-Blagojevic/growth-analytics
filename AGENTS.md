@@ -6,9 +6,11 @@ Python 3.11+ CLI tools: an Exa search client (`exa_client.py`), a job-hunt pipel
 
 | Module | Role |
 |---|---|
-| `hunt.py` | CLI entry point: `discover`, `run`, `send`, `watch` |
+| `hunt.py` | CLI entry point: `discover`, `run`, `send`, `watch`, `interview-prep`, `interview-review` |
 | `research.py` | Per-company Exa research, posting link checks, posting text fetch |
-| `scoring.py` | Claude fit scoring: `SYSTEM_PROMPT` rubric plus the `Fit` pydantic model |
+| `scoring.py` | Claude fit scoring: `SYSTEM_PROMPT` rubric plus the `Fit` pydantic model; `candidate()` is what Claude is told about the owner |
+| `coaching.py` | Claude interview prep (`Prep`) and transcript review (`Review`, scores keyed by `interviews.SCORES`) |
+| `interviews.py` | Interview files (`interviews/<id>/`), transcript parsing and talk metrics; shared by `hunt.py` and the dashboard, no paid clients |
 | `exa_client.py` | The only place that talks to Exa: retries, cost logging, cost tally |
 | `ashby.py` | Ashby public job-board API (link checks and watch list) |
 | `watch.py` | Watch list: new matching postings from Ashby boards |
@@ -30,6 +32,7 @@ Do not run these without asking: they spend money or send real messages.
 
 - `python exa_client.py`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude.
 - `hunt.py run` without `--dry-run`, `hunt.py send`, `hunt.py watch` without `--dry-run`: send to Telegram. `watch` also updates `watch_state.json`.
+- `hunt.py interview-prep` and `hunt.py interview-review`: paid Claude calls that send the owner's CV or a whole interview transcript to Anthropic.
 - Deploying to Railway, or changing its service variables (a change redeploys and interrupts a running job).
 
 `python -m dashboard` costs nothing by itself, but its Runs page, **Run selected**, **Re-run** and any `HUNT_SCHEDULE` entry start real `hunt.py` commands (paid, and possibly Telegram). For a smoke run, use a temporary directory of sample files with a fake `hunt.py` in it, never the owner's folder (with Docker, mount the fake over `/app/hunt.py`), keep `HUNT_SCHEDULE` to entries that start the fake, and do not start jobs against the real `hunt.py` without asking. Tests pass a stub through `create_app(root, hunt_command=[...])`.
@@ -44,7 +47,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 
 ## Private files
 
-`.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/`, `hunt.db` and `jobs/` hold the owner's secrets and personal data. They are git-ignored and kept out of the Docker image (`.dockerignore`); never commit them, and do not read `.env`. On Railway the same files live on the `/data` volume and the keys are service variables. `hunt.db` holds the owner's statuses, notes and side projects, which exist nowhere else: never delete it, locally or on the volume. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
+`.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/`, `hunt.db`, `jobs/` and `interviews/` hold the owner's secrets and personal data (interview transcripts also hold interviewers' words). They are git-ignored and kept out of the Docker image (`.dockerignore`); never commit them, and do not read `.env`. On Railway the same files live on the `/data` volume and the keys are service variables. `hunt.db` holds the owner's statuses, notes and side projects, which exist nowhere else: never delete it, locally or on the volume. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the README.
 
 ## Conventions
 
