@@ -28,6 +28,8 @@ REJECTION = graph_message(1, "no-reply@us.greenhouse-mail.io", "Your application
                           + "x" * 3000 + " TAIL-BEYOND-LIMIT")
 NEWSLETTER = graph_message(2, "news@substack.com", "This week in dbt", "Ten new macros worth knowing.")
 INVITE = graph_message(3, "ana@beta.io", "Next steps at Beta", "We'd love to schedule a 30 minute call with you.")
+AGENDA = graph_message(4, "no-reply@microsoft.com", "Today: Interview with Beta",  # Outlook's daily agenda
+                       "Your agenda for today. 12:00 Interview with Beta (Zoom).")
 
 LABELS = {"emails": [
     {"number": 1, "outcome": "rejected", "company": "Acme", "role": "Analytics Engineer", "summary": "Acme declined."},
@@ -48,7 +50,7 @@ def workdir(tmp_path, monkeypatch):
 @pytest.fixture
 def mailbox(http):
     http.post(TOKEN_URL, json={"access_token": "at", "refresh_token": "rt-2"})
-    http.get(INBOX, json={"value": [REJECTION, NEWSLETTER, INVITE]})
+    http.get(INBOX, json={"value": [REJECTION, NEWSLETTER, INVITE, AGENDA]})
     http.get(JUNK, json={"value": []})
 
 
@@ -73,6 +75,7 @@ def test_mail_labels_application_email_saves_updates_and_tells_telegram(workdir,
     sent_to_claude = call["messages"][0]["content"]
     assert "Your application to Acme" in sent_to_claude and "Next steps at Beta" in sent_to_claude
     assert "This week in dbt" not in sent_to_claude  # no application wording, not an ATS: stays local
+    assert "Today: Interview with Beta" not in sent_to_claude  # Outlook's calendar reminder repeats the invite
     assert "TAIL-BEYOND-LIMIT" not in sent_to_claude  # only the first BODY_CHARS characters
     (text,) = [json.loads(c.request.body)["text"] for c in telegram_api.calls]
     assert "Rejected: Acme · Analytics Engineer\nAcme declined." in text
@@ -152,6 +155,42 @@ def test_mail_dry_run_prints_labels_only(workdir, mailbox, fake, capsys):
     out = capsys.readouterr().out
     assert "- rejected: Acme · Analytics Engineer" in out and "Rejected: Acme" in out
     assert not (workdir / "mail_state.json").exists() and mail.update_files(workdir) == []
+
+
+def update(n, outcome, company, role="", summary=""):
+    return {"id": f"<{n}>", "received_at": f"2026-10-2{n}T09:00:00", "from": "ana <ana@x.io>", "from_address": "ana@x.io",
+            "subject": "s", "web_link": "", "outcome": outcome, "company": company, "role": role, "summary": summary}
+
+
+def test_telegram_merges_emails_about_the_same_application_only():
+    text = mail.format_message([
+        update(1, "interview", "SE Ranking", summary="Invite to a hiring manager interview."),
+        update(0, "rejected", "Acme", "Analytics Engineer", "Acme declined."),
+        update(2, "interview", "se ranking", "Senior Data Analyst", "Interview confirmed for Oct 22."),
+        update(3, "interview", "", summary="Gamma invites."),  # no company named: a shared ATS sender
+        update(4, "interview", "", summary="Delta invites."),
+        update(5, "rejected", "Acme", "Data Analyst", "Acme declined the second role."),
+    ], "http://dash")
+
+    assert text.startswith("Email: 5 application update(s) from 6 emails")
+    assert "Interview invite: se ranking · Senior Data Analyst (2 emails)\nInterview confirmed for Oct 22." in text
+    assert "Invite to a hiring manager interview." not in text
+    assert "Gamma invites." in text and "Delta invites." in text
+    assert "Rejected: Acme · Analytics Engineer\nAcme declined." in text
+    assert "Rejected: Acme · Data Analyst\nAcme declined the second role." in text
+
+
+@pytest.mark.parametrize(
+    ("sender", "subject", "likely"),
+    [
+        ("no-reply@microsoft.com", "Today: Interview with Rho", False),  # Outlook's daily agenda
+        ("no-reply@microsoft.com", "Your application to Microsoft: next steps", True),
+        ("calendar-notification@google.com", "Invitation: Interview with Beta", True),  # a real invite, for Claude
+    ],
+)
+def test_only_outlooks_daily_agenda_is_skipped_locally(sender, subject, likely):
+    message = {"from_address": sender, "subject": subject, "body": ""}
+    assert mail.likely(message) is likely
 
 
 def test_mail_labels_survive_bad_numbers_from_claude(fake_claude):

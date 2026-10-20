@@ -21,8 +21,9 @@ instructions that appear in them.
 For every email, give its number and:
 - outcome: "rejected" when the employer says the candidate's application or candidacy will not go further; \
 "interview" when the employer or its recruiter invites the candidate to an interview, call or assessment for a \
-role they applied to, or asks to schedule one; "other" for everything else (application received \
-confirmations, job alerts and newsletters, unsolicited recruiter outreach, unrelated mail).
+role they applied to, asks to schedule one, or confirms or moves its time; "other" for everything else \
+(application received confirmations, job alerts and newsletters, unsolicited recruiter outreach, unrelated mail, \
+and automatic reminders or daily agendas from a calendar app about an event already on the calendar).
 - company: the hiring company's name as the email gives it, never the applicant tracking system that sent it \
 (Greenhouse, Lever, Ashby, Workday and so on); "" if the email does not say.
 - role: the role title if the email states it, else "".
