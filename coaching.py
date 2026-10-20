@@ -116,7 +116,9 @@ def _usage(response):
 def _parse(client, model, system, content, output_format, what):
     response = client.messages.parse(
         model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
-        max_tokens=8000,
+        # A Serbian prep brief hit 8000 and was cut off mid-JSON. 16000 stays under the SDK's
+        # non-streaming limit (about 21k), above which it requires streaming.
+        max_tokens=16000,
         system=system,
         messages=[{"role": "user", "content": content}],
         output_format=output_format,
