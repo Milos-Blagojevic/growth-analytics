@@ -162,17 +162,22 @@ def update(n, outcome, company, role="", summary=""):
             "subject": "s", "web_link": "", "outcome": outcome, "company": company, "role": role, "summary": summary}
 
 
-def test_telegram_shows_one_entry_per_company_and_outcome():
+def test_telegram_merges_emails_about_the_same_application_only():
     text = mail.format_message([
         update(1, "interview", "SE Ranking", summary="Invite to a hiring manager interview."),
         update(0, "rejected", "Acme", "Analytics Engineer", "Acme declined."),
         update(2, "interview", "se ranking", "Senior Data Analyst", "Interview confirmed for Oct 22."),
+        update(3, "interview", "", summary="Gamma invites."),  # no company named: a shared ATS sender
+        update(4, "interview", "", summary="Delta invites."),
+        update(5, "rejected", "Acme", "Data Analyst", "Acme declined the second role."),
     ], "http://dash")
 
-    assert text.startswith("Email: 2 application update(s)")
+    assert text.startswith("Email: 5 application update(s) from 6 emails")
     assert "Interview invite: se ranking · Senior Data Analyst (2 emails)\nInterview confirmed for Oct 22." in text
     assert "Invite to a hiring manager interview." not in text
+    assert "Gamma invites." in text and "Delta invites." in text
     assert "Rejected: Acme · Analytics Engineer\nAcme declined." in text
+    assert "Rejected: Acme · Data Analyst\nAcme declined the second role." in text
 
 
 @pytest.mark.parametrize(

@@ -511,7 +511,7 @@ def cmd_mail(args):
             print(f"Saved {len(updates)} update(s) to {path}")
             for part in telegram.pack_blocks([mail.format_message(updates, dashboard_url())]):
                 telegram.send(part)
-            print(f"Sent {len(updates)} update(s) to Telegram.")
+            print(f"Sent {len(updates)} email update(s) to Telegram.")
         # Only after a successful send, so a failed send is labelled and sent again next time.
         labelled = {e["id"] for e in events}
         new_state, given_up = mail.next_state(state, read_until, labelled,

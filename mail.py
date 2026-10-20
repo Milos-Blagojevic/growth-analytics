@@ -141,14 +141,29 @@ def update_files(root):
     return sorted(directory.glob("*.json")) if directory.is_dir() else []
 
 
-def format_message(updates, dashboard_url):
-    """One entry per company and outcome: several emails about the same interview (invite, confirmation, new time)
-    show as one entry with the newest email's summary."""
-    groups = {}
+def _group(updates):
+    """Updates in receipt order, grouped: emails that name the same company (case-insensitive) with the same outcome
+    and the same role, or no role on one of them, are one group (invite, confirmation, new time). Emails that name no
+    company stay apart, because a shared ATS sender can stand for several employers."""
+    groups = []
     for u in sorted(updates, key=lambda u: u["received_at"]):
-        groups.setdefault((u["outcome"], (u["company"] or u["from"]).casefold()), []).append(u)
-    lines = [f"Email: {len(groups)} application update(s)"]
-    for emails in groups.values():
+        company, role = u["company"].casefold(), u["role"].casefold()
+        group = next((g for g in groups if company and g["outcome"] == u["outcome"] and g["company"] == company
+                      and (not role or not g["role"] or g["role"] == role)), None)
+        if group is None:
+            group = {"outcome": u["outcome"], "company": company, "role": role, "emails": []}
+            groups.append(group)
+        group["role"] = group["role"] or role
+        group["emails"].append(u)
+    return [g["emails"] for g in groups]
+
+
+def format_message(updates, dashboard_url):
+    """One entry per group (see _group), with the newest email's summary and the role any of its emails named."""
+    groups = _group(updates)
+    lines = [f"Email: {len(groups)} application update(s)"
+             + (f" from {len(updates)} emails" if len(groups) < len(updates) else "")]
+    for emails in groups:
         latest = emails[-1]
         role = next((u["role"] for u in reversed(emails) if u["role"]), "")
         head = f"{OUTCOME_LABELS[latest['outcome']]}: {latest['company'] or latest['from']}" + (f" · {role}" if role else "")
