@@ -507,14 +507,17 @@ def cmd_mail(args):
             for part in telegram.pack_blocks([mail.format_message(updates, dashboard_url())]):
                 telegram.send(part)
             print(f"Sent {len(updates)} update(s) to Telegram.")
-        # Only after a successful send, so a failed send is labelled and sent again next time. Emails Claude left
-        # unlabelled are not marked seen, and the next check starts early enough to read them again.
+        # Only after a successful send, so a failed send is labelled and sent again next time.
         labelled = {e["id"] for e in events}
-        missed = [m for m in candidates if m["id"] not in labelled]
-        if missed:
-            logger.warning("Claude returned no label for %d email(s); the next check labels them again", len(missed))
-        until = min([started] + [datetime.fromisoformat(m["received_at"]).astimezone() + mail.OVERLAP for m in missed])
-        mail.save_state(args.state, mail.next_state(state, until, labelled))
+        new_state, given_up = mail.next_state(state, started, labelled,
+                                              [m for m in candidates if m["id"] not in labelled])
+        if len(labelled) < len(candidates):
+            logger.warning("Claude returned no label for %d email(s); %d will be labelled again next time",
+                           len(candidates) - len(labelled), len(candidates) - len(labelled) - len(given_up))
+        for m in given_up:
+            logger.warning("giving up on %r from %s after %d checks without a label", m["subject"],
+                           m["from_address"], mail.MAX_TRIES)
+        mail.save_state(args.state, new_state)
     print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
     return 0
 
@@ -708,6 +711,8 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     if args.func is cmd_outlook_login:  # interactive, up to 15 minutes; writes only the token file, so no lock
+        if runs.is_locked():  # a running `mail` could overwrite the new sign-in with the token it refreshed
+            sys.exit("Another hunt.py command is running here; sign in when it finishes.")
         sys.exit(args.func(args))
     # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
     try:

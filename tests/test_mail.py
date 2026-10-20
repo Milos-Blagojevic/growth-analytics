@@ -111,6 +111,19 @@ def test_mail_reads_an_email_claude_left_unlabelled_again(workdir, mailbox, fake
     assert set(json.loads((workdir / "mail_state.json").read_text())["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"}
 
 
+def test_mail_gives_up_on_an_email_claude_keeps_skipping(workdir, mailbox, fake_claude, monkeypatch, http):
+    no_labels = fake_claude({"emails": []})
+    monkeypatch.setattr(scoring, "_client", lambda: no_labels)
+
+    for _ in range(mail.MAX_TRIES + 2):
+        assert hunt.cmd_mail(mail_args()) == 0
+
+    assert len(no_labels.calls) == mail.MAX_TRIES  # paid for at most MAX_TRIES times, then left alone
+    state = json.loads((workdir / "mail_state.json").read_text())
+    assert set(state["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"} and state["tries"] == {}
+    assert datetime.fromisoformat(state["checked_until"]) > datetime(2026, 10, 14, tzinfo=timezone.utc)
+
+
 def test_mail_failed_send_keeps_the_email_for_the_next_check(workdir, mailbox, fake, http):
     http.post(TELEGRAM, json={"ok": False, "error_code": 400, "description": "chat not found"})
 

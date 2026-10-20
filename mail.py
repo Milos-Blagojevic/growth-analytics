@@ -19,6 +19,7 @@ OUTCOME_LABELS = {"rejected": "Rejected", "interview": "Interview invite"}
 LOOKBACK_DAYS = 14  # the first check reads this far back
 OVERLAP = timedelta(hours=1)  # re-read the hour before the last check, for mail that arrives late
 SEEN_DAYS = 30  # how long labelled emails are remembered (they only need to cover OVERLAP)
+MAX_TRIES = 3  # checks that may send an email to Claude without getting a label back before it is given up on
 BODY_CHARS = 2000  # of each email's text sent to Claude
 
 # Sender domains of applicant tracking systems that send application emails on the employer's behalf.
@@ -77,13 +78,26 @@ def since(state, now, *, days=LOOKBACK_DAYS):
     return now - timedelta(days=days)
 
 
-def next_state(state, now, labelled_ids):
-    """State after a check that read mail up to `now` (aware) and labelled `labelled_ids`; the next check starts
-    OVERLAP before `now`."""
+def next_state(state, now, labelled_ids, missed=()):
+    """State after a check that started at `now` (aware), and the emails given up on.
+
+    `labelled_ids` are remembered as seen. `missed` are emails sent to Claude that came back without a label: the
+    next check starts early enough to read them again, until an email has been missed MAX_TRIES times; then it is
+    remembered as seen too and returned, so a skipped email cannot make every later check pay for it again.
+    """
+    tries = dict(state.get("tries", {}))
+    retry, given_up = [], []
+    for m in missed:
+        tries[m["id"]] = tries.get(m["id"], 0) + 1
+        (given_up if tries[m["id"]] >= MAX_TRIES else retry).append(m)
+    until = min([now] + [datetime.fromisoformat(m["received_at"]).astimezone() + OVERLAP for m in retry])
+    stamp = now.isoformat(timespec="seconds")
     cutoff = (now - timedelta(days=SEEN_DAYS)).isoformat(timespec="seconds")
     seen = {i: t for i, t in state.get("seen", {}).items() if t >= cutoff}
-    seen.update({i: now.isoformat(timespec="seconds") for i in labelled_ids})
-    return {"checked_until": now.isoformat(timespec="seconds"), "seen": seen}
+    seen.update({i: stamp for i in [*labelled_ids, *(m["id"] for m in given_up)]})
+    state = {"checked_until": until.isoformat(timespec="seconds"), "seen": seen,
+             "tries": {m["id"]: tries[m["id"]] for m in retry}}
+    return state, given_up
 
 
 def event(message, label):
