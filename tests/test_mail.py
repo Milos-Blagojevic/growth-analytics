@@ -157,6 +157,37 @@ def test_mail_dry_run_prints_labels_only(workdir, mailbox, fake, capsys):
     assert not (workdir / "mail_state.json").exists() and mail.update_files(workdir) == []
 
 
+def update(n, outcome, company, role="", summary=""):
+    return {"id": f"<{n}>", "received_at": f"2026-10-2{n}T09:00:00", "from": "ana <ana@x.io>", "from_address": "ana@x.io",
+            "subject": "s", "web_link": "", "outcome": outcome, "company": company, "role": role, "summary": summary}
+
+
+def test_telegram_shows_one_entry_per_company_and_outcome():
+    text = mail.format_message([
+        update(1, "interview", "SE Ranking", summary="Invite to a hiring manager interview."),
+        update(0, "rejected", "Acme", "Analytics Engineer", "Acme declined."),
+        update(2, "interview", "se ranking", "Senior Data Analyst", "Interview confirmed for Oct 22."),
+    ], "http://dash")
+
+    assert text.startswith("Email: 2 application update(s)")
+    assert "Interview invite: se ranking · Senior Data Analyst (2 emails)\nInterview confirmed for Oct 22." in text
+    assert "Invite to a hiring manager interview." not in text
+    assert "Rejected: Acme · Analytics Engineer\nAcme declined." in text
+
+
+@pytest.mark.parametrize(
+    ("sender", "subject", "likely"),
+    [
+        ("no-reply@microsoft.com", "Today: Interview with Rho", False),  # Outlook's daily agenda
+        ("no-reply@microsoft.com", "Your application to Microsoft: next steps", True),
+        ("calendar-notification@google.com", "Invitation: Interview with Beta", True),  # a real invite, for Claude
+    ],
+)
+def test_only_outlooks_daily_agenda_is_skipped_locally(sender, subject, likely):
+    message = {"from_address": sender, "subject": subject, "body": ""}
+    assert mail.likely(message) is likely
+
+
 def test_mail_labels_survive_bad_numbers_from_claude(fake_claude):
     messages = [{"id": f"<{n}>", "received_at": "2026-10-18T09:00:00", "from_name": "", "from_address": "a@b.io",
                  "subject": "s", "body": "b", "web_link": ""} for n in range(2)]

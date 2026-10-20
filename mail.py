@@ -34,9 +34,11 @@ KEYWORDS = (
     "interview", "not to move forward", "not moving forward", "move forward with other", "other candidates",
     "decided to pursue", "regret to inform", "unfortunately", "next steps", "hiring team", "recruiter",
 )
-# Senders whose mail is never about an application: Outlook's own notices, including its calendar reminders and
-# daily agenda ("Today: Interview with …"), which repeat interviews already on the calendar.
-IGNORED_SENDERS = ("no-reply@microsoft.com",)
+# Outlook's own daily agenda ("Today: Interview with Rho" from no-reply@microsoft.com) repeats interviews already on
+# the calendar, so it is skipped here. Only that sender with that subject: other mail from the address still counts,
+# and reminders from other calendar apps reach Claude, which labels them "other".
+OUTLOOK_AGENDA_SENDER = "no-reply@microsoft.com"
+OUTLOOK_AGENDA_SUBJECT = "today:"
 
 
 def sender_domain(address):
@@ -50,8 +52,9 @@ def domain_in(domain, domains):
 
 def likely(message):
     """True for emails that may be about an application: sent through an ATS, or using application wording, and not
-    from IGNORED_SENDERS. Only these are sent to Claude, so newsletters and personal mail stay on your side."""
-    if message["from_address"] in IGNORED_SENDERS:
+    Outlook's daily agenda. Only these are sent to Claude, so newsletters and personal mail stay on your side."""
+    if (message["from_address"] == OUTLOOK_AGENDA_SENDER
+            and message["subject"].lower().startswith(OUTLOOK_AGENDA_SUBJECT)):
         return False
     if domain_in(sender_domain(message["from_address"]), ATS_DOMAINS):
         return True
@@ -139,9 +142,18 @@ def update_files(root):
 
 
 def format_message(updates, dashboard_url):
-    lines = [f"Email: {len(updates)} application update(s)"]
-    for u in updates:
-        head = f"{OUTCOME_LABELS[u['outcome']]}: {u['company'] or u['from']}" + (f" · {u['role']}" if u["role"] else "")
-        lines.append(f"\n{head}\n{u['summary']}")
+    """One entry per company and outcome: several emails about the same interview (invite, confirmation, new time)
+    show as one entry with the newest email's summary."""
+    groups = {}
+    for u in sorted(updates, key=lambda u: u["received_at"]):
+        groups.setdefault((u["outcome"], (u["company"] or u["from"]).casefold()), []).append(u)
+    lines = [f"Email: {len(groups)} application update(s)"]
+    for emails in groups.values():
+        latest = emails[-1]
+        role = next((u["role"] for u in reversed(emails) if u["role"]), "")
+        head = f"{OUTCOME_LABELS[latest['outcome']]}: {latest['company'] or latest['from']}" + (f" · {role}" if role else "")
+        if len(emails) > 1:
+            head += f" ({len(emails)} emails)"
+        lines.append(f"\n{head}\n{latest['summary']}")
     lines.append(f"\nConfirm the status changes on the dashboard: {dashboard_url.rstrip('/')}/pipeline")
     return "\n".join(lines)
