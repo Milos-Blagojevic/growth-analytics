@@ -14,6 +14,7 @@ interviews/
 # Not needed at runtime
 .git/
 .github/
+.claude/
 .venv/
 tests/
 **/__pycache__/
