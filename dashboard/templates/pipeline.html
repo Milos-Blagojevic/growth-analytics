@@ -6,6 +6,36 @@
   <p class="muted small">Everything you marked saved or beyond. Set a status from a company's details, the inbox, or here.</p>
 </div>
 
+{% if mail_suggestions %}
+<section class="block">
+  <h2>From your email <span class="count">{{ mail_suggestions | length }}</span></h2>
+  <p class="muted small">Rejections and interview invites <code>hunt.py mail</code> found. Nothing changes until you confirm.</p>
+  <div class="suggestions">
+    {% for s in mail_suggestions %}
+    <article class="suggestion">
+      <p class="suggestion-text"><span class="tag status s-{{ s.status }}">{{ 'Rejected' if s.outcome == 'rejected' else 'Interview invite' }}</span>
+        {{ s.company or s.sender }}{% if s.role %} · {{ s.role }}{% endif %}</p>
+      <p class="small">{{ s.summary }}</p>
+      <p class="muted small">“{{ s.subject }}” · {{ s.sender }} · {{ s.received_at | ago }}{% if s.web_link %} · <a class="link" href="{{ s.web_link }}" target="_blank" rel="noopener">Open in Outlook ↗</a>{% endif %}</p>
+      {% for i in s.targets %}
+      <div class="suggestion-foot">
+        <span class="small">{{ i.title }} <span class="muted">· {{ i.name }} · {{ i.status | status }}</span></span>
+        <button class="btn sm" type="button" hx-post="/mail/decide"
+                hx-vals='{{ {"update": s.id, "action": "apply", "kind": i.kind, "ref": i.ref} | tojson }}'>Mark {{ s.status | status | lower }}</button>
+      </div>
+      {% else %}
+      <p class="muted small">None of your tracked applications matches this company. If it is one of yours, set its status yourself.</p>
+      {% endfor %}
+      <div class="suggestion-foot">
+        <span></span>
+        <button class="btn ghost sm" type="button" hx-post="/mail/decide" hx-vals='{{ {"update": s.id, "action": "dismiss"} | tojson }}'>Dismiss</button>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% set total = columns.values() | map('length') | sum %}
 {% if total %}
 <div class="kanban">

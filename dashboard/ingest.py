@@ -1,7 +1,7 @@
 """Rebuilds the derived tables of hunt.db from the pipeline's files.
 
 Sources (all relative to the project root): out/<run>/*.json, discovered.csv, companies.csv, watch_state.json,
-interviews/<id>/*.json.
+interviews/<id>/*.json, mail/*.json.
 A full rebuild is cheap at this size and keeps ingest idempotent; `refresh` skips it when no source changed.
 """
 
@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import interviews
+import mail
 import runs
 from dashboard import db
 
@@ -25,11 +26,12 @@ WATCH_STATE = "watch_state.json"
 
 
 def signature(root):
-    """Fingerprint (paths, sizes, mtimes) of every source file; changes whenever a run, discover or watch writes."""
+    """Fingerprint (paths, sizes, mtimes) of every source file; changes whenever a run, discover, watch or mail writes."""
     root = Path(root)
     files = [p for d in runs.run_dirs(root / OUT_DIR) for p in sorted(d.glob("*.json"))]
     files += [root / name for name in (DISCOVERED, COMPANIES, WATCH_STATE) if (root / name).exists()]
     files += [p for d in interviews.interview_dirs(root) for p in sorted(d.glob("*.json"))]
+    files += mail.update_files(root)
     digest = hashlib.sha256()
     for path in files:
         stat = path.stat()
@@ -56,7 +58,7 @@ def ingest(conn, root, sig=None):
     root = Path(root)
     problems = []
     with conn:
-        for table in db.DERIVED_TABLES:  # user tables (tracking, side_projects, jobs) are never touched
+        for table in db.DERIVED_TABLES:  # user tables (tracking, side_projects, jobs, mail_decisions) are never touched
             conn.execute(f"DELETE FROM {table}")
         for run_dir in runs.run_dirs(root / OUT_DIR):
             try:
@@ -72,12 +74,31 @@ def ingest(conn, root, sig=None):
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 logger.warning("skipping %s: %s", path, exc)
                 problems.append(f"{interviews.DIR}/{path.name}: {type(exc).__name__}: {exc}")
+        for path in mail.update_files(root):
+            try:
+                _ingest_mail(conn, path)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("skipping %s: %s", path, exc)
+                problems.append(f"{mail.DIR}/{path.name}: {type(exc).__name__}: {exc}")
         meta = {
             "signature": sig or signature(root),
             "ingested_at": datetime.now().isoformat(timespec="seconds"),
             "problems": json.dumps(problems),
         }
         conn.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", meta.items())
+
+
+def _ingest_mail(conn, path):
+    updates = json.loads(path.read_text())["updates"]
+    conn.executemany(
+        "INSERT OR IGNORE INTO mail_updates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (u["id"], path.name, u["received_at"], u["from"], u["from_address"], u["subject"], u.get("web_link"),
+             u["outcome"], u["company"], u["role"], u["summary"])
+            for u in updates
+            if u["outcome"] in mail.SUGGESTED_STATUS
+        ],
+    )
 
 
 def _run_time(run_dir):

@@ -42,6 +42,22 @@
   </form>
 
   <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="mail">
+    <h2>Check email</h2>
+    <p class="muted small">Finds rejections and interview invites in new Outlook mail and suggests status changes on <a class="link" href="/pipeline">Pipeline</a>. Claude.</p>
+    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="news">
+    <h2>News digest</h2>
+    <p class="muted small">Recent articles on your <code>[news].topics</code>, picked and summarised for Telegram. Exa + Claude.</p>
+    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
     <input type="hidden" name="kind" value="send">
     <h2>Resend notification</h2>
     <p class="muted small">Sends a saved run's short notification to Telegram again. Free.</p>

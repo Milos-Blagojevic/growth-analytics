@@ -2,18 +2,19 @@
 
 Two kinds of tables:
 - Derived (DERIVED_TABLES): copies of the pipeline files (out/, discovered.csv, watch_state.json, companies.csv,
-  interviews/), rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
-- User (tracking, side_projects, jobs): the owner's statuses, notes, side projects and dashboard-started jobs.
-  They cannot be rebuilt, so they are never dropped; change them only by appending to USER_MIGRATIONS.
+  interviews/, mail/), rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
+- User (tracking, side_projects, jobs, mail_decisions): the owner's statuses, notes, side projects,
+  dashboard-started jobs and answers to email suggestions. They cannot be rebuilt, so they are never dropped;
+  change them only by appending to USER_MIGRATIONS.
 """
 
 import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
-DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "meta")
+DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
 
 # Applied in order, each once; the number applied is kept in user_schema. Never edit an applied entry.
 USER_MIGRATIONS = [
@@ -52,6 +53,16 @@ USER_MIGRATIONS = [
         run_id TEXT,                  -- out/<run_id>/ the job saved, parsed from its log
         started_at TEXT NOT NULL,
         finished_at TEXT
+    );
+    """,
+    """
+    CREATE TABLE mail_decisions (
+        update_id TEXT PRIMARY KEY,   -- mail_updates.id: the email's Internet message ID
+        decision TEXT NOT NULL,       -- applied | dismissed
+        kind TEXT,                    -- applied: the tracked item whose status was set (tracking.kind, ref)
+        ref TEXT,
+        status TEXT,                  -- applied: the status set
+        decided_at TEXT NOT NULL
     );
     """,
 ]
@@ -135,6 +146,19 @@ CREATE TABLE interviews (
     transcript TEXT,              -- JSON: transcript.json without its turns, plus measured metrics; NULL if none
     prep TEXT,                    -- JSON: prep.json; NULL if none
     review TEXT                   -- JSON: review.json; NULL if none
+);
+CREATE TABLE mail_updates (
+    id TEXT PRIMARY KEY,          -- the email's Internet message ID; a re-sent update keeps the first file's row
+    file TEXT NOT NULL,           -- mail/<file>
+    received_at TEXT NOT NULL,    -- local time
+    sender TEXT NOT NULL,         -- "Name <address>"
+    from_address TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    web_link TEXT,
+    outcome TEXT NOT NULL,        -- mail.SUGGESTED_STATUS keys: rejected | interview
+    company TEXT NOT NULL,        -- as the email names it; "" if it does not
+    role TEXT NOT NULL,
+    summary TEXT NOT NULL
 );
 CREATE TABLE meta (
     key TEXT PRIMARY KEY,

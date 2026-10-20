@@ -5,11 +5,13 @@ One entry per line (or separated by ";"): five cron fields, then the hunt.py com
     0 7 * * 1   discover --limit 15
     30 7 * * *  run
     0 */6 * * * watch
+    0 8-20/2 * * * mail
+    0 8 * * 1   news
 
 Times are the dashboard's local time (the TZ environment variable). Commands are limited to what the Runs page
-can start: `run [--dry-run | --research-only]`, `discover [focus] [--limit N]` and `watch [--dry-run]`. A due
-command that finds another one running stays pending and starts as soon as the lock is free; commands due while
-the dashboard was down are not caught up.
+can start: `run [--dry-run | --research-only]`, `discover [focus] [--limit N]`, `watch [--dry-run]`,
+`mail [--dry-run]` and `news [--dry-run]`. A due command that finds another one running stays pending and starts
+as soon as the lock is free; commands due while the dashboard was down are not caught up.
 """
 
 import logging
@@ -25,7 +27,8 @@ logger = logging.getLogger("dashboard.schedule")
 
 # name, lowest, highest; day of week accepts 7 for Sunday, as cron does
 FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day of month", 1, 31), ("month", 1, 12), ("day of week", 0, 7))
-COMMANDS = "run [--dry-run | --research-only], discover [focus] [--limit N] or watch [--dry-run]"
+COMMANDS = ("run [--dry-run | --research-only], discover [focus] [--limit N], watch [--dry-run], mail [--dry-run] "
+            "or news [--dry-run]")
 MAX_CATCH_UP = timedelta(days=1)  # after a long pause (laptop sleep), check at most this many past minutes
 
 
@@ -57,9 +60,9 @@ def _form(args):
         modes = {"--dry-run": "dry_run", "--research-only": "research_only"}
         if len(rest) <= 1 and all(a in modes for a in rest):
             return {"kind": "run", "mode": modes[rest[0]] if rest else "deliver"}
-    elif command == "watch":
+    elif command in ("watch", "mail", "news"):
         if rest in ([], ["--dry-run"]):
-            return {"kind": "watch", "dry_run": "1" if rest else ""}
+            return {"kind": command, "dry_run": "1" if rest else ""}
     elif command == "discover":
         focus, limit = [], "15"
         words = iter(rest)

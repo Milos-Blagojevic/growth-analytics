@@ -11,6 +11,10 @@ hunt.db*
 jobs/
 .hunt.lock
 interviews/
+mail/
+mail_state.json
+news_state.json
+outlook_token.json*
 # Not needed at runtime
 .git/
 .github/

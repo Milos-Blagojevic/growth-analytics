@@ -5,6 +5,9 @@
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
     python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
+    python hunt.py outlook-login             # sign in to Outlook once, for `mail`
+    python hunt.py mail [--dry-run]          # find rejections and interview invites in new email (Claude)
+    python hunt.py news [--dry-run]          # news digest on your [news].topics (Exa + Claude)
     python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
     python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
 """
@@ -18,13 +21,17 @@ import re
 import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
 
 import coaching
 import exa_client
 import interviews
+import mail
+import mail_labels
+import news
+import outlook
 import research
 import runs
 import scoring
@@ -451,6 +458,96 @@ def cmd_watch(args):
     return 1 if problems else 0
 
 
+def cmd_outlook_login(args):
+    if not outlook.configured():
+        sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see README, Email updates).")
+    try:
+        outlook.login(args.token)
+    except outlook.AuthError as exc:
+        sys.exit(f"Outlook {exc}")
+    print(f"Signed in. Saved the Outlook sign-in to {args.token} (keep it private; on Railway, upload it to the volume).")
+    return 0
+
+
+def cmd_mail(args):
+    if not outlook.configured():
+        sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see README, Email updates).")
+    _require_claude()
+    if not args.dry_run and not telegram.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
+
+    state = mail.load_state(args.state)
+    started = datetime.now(timezone.utc)
+    since = mail.since(state, started, days=args.days)
+    try:
+        messages = outlook.messages(outlook.access_token(args.token), since)
+    except outlook.AuthError as exc:
+        sys.exit(f"Outlook: {exc}")
+    seen = state.get("seen", {})
+    new = [m for m in messages if m["id"] not in seen]
+    candidates = [m for m in new if mail.likely(m)]
+    print(f"Checked {len(new)} new email(s) since {since.astimezone():%Y-%m-%d %H:%M}: "
+          f"{len(candidates)} look like application email.")
+
+    events, usage = mail_labels.label(candidates) if candidates else ([], {"input_tokens": 0, "output_tokens": 0})
+    for e in events:
+        role = f" · {e['role']}" if e["role"] else ""
+        print(f"- {e['outcome']}: {e['company'] or e['from']}{role} ({e['received_at'][:16].replace('T', ' ')})"
+              f" {e['summary']}")
+    updates = [e for e in events if e["outcome"] in mail.SUGGESTED_STATUS]
+    if args.dry_run:
+        if updates:
+            print("\n" + mail.format_message(updates, dashboard_url()))
+    else:
+        if updates:
+            path = mail.save_updates(".", updates, since=since.isoformat(timespec="seconds"), emails_checked=len(new),
+                                     labelled=len(events), model=os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
+                                     usage=usage)
+            print(f"Saved {len(updates)} update(s) to {path}")
+            for part in telegram.pack_blocks([mail.format_message(updates, dashboard_url())]):
+                telegram.send(part)
+            print(f"Sent {len(updates)} update(s) to Telegram.")
+        # only after a successful send, so a failed send is labelled and sent again next time
+        mail.save_state(args.state, mail.next_state(state, started, [m["id"] for m in candidates]))
+    print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+    return 0
+
+
+def cmd_news(args):
+    profile = load_profile(args.profile)
+    try:
+        topics = news.load_config(profile)
+    except ValueError as exc:
+        sys.exit(f"{args.profile}: {exc}")
+    _require_claude()
+    if not args.dry_run and not telegram.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
+
+    state = news.load_state(args.state)
+    articles, problems = news.search(topics, state, days=args.days)
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    if not articles:
+        print(f"No new articles on {len(topics) - len(problems)}/{len(topics)} topic(s).")
+    else:
+        overview, picks, usage = news.digest(articles, profile, topics)
+        if not picks:
+            print(f"None of {len(articles)} new article(s) was worth sending.")
+        else:
+            message = news.format_message(overview, picks, problems)
+            if args.dry_run:
+                print(message)
+            else:
+                for part in telegram.pack_blocks([message]):
+                    telegram.send(part)
+                print(f"Sent a digest of {len(picks)} of {len(articles)} new article(s) to Telegram.")
+        if not args.dry_run:
+            news.save_state(args.state, news.next_state(state, articles))  # after the send, so failures retry
+    summary = exa_client.cost_summary()
+    print(f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
+          f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+    return 1 if problems else 0
+
+
 POSTING_CHARS = 8000  # posting text sent to the interview prep
 
 
@@ -576,6 +673,23 @@ def main():
     watch_cmd.add_argument("--state", default="watch_state.json", help="JSON file of postings already reported")
     watch_cmd.add_argument("--dry-run", action="store_true", help="print new matches; do not send or save state")
     watch_cmd.set_defaults(func=cmd_watch)
+
+    login_cmd = sub.add_parser("outlook-login", help="sign in to Outlook (read-only) for the mail command")
+    login_cmd.add_argument("--token", default=outlook.TOKEN_FILE, help="where the sign-in is saved")
+    login_cmd.set_defaults(func=cmd_outlook_login)
+
+    mail_cmd = sub.add_parser("mail", help="find rejections and interview invites in new Outlook email (Claude)")
+    mail_cmd.add_argument("--token", default=outlook.TOKEN_FILE, help="the sign-in saved by outlook-login")
+    mail_cmd.add_argument("--state", default=mail.STATE, help="JSON file of what was already checked")
+    mail_cmd.add_argument("--days", type=int, default=mail.LOOKBACK_DAYS, help="how far back the first check reads")
+    mail_cmd.add_argument("--dry-run", action="store_true", help="print the labels; do not save, send or update state")
+    mail_cmd.set_defaults(func=cmd_mail)
+
+    news_cmd = sub.add_parser("news", help="send a news digest on your [news].topics to Telegram (Exa + Claude)")
+    news_cmd.add_argument("--state", default=news.STATE, help="JSON file of articles already considered")
+    news_cmd.add_argument("--days", type=int, default=news.DAYS, help="articles published in the last N days")
+    news_cmd.add_argument("--dry-run", action="store_true", help="print the digest; do not send or save state")
+    news_cmd.set_defaults(func=cmd_news)
 
     prep_cmd = sub.add_parser("interview-prep", help="write a prep brief for one interview (Claude)")
     prep_cmd.add_argument("interview", help="the interview's folder, interviews/<id>")

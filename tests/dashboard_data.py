@@ -1,4 +1,5 @@
-"""Builders for pipeline files (out/<run>/, watch_state.json, discovered.csv, interviews/) and a dashboard test client."""
+"""Builders for pipeline files (out/<run>/, watch_state.json, discovered.csv, interviews/, mail/) and a dashboard test
+client."""
 
 import json
 
@@ -69,6 +70,23 @@ def write_run(root, run_id, results, manifest=None):
     if manifest is not None:
         (run_dir / "_run.json").write_text(json.dumps(manifest))
     return run_dir
+
+
+def mail_update(n, outcome, company, *, sender="no-reply@us.greenhouse-mail.io", role="", received_at=None):
+    """One update as `hunt.py mail` saves it."""
+    return {"id": f"<m{n}@mail.example>", "received_at": received_at or f"2026-10-1{n}T09:00:00", "from": sender,
+            "from_address": sender, "subject": f"About your application {n}", "web_link": f"https://outlook.live.com/{n}",
+            "outcome": outcome, "company": company, "role": role, "summary": f"Summary {n}."}
+
+
+def write_mail(root, name, updates):
+    """mail/<name>.json as `hunt.py mail` writes it."""
+    (root / "mail").mkdir(exist_ok=True)
+    path = root / "mail" / f"{name}.json"
+    path.write_text(json.dumps({"saved_at": "2026-10-19T10:00:00", "emails_checked": 30, "labelled": len(updates),
+                                "updates": updates}))
+    return path
+
 
 
 PREP = {

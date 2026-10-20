@@ -38,3 +38,12 @@ ashby_boards = []
 title_keywords = []
 # Titles containing any of these are ignored, e.g. ["marketing manager"].
 title_exclude = []
+
+[news]
+# `python hunt.py news` searches recent news on each topic (one Exa search each) and sends the articles Claude
+# picks as worth your time to Telegram. Only your target roles and these topics are sent to Claude, not your CV.
+topics = [
+  "data analytics job market",
+  "growth engineering",
+  "analytics engineering",
+]
