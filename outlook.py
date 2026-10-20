@@ -129,19 +129,24 @@ def _message(m, folder):
 
 
 def messages(token, since):
-    """Messages received at or after `since` (an aware datetime) in FOLDERS, newest first per folder."""
+    """Messages received at or after `since` (an aware datetime) in FOLDERS, oldest first per folder.
+
+    Returns (messages, resume): at most MAX_MESSAGES per folder are read. When a folder holds more, `resume` is the
+    receipt time (aware) of the newest message read there (the earliest such time over the folders), and the next
+    check should start there; otherwise it is None.
+    """
     headers = {"Authorization": f"Bearer {token}", "Prefer": 'outlook.body-content-type="text"'}
-    found = []
+    found, resume = [], None
     for folder in FOLDERS:
         url = f"{GRAPH}/me/mailFolders/{folder}/messages"
         params = {
             "$filter": f"receivedDateTime ge {since.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%SZ}",
-            "$orderby": "receivedDateTime desc",
+            "$orderby": "receivedDateTime asc",
             "$select": SELECT,
             "$top": str(PAGE_SIZE),
         }
-        count = 0
-        while url and count < MAX_MESSAGES:
+        count, last = 0, None
+        while url:
             try:
                 response = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
             except requests.RequestException as exc:
@@ -155,8 +160,16 @@ def messages(token, since):
                     detail = ""
                 raise RuntimeError(f"Outlook {folder}: HTTP {response.status_code} {detail}".rstrip())
             page = response.json()
-            for m in page.get("value", [])[: MAX_MESSAGES - count]:
+            values = page.get("value", [])
+            taken = values[: MAX_MESSAGES - count]
+            for m in taken:
                 found.append(_message(m, folder))
-                count += 1
+                last = m["receivedDateTime"]
+            count += len(taken)
             url, params = page.get("@odata.nextLink"), None  # the next link carries the query
-    return found
+            if count >= MAX_MESSAGES:
+                if url or len(values) > len(taken):  # more mail in this folder than one check reads
+                    cut = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                    resume = cut if resume is None else min(resume, cut)
+                break
+    return found, resume

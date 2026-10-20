@@ -480,9 +480,14 @@ def cmd_mail(args):
     started = datetime.now(timezone.utc)
     since = mail.since(state, started, days=args.days)
     try:
-        messages = outlook.messages(outlook.access_token(args.token), since)
+        messages, resume = outlook.messages(outlook.access_token(args.token), since)
     except outlook.AuthError as exc:
         sys.exit(f"Outlook: {exc}")
+    read_until = started
+    if resume is not None:  # more mail than one check reads: the next check continues where this one stopped
+        read_until = min(started, resume + mail.OVERLAP)
+        logger.warning("more than %d emails in a folder since %s; the next check reads on from %s", outlook.MAX_MESSAGES,
+                       f"{since.astimezone():%Y-%m-%d %H:%M}", f"{resume.astimezone():%Y-%m-%d %H:%M}")
     seen = state.get("seen", {})
     new = [m for m in messages if m["id"] not in seen]
     candidates = [m for m in new if mail.likely(m)]
@@ -509,7 +514,7 @@ def cmd_mail(args):
             print(f"Sent {len(updates)} update(s) to Telegram.")
         # Only after a successful send, so a failed send is labelled and sent again next time.
         labelled = {e["id"] for e in events}
-        new_state, given_up = mail.next_state(state, started, labelled,
+        new_state, given_up = mail.next_state(state, read_until, labelled,
                                               [m for m in candidates if m["id"] not in labelled])
         if len(labelled) < len(candidates):
             logger.warning("Claude returned no label for %d email(s); %d will be labelled again next time",

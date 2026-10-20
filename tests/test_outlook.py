@@ -108,25 +108,38 @@ def test_messages_reads_inbox_pages_and_junk_with_local_times(http, belgrade):
     def inbox(request):
         inbox_urls.append(request.url)
         if "skiptoken" in request.url:
-            return 200, {}, json.dumps({"value": [graph_message(2, "2026-10-17T08:00:00Z")]})
+            return 200, {}, json.dumps({"value": [graph_message(2, "2026-10-18T09:12:00Z")]})
         assert request.headers["Authorization"] == "Bearer at-1"
         assert request.headers["Prefer"] == 'outlook.body-content-type="text"'
-        return 200, {}, json.dumps({"value": [graph_message(1, "2026-10-18T09:12:00Z")],
+        return 200, {}, json.dumps({"value": [graph_message(1, "2026-10-17T08:00:00Z")],
                                     "@odata.nextLink": f"{INBOX}?$skiptoken=abc"})
 
     http.add_callback(responses.GET, INBOX, callback=inbox, content_type="application/json")
     http.get(JUNK, json={"value": [graph_message(3, "2026-10-18T10:00:00Z", internetMessageId=None)]})
 
-    found = outlook.messages("at-1", datetime(2026, 10, 13, 6, 30, tzinfo=timezone.utc))
+    found, resume = outlook.messages("at-1", datetime(2026, 10, 13, 6, 30, tzinfo=timezone.utc))
 
     query = parse_qs(urlparse(inbox_urls[0]).query)
     assert query["$filter"] == ["receivedDateTime ge 2026-10-13T06:30:00Z"]
+    assert query["$orderby"] == ["receivedDateTime asc"]  # oldest first, so a capped check can resume
     assert [(m["id"], m["folder"], m["received_at"]) for m in found] == [
-        ("<m1@mail.example>", "inbox", "2026-10-18T11:12:00"),  # UTC+2 in Belgrade in October
-        ("<m2@mail.example>", "inbox", "2026-10-17T10:00:00"),
+        ("<m1@mail.example>", "inbox", "2026-10-17T10:00:00"),  # UTC+2 in Belgrade in October
+        ("<m2@mail.example>", "inbox", "2026-10-18T11:12:00"),
         ("graph-3", "junkemail", "2026-10-18T12:00:00"),  # no Internet message ID: the Graph id
     ]
     assert (found[0]["from_name"], found[0]["from_address"], found[0]["body"]) == ("Ana", "ana@acme.com", "Body 1")
+    assert resume is None
+
+
+def test_messages_beyond_the_cap_are_left_for_the_next_check(http, monkeypatch):
+    monkeypatch.setattr(outlook, "MAX_MESSAGES", 2)
+    http.get(INBOX, json={"value": [graph_message(n, f"2026-10-1{n}T09:00:00Z") for n in (1, 2, 3)]})
+    http.get(JUNK, json={"value": [graph_message(4, "2026-10-11T08:00:00Z")]})
+
+    found, resume = outlook.messages("at-1", datetime(2026, 10, 1, tzinfo=timezone.utc))
+
+    assert [m["id"] for m in found] == ["<m1@mail.example>", "<m2@mail.example>", "<m4@mail.example>"]
+    assert resume == datetime(2026, 10, 12, 9, tzinfo=timezone.utc)  # the newest inbox email read
 
 
 def test_messages_reports_a_refused_sign_in(http):

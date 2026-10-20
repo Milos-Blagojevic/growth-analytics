@@ -7,6 +7,7 @@ import pytest
 import hunt
 import mail
 import mail_labels
+import outlook
 import scoring
 
 TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
@@ -122,6 +123,19 @@ def test_mail_gives_up_on_an_email_claude_keeps_skipping(workdir, mailbox, fake_
     state = json.loads((workdir / "mail_state.json").read_text())
     assert set(state["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"} and state["tries"] == {}
     assert datetime.fromisoformat(state["checked_until"]) > datetime(2026, 10, 14, tzinfo=timezone.utc)
+
+
+def test_mail_continues_where_a_capped_check_stopped(workdir, mailbox, fake, http, monkeypatch):
+    monkeypatch.setattr(outlook, "MAX_MESSAGES", 2)  # the inbox holds 3: the invite (newest) is not read
+    http.post(TELEGRAM, json={"ok": True})
+
+    assert hunt.cmd_mail(mail_args()) == 0
+
+    assert "Next steps at Beta" not in fake.calls[0]["messages"][0]["content"]
+    state = json.loads((workdir / "mail_state.json").read_text())
+    # The next check starts at the newest email read (the newsletter, 2026-10-12T09:00Z), not at this check's time.
+    assert datetime.fromisoformat(state["checked_until"]) - mail.OVERLAP == datetime(2026, 10, 12, 9, tzinfo=timezone.utc)
+
 
 
 def test_mail_failed_send_keeps_the_email_for_the_next_check(workdir, mailbox, fake, http):
