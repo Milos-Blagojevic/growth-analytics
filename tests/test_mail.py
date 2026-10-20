@@ -1,5 +1,6 @@
 import argparse
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -90,6 +91,24 @@ def test_mail_labels_application_email_saves_updates_and_tells_telegram(workdir,
     assert hunt.cmd_mail(mail_args()) == 0
     assert len(fake.calls) == 1 and len(telegram_api.calls) == 1
     assert len(mail.update_files(workdir)) == 1
+
+
+def test_mail_reads_an_email_claude_left_unlabelled_again(workdir, mailbox, fake_claude, monkeypatch, http):
+    http.post(TELEGRAM, json={"ok": True})
+    only_first = fake_claude({"emails": LABELS["emails"][:1]})  # 2 candidates, 1 label
+    monkeypatch.setattr(scoring, "_client", lambda: only_first)
+
+    assert hunt.cmd_mail(mail_args()) == 0
+
+    state = json.loads((workdir / "mail_state.json").read_text())
+    assert set(state["seen"]) == {"<m1@mail.example>"}
+    # The next check starts at the missed email (received 2026-10-13T09:00Z), however long ago that was.
+    assert datetime.fromisoformat(state["checked_until"]) - mail.OVERLAP == datetime(2026, 10, 13, 9, tzinfo=timezone.utc)
+
+    hunt.cmd_mail(mail_args())
+    retried = only_first.calls[1]["messages"][0]["content"]
+    assert "Next steps at Beta" in retried and "Your application to Acme" not in retried
+    assert set(json.loads((workdir / "mail_state.json").read_text())["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"}
 
 
 def test_mail_failed_send_keeps_the_email_for_the_next_check(workdir, mailbox, fake, http):

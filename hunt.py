@@ -507,8 +507,14 @@ def cmd_mail(args):
             for part in telegram.pack_blocks([mail.format_message(updates, dashboard_url())]):
                 telegram.send(part)
             print(f"Sent {len(updates)} update(s) to Telegram.")
-        # only after a successful send, so a failed send is labelled and sent again next time
-        mail.save_state(args.state, mail.next_state(state, started, [m["id"] for m in candidates]))
+        # Only after a successful send, so a failed send is labelled and sent again next time. Emails Claude left
+        # unlabelled are not marked seen, and the next check starts early enough to read them again.
+        labelled = {e["id"] for e in events}
+        missed = [m for m in candidates if m["id"] not in labelled]
+        if missed:
+            logger.warning("Claude returned no label for %d email(s); the next check labels them again", len(missed))
+        until = min([started] + [datetime.fromisoformat(m["received_at"]).astimezone() + mail.OVERLAP for m in missed])
+        mail.save_state(args.state, mail.next_state(state, until, labelled))
     print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
     return 0
 
@@ -701,6 +707,8 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if args.func is cmd_outlook_login:  # interactive, up to 15 minutes; writes only the token file, so no lock
+        sys.exit(args.func(args))
     # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
     try:
         with runs.lock():

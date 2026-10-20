@@ -88,3 +88,28 @@ def test_handled_updates_stay_handled_after_reingest_and_schema_changes(root, ap
 
     assert app_client.get("/pipeline").status_code == 200
     assert [s[0] for s in suggested(root)] == ["Acme Inc."]
+
+
+@pytest.mark.parametrize(
+    ("company", "sender", "item", "same"),
+    [
+        ("Acme Inc.", "no-reply@greenhouse-mail.io", {"name": "Acme", "domain": "acme.com"}, True),
+        ("Acme Analytics", "no-reply@greenhouse-mail.io", {"name": "Acme", "domain": "acme.com"}, True),
+        ("SE Ranking", "jobs@lever.co", {"name": "Seranking", "domain": "seranking.com"}, True),
+        ("", "talent@mail.beta.io", {"name": "Beta", "domain": "beta.io"}, True),
+        ("Acme Analytics", "no-reply@greenhouse-mail.io", {"name": "Analytics Co", "domain": "analyticsco.io"}, False),
+        ("Betamax", "no-reply@greenhouse-mail.io", {"name": "Beta", "domain": "beta.io"}, False),
+        ("", "no-reply@greenhouse-mail.io", {"name": "Beta", "domain": "beta.io"}, False),
+    ],
+)
+def test_company_matching(company, sender, item, same):
+    assert email_updates.same_company({"company": company, "from_address": sender}, item) is same
+
+
+def test_only_https_outlook_links_are_shown(tmp_path):
+    write_mail(tmp_path, "20261015-090000", [mail_update(1, "rejected", "Zeta") | {"web_link": "javascript:alert(1)"},
+                                             mail_update(2, "rejected", "Eta")])
+
+    page = client(create_app(tmp_path)).get("/pipeline").text
+
+    assert "javascript:" not in page and 'href="https://outlook.live.com/2"' in page

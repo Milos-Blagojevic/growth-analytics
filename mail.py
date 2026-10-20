@@ -78,7 +78,8 @@ def since(state, now, *, days=LOOKBACK_DAYS):
 
 
 def next_state(state, now, labelled_ids):
-    """State after a check that started at `now` (aware) and labelled `labelled_ids`."""
+    """State after a check that read mail up to `now` (aware) and labelled `labelled_ids`; the next check starts
+    OVERLAP before `now`."""
     cutoff = (now - timedelta(days=SEEN_DAYS)).isoformat(timespec="seconds")
     seen = {i: t for i, t in state.get("seen", {}).items() if t >= cutoff}
     seen.update({i: now.isoformat(timespec="seconds") for i in labelled_ids})

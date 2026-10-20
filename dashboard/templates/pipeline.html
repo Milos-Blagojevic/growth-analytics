@@ -16,7 +16,7 @@
       <p class="suggestion-text"><span class="tag status s-{{ s.status }}">{{ 'Rejected' if s.outcome == 'rejected' else 'Interview invite' }}</span>
         {{ s.company or s.sender }}{% if s.role %} · {{ s.role }}{% endif %}</p>
       <p class="small">{{ s.summary }}</p>
-      <p class="muted small">“{{ s.subject }}” · {{ s.sender }} · {{ s.received_at | ago }}{% if s.web_link %} · <a class="link" href="{{ s.web_link }}" target="_blank" rel="noopener">Open in Outlook ↗</a>{% endif %}</p>
+      <p class="muted small">“{{ s.subject }}” · {{ s.sender }} · {{ s.received_at | ago }}{% if s.web_link and s.web_link.startswith('https://') %} · <a class="link" href="{{ s.web_link }}" target="_blank" rel="noopener">Open in Outlook ↗</a>{% endif %}</p>
       {% for i in s.targets %}
       <div class="suggestion-foot">
         <span class="small">{{ i.title }} <span class="muted">· {{ i.name }} · {{ i.status | status }}</span></span>

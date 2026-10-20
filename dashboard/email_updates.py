@@ -22,18 +22,15 @@ def _words(text):
     return [w for w in re.findall(r"[a-z0-9]+", (text or "").lower().replace("&", " and ")) if w not in IGNORED_WORDS]
 
 
-def _contains(words, part):
-    n = len(part)
-    return any(words[i:i + n] == part for i in range(len(words) - n + 1))
-
-
 def _same_name(a, b):
+    """Same words, or one name extends the other at the end ("Acme" and "Acme Analytics", not "Analytics Co" and
+    "Acme Analytics")."""
     if not a or not b:
         return False
     if "".join(a) == "".join(b):  # "SE Ranking" and seranking.com
         return True
     shorter, longer = sorted((a, b), key=len)
-    return len("".join(shorter)) >= 3 and _contains(longer, shorter)  # "Acme" and "Acme Analytics"
+    return len("".join(shorter)) >= 3 and longer[:len(shorter)] == shorter
 
 
 def same_company(update, item):
