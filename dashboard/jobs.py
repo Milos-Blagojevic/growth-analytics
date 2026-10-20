@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 
 import interviews
+import mail
+import outlook
 import runs
 from dashboard import db, ingest
 
@@ -35,6 +37,10 @@ CLAUDE_DOLLARS_PER_COMPANY = 0.27 / 19
 # README: discovery runs 6 searches, "roughly $0.15-0.20 for --limit 20".
 DISCOVER_ESTIMATE = "Exa: roughly $0.15–0.20 (one search per target role plus one deep search; README figure)"
 MAX_DISCOVER_LIMIT = 50
+MAIL_ESTIMATE = ("Claude: one call per 20 application emails found, a few cents each; none when no email looks like "
+                 "one. Reading Outlook is free.")
+NEWS_ESTIMATE = ["Exa: about $0.007 per search, one per [news].topics entry.",
+                 "Claude: one call, a few cents; none when there are no new articles."]
 
 
 @dataclass
@@ -85,6 +91,23 @@ def build(conn, root, form):
         return Spec("watch", ["watch"] + (["--dry-run"] if dry else []), "Watch list" + (" (dry run)" if dry else ""),
                     {"kind": kind, "dry_run": "1" if dry else ""}, estimate=["Free: Ashby's public API only."],
                     warnings=warnings)
+    if kind == "mail":
+        if not (Path(root) / outlook.TOKEN_FILE).exists():
+            raise ValueError("Sign in to Outlook first: run `python hunt.py outlook-login` in the data folder "
+                             "(see README, Email updates).")
+        dry = form.get("dry_run") == "1"
+        warnings = [f"Sends the sender, subject and first {mail.BODY_CHARS:,} characters of each email that looks "
+                    "like an application email to Claude."]
+        if not dry:
+            warnings.append("Sends rejections and interview invites to Telegram and records the checked mail in "
+                            f"{mail.STATE}.")
+        return Spec("mail", ["mail"] + (["--dry-run"] if dry else []), "Check email" + (" (dry run)" if dry else ""),
+                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=[MAIL_ESTIMATE], warnings=warnings)
+    if kind == "news":
+        dry = form.get("dry_run") == "1"
+        warnings = [] if dry else ["Sends the digest to Telegram and records the articles in news_state.json."]
+        return Spec("news", ["news"] + (["--dry-run"] if dry else []), "News digest" + (" (dry run)" if dry else ""),
+                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=NEWS_ESTIMATE, warnings=warnings)
     if kind == "send":
         run_id = form.get("run_id", "")
         scored = {r["run_id"] for r in conn.execute("SELECT DISTINCT run_id FROM results WHERE score IS NOT NULL")}

@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 
 import interviews
 import runs
-from dashboard import auth, db, ingest, jobs, projects, queries, schedule, tracking
+from dashboard import auth, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
 
 HERE = Path(__file__).parent
 VERDICT_LABELS = {
@@ -297,7 +297,22 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     @app.get("/pipeline", response_class=HTMLResponse)
     def pipeline(request: Request):
         with connection() as conn:
-            return render(request, "pipeline.html", conn, page="pipeline", columns=tracking.pipeline(conn))
+            return render(request, "pipeline.html", conn, page="pipeline", columns=tracking.pipeline(conn),
+                          mail_suggestions=email_updates.suggestions(conn))
+
+    @app.post("/mail/decide")
+    async def mail_decide(request: Request):
+        """Confirm an email update (set its suggested status on one tracked item) or dismiss it."""
+        form = await request.form()
+        with connection() as conn:
+            try:
+                email_updates.decide(conn, form.get("update", ""), form.get("action", ""), form.get("kind", ""),
+                                     form.get("ref", ""))
+            except LookupError as exc:
+                return PlainTextResponse(str(exc), status_code=409)
+            except ValueError as exc:
+                return PlainTextResponse(str(exc), status_code=400)
+        return reload()
 
     @app.get("/projects", response_class=HTMLResponse)
     def projects_page(request: Request):

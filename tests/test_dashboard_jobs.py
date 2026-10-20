@@ -100,6 +100,18 @@ def test_exit_code_decides_the_job_status(root, app, monkeypatch):
     assert (discover["status"], discover["args"]) == ("failed", ["discover", "fintech", "--limit", "5"])
 
 
+def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, app):
+    c = client(app)
+    assert "Sign in to Outlook first" in c.post("/runs/preview", data={"kind": "mail"}).text
+    assert c.post("/runs", data={"kind": "mail"}).status_code == 400
+
+    (root / "outlook_token.json").write_text("{}")
+    preview = c.post("/runs/preview", data={"kind": "mail"}).text
+    assert "first 2,000 characters of each email" in preview and "Sends rejections and interview invites to Telegram" in preview
+    job = finished(root, started_job_id(c.post("/runs", data={"kind": "mail", "dry_run": "1"})))
+    assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])
+
+
 def test_one_command_at_a_time(root, app, monkeypatch):
     c = client(app)
     with runs.lock(root):  # e.g. a cron `hunt.py watch`

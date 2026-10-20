@@ -20,11 +20,16 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
         {"kind": "watch", "dry_run": "1"},
     ]
     assert schedule.parse("0 8 * * * run --dry-run")[0].form == {"kind": "run", "mode": "dry_run"}
+    assert [e.form for e in schedule.parse("0 8-20/2 * * * mail; 0 8 * * 1 news --dry-run")] == [
+        {"kind": "mail", "dry_run": ""},
+        {"kind": "news", "dry_run": "1"},
+    ]
 
 
 @pytest.mark.parametrize(
     "line, message",
     [
+        ("0 7 * * * mail --days 30", "unsupported command"),
         ("0 7 * * * send", "unsupported command"),
         ("0 7 * * * run --dry-run --research-only", "unsupported command"),
         ("0 7 * * * discover --limit 99", "--limit must be a number from 1 to 50"),
