@@ -19,6 +19,7 @@ outlook_token.json*
 .git/
 .github/
 .claude/
+.change-reports/
 .venv/
 tests/
 **/__pycache__/
