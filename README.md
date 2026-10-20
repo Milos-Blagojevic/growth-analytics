@@ -310,7 +310,8 @@ Not built yet; recorded so they can be picked up later.
 | `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
-| `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships; `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py` |
+| `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships (agents run it themselves; you can run `/verify <what the change should do>`); `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py` |
+| `.claude/skills/visualize-changes/` | `/visualize-changes` skill, run only when you ask: an HTML report that explains the branch's changes (short descriptions, before/after, diagrams, old and new dashboard pages side by side, where the change lands; no diff), saved in `.change-reports/` (git-ignored) |
 | `docs/specs/` | Specs handed to coding agents: `gtm-attribution-model.md` (public attribution, CAC and payback model) and `fee-verification-engine.md` (public payment fee verification engine on synthetic data) |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |

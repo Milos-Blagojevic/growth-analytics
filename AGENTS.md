@@ -80,9 +80,11 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 - Mock Ashby, posting pages, Telegram, Microsoft sign-in and Graph through `responses`; use the `claude` fixture (`FakeClaude`) instead of the Anthropic client (`fake_claude` for output models other than `Fit`).
 - New behavior gets a test in the matching `tests/test_<module>.py` (dashboard: `tests/test_dashboard_<module>.py`, with pipeline files built by `tests/dashboard_data.py` and requests made through FastAPI's `TestClient`).
 
-## Verification
+## Skills
 
-Before reporting a feature or behavior change done, committing it or opening a PR, have it checked by an agent that did not write it: the `verify` skill (`.claude/skills/verify/SKILL.md`). It runs the suite and free end-to-end smoke runs, reviews the diff adversarially and returns risks ranked by production impact with a verdict. In Claude Code it runs in a fresh subagent (`context: fork`); pass it what the change should do. Elsewhere, start a new subagent or session with none of the implementation history and give it the skill's body as its prompt, with that intent in place of `$ARGUMENTS`. On BLOCK or FIX BEFORE MERGE, fix the findings and verify again. README-only and test-only changes skip it.
+Before reporting a feature or behavior change done, committing it or opening a PR, have it checked by an agent that did not write it: the `verify` skill (`.claude/skills/verify/SKILL.md`). It runs the suite and free end-to-end smoke runs, reviews the diff adversarially and returns risks ranked by production impact with a verdict. In Claude Code it runs in a fresh subagent (`context: fork`); pass it what the change should do. Elsewhere, start a new subagent or session with none of the implementation history and give it the skill's body as its prompt, with that intent in place of `$ARGUMENTS`. On BLOCK or FIX BEFORE MERGE, fix the findings and verify again. README-only and test-only changes skip it. The owner can run it too: `/verify <what the change should do>`.
+
+`visualize-changes` (`.claude/skills/visualize-changes/SKILL.md`) builds an HTML report of the branch's changes in the git-ignored `.change-reports/`: short descriptions, before/after behavior, diagrams, old and new dashboard pages side by side, and a map of where the change lands, without a diff. Run it only when the owner asks for it.
 
 ## Docs
 

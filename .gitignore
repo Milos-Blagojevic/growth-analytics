@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .claude/settings.local.json
+.change-reports/
 .env
 profile.toml
 companies.csv
