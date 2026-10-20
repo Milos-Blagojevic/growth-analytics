@@ -34,6 +34,9 @@ KEYWORDS = (
     "interview", "not to move forward", "not moving forward", "move forward with other", "other candidates",
     "decided to pursue", "regret to inform", "unfortunately", "next steps", "hiring team", "recruiter",
 )
+# Senders whose mail is never about an application: Outlook's own notices, including its calendar reminders and
+# daily agenda ("Today: Interview with …"), which repeat interviews already on the calendar.
+IGNORED_SENDERS = ("no-reply@microsoft.com",)
 
 
 def sender_domain(address):
@@ -46,8 +49,10 @@ def domain_in(domain, domains):
 
 
 def likely(message):
-    """True for emails that may be about an application: sent through an ATS, or using application wording.
-    Only these are sent to Claude, so newsletters and personal mail stay on your side."""
+    """True for emails that may be about an application: sent through an ATS, or using application wording, and not
+    from IGNORED_SENDERS. Only these are sent to Claude, so newsletters and personal mail stay on your side."""
+    if message["from_address"] in IGNORED_SENDERS:
+        return False
     if domain_in(sender_domain(message["from_address"]), ATS_DOMAINS):
         return True
     text = f"{message['subject']}\n{message['body'][:BODY_CHARS]}".lower()

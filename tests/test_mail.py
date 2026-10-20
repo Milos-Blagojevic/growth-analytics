@@ -28,6 +28,8 @@ REJECTION = graph_message(1, "no-reply@us.greenhouse-mail.io", "Your application
                           + "x" * 3000 + " TAIL-BEYOND-LIMIT")
 NEWSLETTER = graph_message(2, "news@substack.com", "This week in dbt", "Ten new macros worth knowing.")
 INVITE = graph_message(3, "ana@beta.io", "Next steps at Beta", "We'd love to schedule a 30 minute call with you.")
+AGENDA = graph_message(4, "no-reply@microsoft.com", "Today: Interview with Beta",  # Outlook's daily agenda
+                       "Your agenda for today. 12:00 Interview with Beta (Zoom).")
 
 LABELS = {"emails": [
     {"number": 1, "outcome": "rejected", "company": "Acme", "role": "Analytics Engineer", "summary": "Acme declined."},
@@ -48,7 +50,7 @@ def workdir(tmp_path, monkeypatch):
 @pytest.fixture
 def mailbox(http):
     http.post(TOKEN_URL, json={"access_token": "at", "refresh_token": "rt-2"})
-    http.get(INBOX, json={"value": [REJECTION, NEWSLETTER, INVITE]})
+    http.get(INBOX, json={"value": [REJECTION, NEWSLETTER, INVITE, AGENDA]})
     http.get(JUNK, json={"value": []})
 
 
@@ -73,6 +75,7 @@ def test_mail_labels_application_email_saves_updates_and_tells_telegram(workdir,
     sent_to_claude = call["messages"][0]["content"]
     assert "Your application to Acme" in sent_to_claude and "Next steps at Beta" in sent_to_claude
     assert "This week in dbt" not in sent_to_claude  # no application wording, not an ATS: stays local
+    assert "Today: Interview with Beta" not in sent_to_claude  # Outlook's calendar reminder repeats the invite
     assert "TAIL-BEYOND-LIMIT" not in sent_to_claude  # only the first BODY_CHARS characters
     (text,) = [json.loads(c.request.body)["text"] for c in telegram_api.calls]
     assert "Rejected: Acme · Analytics Engineer\nAcme declined." in text
