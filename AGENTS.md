@@ -35,7 +35,7 @@ Do not run these without asking: they spend money or send real messages.
 - `hunt.py interview-prep` and `hunt.py interview-review`: paid Claude calls that send the owner's CV or a whole interview transcript to Anthropic.
 - Deploying to Railway, or changing its service variables (a change redeploys and interrupts a running job).
 
-`python -m dashboard` costs nothing by itself, but its Runs page, **Run selected**, **Re-run** and any `HUNT_SCHEDULE` entry start real `hunt.py` commands (paid, and possibly Telegram). For a smoke run, use a temporary directory of sample files with a fake `hunt.py` in it, never the owner's folder (with Docker, mount the fake over `/app/hunt.py`), keep `HUNT_SCHEDULE` to entries that start the fake, and do not start jobs against the real `hunt.py` without asking. Tests pass a stub through `create_app(root, hunt_command=[...])`.
+`python -m dashboard` costs nothing by itself, but its Runs page, **Run selected**, **Re-run** and any `HUNT_SCHEDULE` entry start real `hunt.py` commands (paid, and possibly Telegram): always the `hunt.py` next to the `dashboard` package, whatever `--root` is. For a local smoke run, serve a temporary folder of sample files with `.claude/skills/verify/scripts/sandbox.py`, which runs a fake `hunt.py` for every job and `HUNT_SCHEDULE` entry; never use the owner's folder. With Docker, mount a fake over `/app/hunt.py`. Do not start jobs against the real `hunt.py` without asking. Tests pass a stub through `create_app(root, hunt_command=[...])`.
 
 ## Git workspaces
 
@@ -72,6 +72,10 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 - Mock Exa at the HTTP level with the `exa` fixture (`tests/exa_mock.py`, Exa wire format), so the real SDK builds and parses requests. Do not patch `exa_client` functions.
 - Mock Ashby, posting pages and Telegram through `responses`; use the `claude` fixture (`FakeClaude`) instead of the Anthropic client.
 - New behavior gets a test in the matching `tests/test_<module>.py` (dashboard: `tests/test_dashboard_<module>.py`, with pipeline files built by `tests/dashboard_data.py` and requests made through FastAPI's `TestClient`).
+
+## Verification
+
+Before reporting a feature or behavior change done, committing it or opening a PR, have it checked by an agent that did not write it: the `verify` skill (`.claude/skills/verify/SKILL.md`). It runs the suite and free end-to-end smoke runs, reviews the diff adversarially and returns risks ranked by production impact with a verdict. In Claude Code it runs in a fresh subagent (`context: fork`); pass it what the change should do. Elsewhere, start a new subagent or session with none of the implementation history and give it the skill's body as its prompt, with that intent in place of `$ARGUMENTS`. On BLOCK or FIX BEFORE MERGE, fix the findings and verify again. README-only and test-only changes skip it.
 
 ## Docs
 
