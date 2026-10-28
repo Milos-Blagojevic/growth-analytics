@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import hunt
+import jev
 import runs
 import scoring
 from dashboard_data import INTERVIEW_TURNS, PREP, review_fields, wispr, write_interview
@@ -135,8 +136,9 @@ def research_exa(exa, http):
     return acme_role
 
 
-def test_research_only_saves_results_and_reports_failures(exa, http, workdir, capsys):
+def test_research_only_saves_results_and_reports_failures(exa, http, workdir, monkeypatch, capsys):
     research_exa(exa, http)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-jev-key")  # set, but research-only never screens (no mock needed)
 
     assert hunt.cmd_run(run_args(research_only=True)) == 1
 
@@ -146,7 +148,7 @@ def test_research_only_saves_results_and_reports_failures(exa, http, workdir, ca
     manifest = results["_run.json"]
     assert (manifest["mode"], manifest["companies"], manifest["errors"]) == ("research_only", 2, 1)
     assert manifest["exa"]["requests"] == 2
-    assert manifest["claude"] is None
+    assert manifest["claude"] is None and manifest["jev"] is None
     assert "Exa: 2 requests" in capsys.readouterr().out  # Acme search + posting text; failures are not tallied
 
 
@@ -171,7 +173,44 @@ def test_run_scores_and_sends_digest_to_telegram(exa, http, workdir, monkeypatch
     manifest = results["_run.json"]
     assert manifest["mode"] == "deliver"
     assert manifest["claude"] == {"model": scoring.DEFAULT_MODEL, "input_tokens": 1200, "output_tokens": 300}
+    assert manifest["jev"] is None  # no TYPESAFE_API_KEY: no screen
     assert "Sent 1 Telegram message(s)" in capsys.readouterr().out
+
+
+def test_run_skips_claude_for_a_company_jev_screens_out_and_records_jev_cost(exa, http, workdir, monkeypatch, claude,
+                                                                            jev_api, capsys):
+    research_exa(exa, http)
+    jev_api.on(lambda state, key, question: [0, 0.05, 0.9, 0.05] if key == "seniority"
+               else 0.03 if key == "target_role" else 0.5)
+    fake = claude()
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+    hunt.cmd_run(run_args(dry_run=True))
+
+    assert fake.calls == []
+    acme = saved_results(workdir)["acme.com.json"]
+    assert (acme["fit"]["score"], acme["fit"]["verdict"]) == (0, "skip")
+    assert acme["screen"]["roles"][0]["failed"] == ["not one of your target roles"]
+    manifest = saved_results(workdir)["_run.json"]
+    assert manifest["jev"] == {"model": jev.DEFAULT_MODEL, "requests": 1, "input_tokens": 500, "dollars": 0.000021}
+    assert manifest["claude"]["input_tokens"] == 0
+    assert "Acme [0]: Senior Analytics Engineer: not one of your target roles" in capsys.readouterr().out
+
+
+def test_run_scores_every_role_with_claude_when_jev_fails(exa, http, workdir, monkeypatch, claude):
+    research_exa(exa, http)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "revoked")
+    http.post(jev.API_URL, status=401, json={"detail": "invalid key"})
+    fake = claude()
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+    hunt.cmd_run(run_args(dry_run=True))
+
+    acme = saved_results(workdir)["acme.com.json"]
+    assert "HTTP 401" in acme["screen"]["error"] and acme["fit"]["score"] == 80
+    assert "Senior Analytics Engineer" in fake.calls[0]["messages"][0]["content"]
 
 
 @pytest.mark.parametrize(

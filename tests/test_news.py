@@ -4,6 +4,7 @@ import json
 import pytest
 
 import hunt
+import news
 import scoring
 from exa_mock import error, result, search_response
 
@@ -77,6 +78,50 @@ def test_news_sends_picked_articles_once(workdir, searches, fake_claude, monkeyp
     # Nothing new next time: no Claude call, no message.
     assert hunt.cmd_news(news_args()) == 0
     assert len(fake.calls) == 1 and len(telegram_api.calls) == 1
+
+
+def test_jev_drops_irrelevant_articles_and_claude_reads_the_rest(workdir, searches, fake_claude, monkeypatch, http,
+                                                                jev_api):
+    relevance = {"Experiment platforms in 2026": 0.1, "Analytics hiring rebounds": news.RELEVANT_MIN}
+    jev_api.on(lambda state, key, question: relevance[state["article"]["title"]])
+    fake = fake_claude({"overview": "o", "picks": [{"number": 1, "takeaway": "Demand is up."}]})
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    telegram_api = http.post(TELEGRAM, json={"ok": True})
+
+    assert hunt.cmd_news(news_args()) == 0
+
+    assert jev_api.requests[0]["state"]["candidate"] == {"target_roles": ["growth engineer"],
+                                                         "interests": ["growth engineering", "data analytics job market"]}
+    content = fake.calls[0]["messages"][0]["content"]
+    assert "1. Analytics hiring rebounds" in content and "Experiment platforms" not in content
+    (text,) = [json.loads(c.request.body)["text"] for c in telegram_api.calls]
+    assert "Analytics hiring rebounds (news.example.com)\nDemand is up." in text
+    state = json.loads((workdir / "news_state.json").read_text())
+    assert {"https://blog.example.com/experiments", SHARED} <= set(state)  # dropped articles are not screened again
+
+
+def test_no_claude_call_when_jev_finds_nothing_relevant(workdir, searches, fake_claude, monkeypatch, jev_api, capsys):
+    jev_api.on(lambda state, key, question: 0.05)
+    fake = fake_claude({"overview": "o", "picks": []})
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+
+    assert hunt.cmd_news(news_args()) == 0
+
+    assert fake.calls == []
+    assert "None of 2 new article(s) was worth sending." in capsys.readouterr().out
+
+
+def test_claude_reads_every_article_when_jev_gives_no_usable_answer(workdir, searches, fake_claude, monkeypatch,
+                                                                    jev_api):
+    jev_api.on(lambda state, key, question: None)  # 200 with a null probability
+    fake = fake_claude({"overview": "o", "picks": []})
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+
+    assert hunt.cmd_news(news_args(dry_run=True)) == 0
+
+    assert len(jev_api.requests) == 1  # the first failure stops the screen
+    content = fake.calls[0]["messages"][0]["content"]
+    assert "Experiment platforms in 2026" in content and "Analytics hiring rebounds" in content
 
 
 def test_news_reports_a_failed_topic_and_keeps_the_rest(workdir, exa, fake_claude, monkeypatch, capsys):

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 import hunt
+import jev
 import mail
 import mail_labels
 import outlook
@@ -155,6 +156,48 @@ def test_mail_dry_run_prints_labels_only(workdir, mailbox, fake, capsys):
     out = capsys.readouterr().out
     assert "- rejected: Acme · Analytics Engineer" in out and "Rejected: Acme" in out
     assert not (workdir / "mail_state.json").exists() and mail.update_files(workdir) == []
+
+
+RECEIVED = graph_message(5, "no-reply@greenhouse-mail.io", "Thanks for applying to Gamma",
+                         "We received your application and will review it.")
+JEV_SORTS = {  # subject -> Jev's (outcome, confidence)
+    "Your application to Acme": ("rejected", 0.9),
+    "Thanks for applying to Gamma": ("other", 0.95),  # clear: dropped before Claude
+    "Next steps at Beta": ("other", 0.6),  # not sure enough: Claude decides
+}
+
+
+def test_jev_drops_clear_non_updates_and_claude_labels_the_rest(workdir, fake, http, jev_api):
+    http.post(TOKEN_URL, json={"access_token": "at", "refresh_token": "rt-2"})
+    http.get(INBOX, json={"value": [REJECTION, INVITE, RECEIVED]})
+    http.get(JUNK, json={"value": []})
+    http.post(TELEGRAM, json={"ok": True})
+    jev_api.on(lambda state, key, question: JEV_SORTS[state["subject"]])
+
+    assert hunt.cmd_mail(mail_args()) == 0
+
+    assert len(jev_api.requests) == 3
+    sent_to_claude = fake.calls[0]["messages"][0]["content"]
+    assert "Your application to Acme" in sent_to_claude and "Next steps at Beta" in sent_to_claude
+    assert "Thanks for applying to Gamma" not in sent_to_claude
+    (saved,) = mail.update_files(workdir)
+    assert json.loads(saved.read_text())["screened_out"] == 1
+    # The dropped email counts as checked: neither Jev nor Claude reads it again.
+    assert set(json.loads((workdir / "mail_state.json").read_text())["seen"]) == {
+        "<m1@mail.example>", "<m3@mail.example>", "<m5@mail.example>"}
+
+
+def test_mail_sends_every_application_email_to_claude_when_jev_is_down(workdir, mailbox, fake, http, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-jev-key")
+    typesafe = http.post(jev.API_URL, status=529)
+    http.post(TELEGRAM, json={"ok": True})
+
+    assert hunt.cmd_mail(mail_args()) == 0
+
+    assert len(typesafe.calls) == jev.MAX_ATTEMPTS  # tried once, with retries, then the rest skip Jev
+    sent_to_claude = fake.calls[0]["messages"][0]["content"]
+    assert "Your application to Acme" in sent_to_claude and "Next steps at Beta" in sent_to_claude
+    assert len(mail.update_files(workdir)) == 1
 
 
 def update(n, outcome, company, role="", summary=""):

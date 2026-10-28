@@ -1,6 +1,8 @@
-"""News digest: recent articles on your [news].topics from Exa, picked and summarised by Claude, each sent once.
+"""News digest: recent articles on your [news].topics from Exa, screened for relevance by Jev, then picked and
+summarised by Claude, each sent once.
 
-STATE (news_state.json) maps every article URL already given to Claude to when, so a later digest skips it.
+STATE (news_state.json) maps every article URL already considered (screened or given to Claude) to when, so a later
+digest skips it.
 """
 
 import json
@@ -12,6 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 import exa_client
+import jev
 import scoring
 
 logger = logging.getLogger("news")
@@ -22,6 +25,7 @@ PER_TOPIC = 8  # Exa results per topic
 MAX_PICKS = 8
 HIGHLIGHT_CHARS = 1200  # of each article's highlights sent to Claude
 KEEP_DAYS = 90  # how long sent URLs are remembered; older articles fall outside the date filter anyway
+RELEVANT_MIN = 0.3  # Jev's probability below which an article is dropped before Claude; uncertain ones reach Claude
 
 PROMPT = f"""\
 You pick news for a job seeker. You get the candidate's target roles and interests, and numbered articles \
@@ -93,6 +97,30 @@ def search(topics, state, *, days=DAYS):
     return articles, problems
 
 
+def screen(articles, profile, topics):
+    """Jev's relevance yes/no per article. Returns (relevant, dropped): dropped are the articles Jev puts below
+    RELEVANT_MIN, each with "jev_relevance". When a Jev request fails, that article and the rest go to Claude."""
+    candidate = {"target_roles": profile["search"]["roles"], "interests": topics}
+    question = jev.noul(
+        "Is this article worth this job seeker's time?",
+        true="A development in the job market for the candidate's target roles (hiring, layoffs, salaries, remote "
+             "work, demand for skills), or substantive news or ideas in one of the candidate's interests.",
+        false="A job listing, an ad, a press release without substance, or a topic outside the candidate's target "
+              "roles and interests.",
+    )
+    relevant, dropped = [], []
+    for i, a in enumerate(articles):
+        state = {"candidate": candidate, "article": {k: a[k] for k in ("title", "source", "published", "excerpt")}}
+        try:
+            p = jev.ask(state, {"relevant": question})["relevant"]["noul"]
+        except Exception as exc:
+            logger.warning("Jev failed (%s); Claude reads the remaining %d article(s)", exc, len(articles) - i)
+            relevant += articles[i:]
+            break
+        (dropped if p < RELEVANT_MIN else relevant).append(a | {"jev_relevance": p})
+    return relevant, dropped
+
+
 def digest(articles, profile, topics, *, client=None, model=None):
     """Returns (overview, picks, usage); picks are the chosen articles, each with its "takeaway"."""
     client = client or scoring._client()
@@ -124,7 +152,7 @@ def digest(articles, profile, topics, *, client=None, model=None):
 
 
 def next_state(state, articles, now=None):
-    """State with `articles` recorded as given to Claude now; entries older than KEEP_DAYS dropped."""
+    """State with `articles` recorded as considered now; entries older than KEEP_DAYS dropped."""
     now = now or datetime.now()
     cutoff = (now - timedelta(days=KEEP_DAYS)).isoformat(timespec="seconds")
     kept = {url: t for url, t in state.items() if t >= cutoff}

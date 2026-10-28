@@ -32,15 +32,19 @@ RUN_MODES = {
     "deliver": ("Run and notify", []),  # research + score + Telegram notification
     "research_only": ("Research only", ["--research-only"]),
 }
-# README: "a full 19-company run currently costs about $0.27 in Claude".
+# README: "a full 19-company run currently costs about $0.27 in Claude" (before the Jev screen, so an upper bound).
 CLAUDE_DOLLARS_PER_COMPANY = 0.27 / 19
+JEV_RUN_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): under $0.001 per company, one request per open role; "
+                    "companies whose roles all fail the screen skip Claude.")
 # README: discovery runs 6 searches, "roughly $0.15-0.20 for --limit 20".
 DISCOVER_ESTIMATE = "Exa: roughly $0.15–0.20 (one search per target role plus one deep search; README figure)"
 MAX_DISCOVER_LIMIT = 50
-MAIL_ESTIMATE = ("Claude: one call per 20 application emails found, a few cents each; none when no email looks like "
-                 "one. Reading Outlook is free.")
+MAIL_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): one request per application email, a fraction of a cent in total. "
+                 "Claude: one call per 20 application emails Jev does not rule out, a few cents each; none when no "
+                 "email looks like one. Reading Outlook is free.")
 NEWS_ESTIMATE = ["Exa: about $0.007 per search, one per [news].topics entry.",
-                 "Claude: one call, a few cents; none when there are no new articles."]
+                 "Jev (when TYPESAFE_API_KEY is set): one request per new article, a fraction of a cent in total.",
+                 "Claude: one call, a few cents; none when no new article is relevant."]
 
 
 @dataclass
@@ -97,7 +101,8 @@ def build(conn, root, form):
                              "(see README, Email updates).")
         dry = form.get("dry_run") == "1"
         warnings = [f"Sends the sender, subject and first {mail.BODY_CHARS:,} characters of each email that looks "
-                    "like an application email to Claude."]
+                    "like an application email to Jev (TypeSafe, when TYPESAFE_API_KEY is set) and, unless Jev rules "
+                    "it out, to Claude."]
         if not dry:
             warnings.append("Sends rejections and interview invites to Telegram and records the checked mail in "
                             f"{mail.STATE}.")
@@ -185,7 +190,9 @@ def _build_run(conn, root, form):
         estimate = [f"Exa: about ${per_company * n:.2f} (${per_company:.3f} per company, average of {history} saved run{'s' if history > 1 else ''})."]
     warnings = []
     if mode != "research_only":
-        estimate.append(f"Claude: about ${CLAUDE_DOLLARS_PER_COMPANY * n:.2f} (README figure: $0.27 for 19 companies).")
+        estimate.append(f"Claude: at most about ${CLAUDE_DOLLARS_PER_COMPANY * n:.2f} (README figure: $0.27 for 19 "
+                        "companies, before the Jev screen).")
+        estimate.append(JEV_RUN_ESTIMATE)
     if mode == "deliver":
         warnings.append("Sends the notification to Telegram.")
     fields = {"kind": "run", "mode": mode, "domains": [d for _, d in companies] if companies else []}

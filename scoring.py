@@ -1,4 +1,5 @@
-"""Fit scoring: Claude judges researched companies against the candidate profile."""
+"""Fit scoring: Jev screens each open role against hard requirements, then Claude judges the company and the roles
+that passed against the candidate profile."""
 
 import json
 import os
@@ -7,7 +8,30 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel
 
+import jev
+
 DEFAULT_MODEL = "claude-sonnet-5-5"
+
+# Role screen: a role is dropped before Claude only when Jev is confident it fails a hard requirement of the rubric
+# below (target role, seniority, location). Uncertain answers go on to Claude, which applies the full rubric.
+SCREEN_YES = 0.9  # Jev's probability that counts as a confident yes
+SCREEN_NO = 0.1  # ... and as a confident no
+BELOW_SENIOR_MIN = 0.9  # probability of junior or mid-level that drops a role
+# Lowest first. SYSTEM_PROMPT's rubric counts senior and above, not junior or mid-level (levels 0 and 1): keep in step.
+SENIORITY_LEVELS = ["Intern, junior or entry level", "Mid-level", "Senior", "Lead, staff, principal or above"]
+ROLE_QUESTIONS = {
+    "target_role": jev.noul(
+        "The role's function is one of the candidate's target roles, or its duties clearly overlap with one of them."),
+    "seniority": jev.score("The seniority level of the role.", SENIORITY_LEVELS),
+}
+LOCATION_QUESTIONS = {
+    "region_excludes_candidate": jev.noul(
+        "The posting limits who can take the role to countries or regions that do not include the candidate's "
+        "location (for example remote for US residents only, or candidates must live in Germany)."),
+    "onsite_or_hybrid_only": jev.noul("The role is on-site or hybrid only: the posting offers no fully remote option."),
+    "office_in_candidate_country": jev.noul("The role's office is in the same country as the candidate's location."),
+    "relocation": jev.noul("The posting offers relocation support."),
+}
 
 SYSTEM_PROMPT = """\
 You assess how well a company and its open roles fit a job seeker. Use ONLY the research evidence \
@@ -101,8 +125,76 @@ def candidate(profile):
     }
 
 
-def score_company(research, profile, *, model=None, client=None):
-    """Returns (Fit, usage) where usage is {"input_tokens", "output_tokens"}."""
+def _role_failures(answers, location):
+    """Hard requirements the role confidently fails, as short phrases; empty when it goes on to Claude."""
+    failed = []
+    if answers["target_role"]["noul"] <= SCREEN_NO:
+        failed.append("not one of your target roles")
+    levels = answers["seniority"]["probabilities"]
+    if levels.get("0", 0) + levels.get("1", 0) >= BELOW_SENIOR_MIN:
+        failed.append("below senior level")
+    if location and answers["relocation"]["noul"] <= SCREEN_NO:
+        if answers["region_excludes_candidate"]["noul"] >= SCREEN_YES:
+            failed.append(f"limited to regions that exclude {location}, no relocation")
+        elif (answers["onsite_or_hybrid_only"]["noul"] >= SCREEN_YES
+              and answers["office_in_candidate_country"]["noul"] <= SCREEN_NO):
+            failed.append(f"on-site or hybrid in another country than {location}, no relocation")
+    return failed
+
+
+def screen_roles(research, profile):
+    """Jev checks each open role against the rubric's hard requirements, one request per role.
+
+    Returns {"model", "roles": [{"title", "url", "passed", "failed", "answers"}]} in open_roles order: "failed" names
+    what a dropped role confidently fails, "answers" keeps Jev's probabilities for tuning the thresholds. The location
+    questions are skipped when the profile has no location. Raises when a Jev request fails.
+    """
+    location = profile["candidate"]["location"].strip()
+    questions = ROLE_QUESTIONS | (LOCATION_QUESTIONS if location else {})
+    seeker = {"target_roles": profile["search"]["roles"], **({"location": location} if location else {})}
+    roles = []
+    for role in research["content"]["open_roles"]:
+        posting = {k: role[k] for k in ("title", "location", "remote_or_relocation", "description") if role.get(k)}
+        answers = jev.ask({"candidate": seeker, "role": posting}, questions)
+        failed = _role_failures(answers, location)
+        compact = {key: a["noul"] if "noul" in a else {"score": a["score"], "probabilities": a["probabilities"]}
+                   for key, a in answers.items()}
+        roles.append({"title": role["title"], "url": role["url"], "passed": not failed, "failed": failed,
+                      "answers": compact})
+    return {"model": jev.model(), "roles": roles}
+
+
+def _screened_out(screen):
+    """The skip a company gets when Jev drops every open role; Claude is not asked. At most 3 concerns, like Claude's."""
+    concerns = [f"{r['title']}: {', '.join(r['failed'])}" for r in screen["roles"]]
+    if len(concerns) > 3:
+        concerns = concerns[:2] + [f"{len(concerns) - 2} more open roles also failed the screen (see screen in out/)"]
+    return Fit(
+        score=0,
+        verdict="skip",
+        best_role_title="",
+        best_role_url="",
+        reasons=[],
+        concerns=concerns,
+        location_assessment="Not assessed: every open role was screened out before scoring.",
+        next_step="Nothing: no open role meets your hard requirements (see concerns).",
+        gap_note="",
+        proof_ideas=[],
+        scope_note="",
+    )
+
+
+def score_company(research, profile, *, screen=None, model=None, client=None):
+    """Returns (Fit, usage) where usage is {"input_tokens", "output_tokens"}.
+
+    With a `screen` (screen_roles), Claude sees only the roles that passed it, and a company whose roles all failed
+    gets a skip with score 0 without a Claude call.
+    """
+    if screen and screen["roles"]:
+        if not any(r["passed"] for r in screen["roles"]):
+            return _screened_out(screen), {"input_tokens": 0, "output_tokens": 0}
+        passed = [role for role, r in zip(research["content"]["open_roles"], screen["roles"], strict=True) if r["passed"]]
+        research = {**research, "content": {**research["content"], "open_roles": passed}}
     client = client or _client()
     user_content = (
         "Candidate:\n"
