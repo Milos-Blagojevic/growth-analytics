@@ -243,7 +243,7 @@ def cmd_run(args):
     if deliver and not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
     if score and not jev.configured():
-        print("TYPESAFE_API_KEY is not set: Claude scores every open role (no Jev screen).")
+        print(f"{jev.NO_KEY}: Claude scores every open role (no Jev screen).")
 
     started_at = datetime.now()
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
@@ -513,7 +513,7 @@ def cmd_mail(args):
         for m in dropped:
             print(f"- other (Jev, confidence {m['jev_confidence']:.2f}): {m['from_address']} {m['subject']!r}")
     elif candidates:
-        print("TYPESAFE_API_KEY is not set: Claude labels every one.")
+        print(f"{jev.NO_KEY}: Claude labels every one.")
     events, usage = mail_labels.label(for_claude) if for_claude else ([], {"input_tokens": 0, "output_tokens": 0})
     for e in events:
         role = f" · {e['role']}" if e["role"] else ""

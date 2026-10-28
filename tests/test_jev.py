@@ -29,6 +29,29 @@ def test_retries_an_overloaded_api_and_tallies_only_billed_input(http):
                                    "dollars": 0.042}
 
 
+@pytest.mark.parametrize(("env", "sent"), [
+    ({"TYPESAFE_API_KEY": "", "JEV_API_KEY": "local-key"}, "local-key"),  # the local .env name
+    ({"TYPESAFE_API_KEY": "railway-key", "JEV_API_KEY": "local-key"}, "railway-key"),
+], ids=["jev-api-key", "both-set"])
+def test_either_key_name_works(http, monkeypatch, env, sent):
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    api = http.post(jev.API_URL, json=OK)
+
+    jev.ask("some text", QUESTIONS)
+
+    assert api.calls[0].request.headers["Authorization"] == f"Bearer {sent}"
+
+
+def test_no_key_means_no_screen_and_no_request(http, monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+
+    assert not jev.configured()
+    with pytest.raises(jev.JevError, match="No Jev key"):
+        jev.ask("some text", QUESTIONS)
+    assert len(http.calls) == 0
+
+
 def test_a_rejected_request_fails_at_once(http):
     http.post(jev.API_URL, status=401, json={"detail": "invalid key"})
 

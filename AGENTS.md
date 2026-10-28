@@ -12,7 +12,7 @@ Python 3.11+ CLI tools: an Exa search client (`exa_client.py`), a job-hunt pipel
 | `coaching.py` | Claude interview prep (`Prep`) and transcript review (`Review`, scores keyed by `interviews.SCORES`) |
 | `interviews.py` | Interview files (`interviews/<id>/`), transcript parsing and talk metrics; shared by `hunt.py` and the dashboard, no paid clients |
 | `exa_client.py` | The only place that talks to Exa: retries, cost logging, cost tally |
-| `jev.py` | The only place that talks to TypeSafe's Jev decision model: retries, usage tally, cost per token; optional (`TYPESAFE_API_KEY`) |
+| `jev.py` | The only place that talks to TypeSafe's Jev decision model: retries, usage tally, cost per token; optional (key in `JEV_API_KEY` locally, `TYPESAFE_API_KEY` on Railway; either name works) |
 | `ashby.py` | Ashby public job-board API (link checks and watch list) |
 | `watch.py` | Watch list: new matching postings from Ashby boards |
 | `outlook.py` | Outlook through Microsoft Graph, read-only (`Mail.Read`): device-code sign-in, refresh token in `outlook_token.json`, recent messages |
@@ -35,10 +35,10 @@ CI runs the same suite on Python 3.11 and 3.13 for every pull request and push t
 
 Do not run these without asking: they spend money or send real messages.
 
-- `python exa_client.py`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude and, when `TYPESAFE_API_KEY` is set, Jev.
+- `python exa_client.py`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude and, when a Jev key is set, Jev.
 - `hunt.py run` without `--dry-run`, `hunt.py send`, `hunt.py watch` without `--dry-run`: send to Telegram. `watch` also updates `watch_state.json`.
 - `hunt.py interview-prep` and `hunt.py interview-review`: paid Claude calls that send the owner's CV or a whole interview transcript to Anthropic.
-- `hunt.py mail` (any mode): reads the owner's mailbox and sends matching emails to Jev (when `TYPESAFE_API_KEY` is set) and Claude; without `--dry-run` it also sends to Telegram and updates `mail_state.json`. `hunt.py outlook-login` signs in to the owner's Microsoft account.
+- `hunt.py mail` (any mode): reads the owner's mailbox and sends matching emails to Jev (when a Jev key is set) and Claude; without `--dry-run` it also sends to Telegram and updates `mail_state.json`. `hunt.py outlook-login` signs in to the owner's Microsoft account.
 - `hunt.py news` (any mode): paid Exa, Jev and Claude calls; without `--dry-run` it sends to Telegram and updates `news_state.json`.
 - Deploying to Railway, or changing its service variables (a change redeploys and interrupts a running job).
 
@@ -59,7 +59,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 ## Conventions
 
 - All Exa requests go through the `exa_client` module functions so retries and cost tracking apply. Never construct `Exa` elsewhere.
-- All TypeSafe requests go through `jev.ask` so retries and the usage tally apply. Jev is a screen in front of Claude: it only drops items it is confident about, anything uncertain or any Jev failure goes on to Claude, and a missing `TYPESAFE_API_KEY` means no screen. Keep thresholds as named constants and keep the scoring screen's hard rules in step with `scoring.SYSTEM_PROMPT`.
+- All TypeSafe requests go through `jev.ask` so retries and the usage tally apply. Jev is a screen in front of Claude: it only drops items it is confident about, anything uncertain or any Jev failure goes on to Claude, and no key (`jev.KEY_VARS`) means no screen. Keep thresholds as named constants and keep the scoring screen's hard rules in step with `scoring.SYSTEM_PROMPT`.
 - Other HTTP goes through `requests` with an explicit timeout (existing calls use `timeout=15`). Tests intercept `requests` only, so another HTTP library would bypass the mocks.
 - Exa structured output (`search_structured`) allows nesting depth 2 and at most 10 properties in total, array item properties included. `research.RESEARCH_SCHEMA` is at 10: adding a field means removing one.
 - `scoring.SYSTEM_PROMPT` and the `Fit` model must agree. Verdict names also appear in `hunt.VERDICTS`, the digest code, `dashboard/queries.py` (`VERDICTS`, `NEW_VERDICTS`), `dashboard/app.py` (`VERDICT_LABELS`) and the verdict colours in `dashboard/static/app.css`; change them together.

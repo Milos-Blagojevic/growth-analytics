@@ -67,7 +67,7 @@ def test_preview_estimates_cost_from_saved_runs_and_names_side_effects(app):
     assert "2 companies in companies.csv" in dry
     assert "Exa: about $0.24 ($0.120 per company, average of 1 saved run)" in dry  # $0.12 for 1 saved result
     assert "Claude: at most about $0.03" in dry and "Telegram" not in dry
-    assert "Jev (when TYPESAFE_API_KEY is set): under $0.001 per company" in dry
+    assert "Jev (when a Jev key is set): under $0.001 per company" in dry
     research_only = c.post("/runs/preview", data={"kind": "run", "mode": "research_only"}).text
     assert "Claude:" not in research_only and "Jev (" not in research_only
 
@@ -111,7 +111,7 @@ def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, 
     (root / "outlook_token.json").write_text("{}")
     preview = c.post("/runs/preview", data={"kind": "mail"}).text
     assert "first 2,000 characters of each email" in preview and "Sends rejections and interview invites to Telegram" in preview
-    assert "to Jev (TypeSafe, when TYPESAFE_API_KEY is set)" in preview
+    assert "to Jev (TypeSafe, when a Jev key is set)" in preview
     job = finished(root, started_job_id(c.post("/runs", data={"kind": "mail", "dry_run": "1"})))
     assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])
 

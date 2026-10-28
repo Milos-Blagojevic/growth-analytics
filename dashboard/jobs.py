@@ -34,16 +34,16 @@ RUN_MODES = {
 }
 # README: "a full 19-company run currently costs about $0.27 in Claude" (before the Jev screen, so an upper bound).
 CLAUDE_DOLLARS_PER_COMPANY = 0.27 / 19
-JEV_RUN_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): under $0.001 per company, one request per open role; "
+JEV_RUN_ESTIMATE = ("Jev (when a Jev key is set): under $0.001 per company, one request per open role; "
                     "companies whose roles all fail the screen skip Claude.")
 # README: discovery runs 6 searches, "roughly $0.15-0.20 for --limit 20".
 DISCOVER_ESTIMATE = "Exa: roughly $0.15–0.20 (one search per target role plus one deep search; README figure)"
 MAX_DISCOVER_LIMIT = 50
-MAIL_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): one request per application email, a fraction of a cent in total. "
+MAIL_ESTIMATE = ("Jev (when a Jev key is set): one request per application email, a fraction of a cent in total. "
                  "Claude: one call per 20 application emails Jev does not rule out, a few cents each; none when no "
                  "email looks like one. Reading Outlook is free.")
 NEWS_ESTIMATE = ["Exa: about $0.007 per search, one per [news].topics entry.",
-                 "Jev (when TYPESAFE_API_KEY is set): one request per new article, a fraction of a cent in total.",
+                 "Jev (when a Jev key is set): one request per new article, a fraction of a cent in total.",
                  "Claude: one call, a few cents; none when no new article is relevant."]
 
 
@@ -101,7 +101,7 @@ def build(conn, root, form):
                              "(see README, Email updates).")
         dry = form.get("dry_run") == "1"
         warnings = [f"Sends the sender, subject and first {mail.BODY_CHARS:,} characters of each email that looks "
-                    "like an application email to Jev (TypeSafe, when TYPESAFE_API_KEY is set) and, unless Jev rules "
+                    "like an application email to Jev (TypeSafe, when a Jev key is set) and, unless Jev rules "
                     "it out, to Claude."]
         if not dry:
             warnings.append("Sends rejections and interview invites to Telegram and records the checked mail in "

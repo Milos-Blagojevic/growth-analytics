@@ -173,8 +173,10 @@ def test_run_scores_and_sends_digest_to_telegram(exa, http, workdir, monkeypatch
     manifest = results["_run.json"]
     assert manifest["mode"] == "deliver"
     assert manifest["claude"] == {"model": scoring.DEFAULT_MODEL, "input_tokens": 1200, "output_tokens": 300}
-    assert manifest["jev"] is None  # no TYPESAFE_API_KEY: no screen
-    assert "Sent 1 Telegram message(s)" in capsys.readouterr().out
+    assert manifest["jev"] is None  # no Jev key: no screen
+    out = capsys.readouterr().out
+    assert "No Jev key (JEV_API_KEY or TYPESAFE_API_KEY) is set: Claude scores every open role" in out
+    assert "Sent 1 Telegram message(s)" in out
 
 
 def test_run_skips_claude_for_a_company_jev_screens_out_and_records_jev_cost(exa, http, workdir, monkeypatch, claude,

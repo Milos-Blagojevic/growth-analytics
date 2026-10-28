@@ -34,8 +34,18 @@ class JevError(RuntimeError):
     pass
 
 
+# The same TypeSafe key under two names: TYPESAFE_API_KEY on Railway, JEV_API_KEY in the local .env.
+KEY_VARS = ("TYPESAFE_API_KEY", "JEV_API_KEY")
+NO_KEY = "No Jev key (JEV_API_KEY or TYPESAFE_API_KEY) is set"
+
+
+def api_key():
+    """The first of KEY_VARS that is set and not empty, else None."""
+    return next((os.environ[var] for var in KEY_VARS if os.environ.get(var)), None)
+
+
 def configured():
-    return bool(os.environ.get("TYPESAFE_API_KEY"))
+    return api_key() is not None
 
 
 def model():
@@ -91,16 +101,16 @@ def ask(state, questions):
     """Answers keyed like `questions`, each checked against its question's type. Retries transient failures; raises
     JevError otherwise. After a request fails for good because TypeSafe is down, overloaded or unreachable (not
     rate-limited), later calls in this process raise at once instead of waiting through the retries again."""
-    api_key = os.environ.get("TYPESAFE_API_KEY")
-    if not api_key:
-        raise JevError("TYPESAFE_API_KEY is not set")
+    key = api_key()
+    if not key:
+        raise JevError(NO_KEY)
     if _down.is_set():
         raise JevError("TypeSafe was unavailable earlier in this run")
     body = {"model": model(), "state": state, "questions": questions}
     for attempt in range(1, MAX_ATTEMPTS + 1):
         rate_limited = False
         try:
-            response = requests.post(API_URL, json=body, headers={"Authorization": f"Bearer {api_key}"},
+            response = requests.post(API_URL, json=body, headers={"Authorization": f"Bearer {key}"},
                                      timeout=TIMEOUT)
             retryable = response.status_code in RETRYABLE_STATUS
             rate_limited = response.status_code == 429
