@@ -28,6 +28,7 @@ from pathlib import Path
 import coaching
 import exa_client
 import interviews
+import jev
 import mail
 import mail_labels
 import news
@@ -92,7 +93,14 @@ def process_company(name, domain, profile, *, score):
     try:
         result["research"] = research.research_company(name, domain, profile)
         if score:
-            fit, usage = scoring.score_company(result["research"], profile)
+            screen = None
+            if jev.configured() and result["research"]["content"]["open_roles"]:
+                try:
+                    screen = result["screen"] = scoring.screen_roles(result["research"], profile)
+                except Exception as exc:  # the screen only saves Claude tokens: without it Claude scores every role
+                    logger.warning("%s: Jev screen failed (%s); Claude scores every role", name, exc)
+                    result["screen"] = {"error": f"{type(exc).__name__}: {exc}"}
+            fit, usage = scoring.score_company(result["research"], profile, screen=screen)
             result["fit"] = fit.model_dump()
             result["usage"] = usage
     except Exception as exc:  # one failing company must not abort the batch
@@ -207,17 +215,19 @@ def save_results(results, *, mode, started_at):
         "claude": {"model": os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL), **_tokens(results)}
         if mode != "research_only"
         else None,
+        "jev": jev.usage_summary() if mode != "research_only" and jev.configured() else None,
     }
     (run_dir / runs.MANIFEST).write_text(json.dumps(manifest, indent=2))
     return run_dir
 
 
-def log_costs(results):
+def log_costs(results, *, score):
     summary = exa_client.cost_summary()
     tokens = _tokens(results)
     print(
         f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
         f" | Claude: {tokens['input_tokens']} input / {tokens['output_tokens']} output tokens"
+        + (f" | {jev.summary_line()}" if score and jev.configured() else "")
     )
 
 
@@ -232,6 +242,8 @@ def cmd_run(args):
         sys.exit("ANTHROPIC_API_KEY is not set. Add it to .env (or use --research-only).")
     if deliver and not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
+    if score and not jev.configured():
+        print("TYPESAFE_API_KEY is not set: Claude scores every open role (no Jev screen).")
 
     started_at = datetime.now()
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
@@ -258,7 +270,7 @@ def cmd_run(args):
     else:
         print("\n\n".join(build_digest(results)))
 
-    log_costs(results)
+    log_costs(results, score=score)
     return 1 if any("error" in r for r in results) else 0
 
 
@@ -494,7 +506,15 @@ def cmd_mail(args):
     print(f"Checked {len(new)} new email(s) since {since.astimezone():%Y-%m-%d %H:%M}: "
           f"{len(candidates)} look like application email.")
 
-    events, usage = mail_labels.label(candidates) if candidates else ([], {"input_tokens": 0, "output_tokens": 0})
+    for_claude, dropped = candidates, []
+    if candidates and jev.configured():
+        for_claude, dropped = mail_labels.screen(candidates)
+        print(f"Jev: {len(dropped)} clearly not about an application; Claude labels {len(for_claude)}.")
+        for m in dropped:
+            print(f"- other (Jev, confidence {m['jev_confidence']:.2f}): {m['from_address']} {m['subject']!r}")
+    elif candidates:
+        print("TYPESAFE_API_KEY is not set: Claude labels every one.")
+    events, usage = mail_labels.label(for_claude) if for_claude else ([], {"input_tokens": 0, "output_tokens": 0})
     for e in events:
         role = f" · {e['role']}" if e["role"] else ""
         print(f"- {e['outcome']}: {e['company'] or e['from']}{role} ({e['received_at'][:16].replace('T', ' ')})"
@@ -506,24 +526,26 @@ def cmd_mail(args):
     else:
         if updates:
             path = mail.save_updates(".", updates, since=since.isoformat(timespec="seconds"), emails_checked=len(new),
-                                     labelled=len(events), model=os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
-                                     usage=usage)
+                                     screened_out=len(dropped), labelled=len(events),
+                                     model=os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL), usage=usage,
+                                     jev=jev.usage_summary() if jev.configured() else None)
             print(f"Saved {len(updates)} update(s) to {path}")
             for part in telegram.pack_blocks([mail.format_message(updates, dashboard_url())]):
                 telegram.send(part)
             print(f"Sent {len(updates)} email update(s) to Telegram.")
         # Only after a successful send, so a failed send is labelled and sent again next time.
         labelled = {e["id"] for e in events}
-        new_state, given_up = mail.next_state(state, read_until, labelled,
-                                              [m for m in candidates if m["id"] not in labelled])
-        if len(labelled) < len(candidates):
+        new_state, given_up = mail.next_state(state, read_until, labelled | {m["id"] for m in dropped},
+                                              [m for m in for_claude if m["id"] not in labelled])
+        if len(labelled) < len(for_claude):
             logger.warning("Claude returned no label for %d email(s); %d will be labelled again next time",
-                           len(candidates) - len(labelled), len(candidates) - len(labelled) - len(given_up))
+                           len(for_claude) - len(labelled), len(for_claude) - len(labelled) - len(given_up))
         for m in given_up:
             logger.warning("giving up on %r from %s after %d checks without a label", m["subject"],
                            m["from_address"], mail.MAX_TRIES)
         mail.save_state(args.state, new_state)
-    print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+    print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens"
+          + (f" | {jev.summary_line()}" if jev.configured() else ""))
     return 0
 
 
@@ -543,7 +565,13 @@ def cmd_news(args):
     if not articles:
         print(f"No new articles on {len(topics) - len(problems)}/{len(topics)} topic(s).")
     else:
-        overview, picks, usage = news.digest(articles, profile, topics)
+        relevant = articles
+        if jev.configured():
+            relevant, dropped = news.screen(articles, profile, topics)
+            print(f"Jev: {len(dropped)} of {len(articles)} new article(s) not relevant; Claude reads {len(relevant)}.")
+            for a in dropped:
+                print(f"- dropped (Jev, relevance {a['jev_relevance']:.2f}): {a['title']} ({a['source']})")
+        overview, picks, usage = news.digest(relevant, profile, topics) if relevant else ("", [], usage)
         if not picks:
             print(f"None of {len(articles)} new article(s) was worth sending.")
         else:
@@ -558,7 +586,8 @@ def cmd_news(args):
             news.save_state(args.state, news.next_state(state, articles))  # after the send, so failures retry
     summary = exa_client.cost_summary()
     print(f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
-          f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+          f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens"
+          + (f" | {jev.summary_line()}" if jev.configured() else ""))
     return 1 if problems else 0
 
 

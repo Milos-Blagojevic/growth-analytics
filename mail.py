@@ -4,7 +4,8 @@ Shared by hunt.py (the `mail` command) and the dashboard (which suggests status 
 no paid clients here. The labelling itself is in mail_labels.py.
 
 mail/<%Y%m%d-%H%M%S>.json holds the rejections and interview invites one check found (only checks that found
-some write a file). STATE (mail_state.json) holds when mail was last checked and the emails already labelled.
+some write a file). STATE (mail_state.json) holds when mail was last checked and the emails already labelled or
+screened out by Jev.
 """
 
 import json
@@ -18,9 +19,9 @@ SUGGESTED_STATUS = {"rejected": "rejected", "interview": "interviewing"}  # outc
 OUTCOME_LABELS = {"rejected": "Rejected", "interview": "Interview invite"}
 LOOKBACK_DAYS = 14  # the first check reads this far back
 OVERLAP = timedelta(hours=1)  # re-read the hour before the last check, for mail that arrives late
-SEEN_DAYS = 30  # how long labelled emails are remembered (they only need to cover OVERLAP)
+SEEN_DAYS = 30  # how long labelled and screened-out emails are remembered (they only need to cover OVERLAP)
 MAX_TRIES = 3  # checks that may send an email to Claude without getting a label back before it is given up on
-BODY_CHARS = 2000  # of each email's text sent to Claude
+BODY_CHARS = 2000  # of each email's text sent to Jev and Claude
 
 # Sender domains of applicant tracking systems that send application emails on the employer's behalf.
 ATS_DOMAINS = (
@@ -52,7 +53,7 @@ def domain_in(domain, domains):
 
 def likely(message):
     """True for emails that may be about an application: sent through an ATS, or using application wording, and not
-    Outlook's daily agenda. Only these are sent to Claude, so newsletters and personal mail stay on your side."""
+    Outlook's daily agenda. Only these are sent to Jev and Claude, so newsletters and personal mail stay on your side."""
     if (message["from_address"] == OUTLOOK_AGENDA_SENDER
             and message["subject"].lower().startswith(OUTLOOK_AGENDA_SUBJECT)):
         return False
@@ -63,7 +64,7 @@ def likely(message):
 
 
 def excerpt(body):
-    """The email's text as sent to Claude: whitespace collapsed, at most BODY_CHARS characters."""
+    """The email's text as sent to Jev and Claude: whitespace collapsed, at most BODY_CHARS characters."""
     return " ".join(body.split())[:BODY_CHARS]
 
 
@@ -89,9 +90,10 @@ def since(state, now, *, days=LOOKBACK_DAYS):
 def next_state(state, now, labelled_ids, missed=()):
     """State after a check that started at `now` (aware), and the emails given up on.
 
-    `labelled_ids` are remembered as seen. `missed` are emails sent to Claude that came back without a label: the
-    next check starts early enough to read them again, until an email has been missed MAX_TRIES times; then it is
-    remembered as seen too and returned, so a skipped email cannot make every later check pay for it again.
+    `labelled_ids` (labelled by Claude or screened out by Jev) are remembered as seen. `missed` are emails sent to
+    Claude that came back without a label: the next check starts early enough to read them again, until an email has
+    been missed MAX_TRIES times; then it is remembered as seen too and returned, so a skipped email cannot make every
+    later check pay for it again.
     """
     tries = dict(state.get("tries", {}))
     retry, given_up = [], []

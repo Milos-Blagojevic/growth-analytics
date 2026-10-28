@@ -5,14 +5,16 @@ import requests
 import responses
 
 import exa_client
+import jev
 import research
 import scoring
 from exa_mock import ExaMock
+from jev_mock import JevMock
 
 
 @pytest.fixture(autouse=True)
 def http():
-    """Intercepts every HTTP request made through `requests` (Exa SDK, Ashby, posting checks, Telegram).
+    """Intercepts every HTTP request made through `requests` (Exa SDK, Ashby, posting checks, Telegram, TypeSafe).
 
     Nothing reaches the network. A request with no registered mock fails the test, even when the code
     under test swallows the resulting ConnectionError.
@@ -33,16 +35,24 @@ def _isolate(monkeypatch):
     """Fake Exa key, no other credentials (a local .env must not leak in), no retry sleeps, fresh caches."""
     monkeypatch.setenv("EXA_API_KEY", "test-exa-key")
     for var in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SCORING_MODEL", "DASHBOARD_URL",
-                "RAILWAY_PUBLIC_DOMAIN", "OUTLOOK_CLIENT_ID", "OUTLOOK_TENANT"):
+                "RAILWAY_PUBLIC_DOMAIN", "OUTLOOK_CLIENT_ID", "OUTLOOK_TENANT", "TYPESAFE_API_KEY", "JEV_MODEL"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(exa_client, "BACKOFF_BASE_SECONDS", 0)
+    monkeypatch.setattr(jev, "BACKOFF_BASE_SECONDS", 0)
     exa_client.reset_costs()
+    jev.reset()
     research._ashby_board.cache_clear()
 
 
 @pytest.fixture
 def exa(http):
     return ExaMock(http)
+
+
+@pytest.fixture
+def jev_api(http, monkeypatch):
+    """Sets TYPESAFE_API_KEY and answers Jev requests: jev_api.on(lambda state, key, question: ...)."""
+    return JevMock(http, monkeypatch)
 
 
 @pytest.fixture
