@@ -10,6 +10,7 @@ import logging
 import os
 from typing import Literal
 
+import anthropic
 from pydantic import BaseModel
 
 import jev
@@ -87,25 +88,45 @@ def screen(messages):
 
 
 def label(messages, *, client=None, model=None):
-    """Returns (events, usage): one mail.event per email Claude labelled, and the summed token usage."""
+    """Returns (events, usage, problems, unanswered): one mail.event per email Claude labelled, the summed token usage,
+    one "emails N-M: reason" string per batch Claude failed on (empty when every batch was labelled), and the emails
+    of the batches whose request never got an answer (an API error: nothing was billed).
+
+    A failed batch only costs its own emails their label: the other batches are labelled as usual. The caller's state
+    (mail.next_state) reads the unanswered emails again on the next check, as often as it takes. Emails Claude did
+    answer about without a usable label (an answer that does not parse or validate, or an email missing from it) are
+    billed, so they are retried at most mail.MAX_TRIES times."""
     client = client or scoring._client()
-    events, usage = [], {"input_tokens": 0, "output_tokens": 0}
+    events, usage, problems, unanswered = [], {"input_tokens": 0, "output_tokens": 0}, [], []
     for start in range(0, len(messages), BATCH):
         batch = messages[start:start + BATCH]
-        response = client.messages.parse(
-            model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
-            max_tokens=4000,
-            system=PROMPT,
-            messages=[{"role": "user", "content": "\n\n".join(_render(n, m) for n, m in enumerate(batch, 1))}],
-            output_format=Labels,
-        )
-        if response.parsed_output is None:
-            raise RuntimeError(f"Claude returned no parsable email labels (stop_reason={response.stop_reason})")
+        where = f"emails {start + 1}-{start + len(batch)} of {len(messages)}"
+        try:
+            response = client.messages.parse(
+                model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
+                max_tokens=4000,
+                system=PROMPT,
+                messages=[{"role": "user", "content": "\n\n".join(_render(n, m) for n, m in enumerate(batch, 1))}],
+                output_format=Labels,
+            )
+        except anthropic.APIError as exc:  # no answer (connection, timeout, 4xx/5xx/429): the batch is asked again
+            logger.warning("Claude failed on %s: %s", where, exc)
+            problems.append(f"{where}: {type(exc).__name__}")
+            unanswered += batch
+            continue
+        except Exception as exc:  # an answer the SDK could not validate (e.g. JSON cut off at max_tokens): billed
+            logger.warning("Claude's answer for %s could not be read: %s", where, exc)
+            problems.append(f"{where}: {type(exc).__name__}")
+            continue
         usage["input_tokens"] += response.usage.input_tokens
         usage["output_tokens"] += response.usage.output_tokens
+        if response.parsed_output is None:
+            logger.warning("Claude returned no parsable labels for %s (stop_reason=%s)", where, response.stop_reason)
+            problems.append(f"{where}: no parsable labels (stop_reason={response.stop_reason})")
+            continue
         by_number = {}
         for item in response.parsed_output.emails:
             if 1 <= item.number <= len(batch):
                 by_number.setdefault(item.number, item)
         events += [mail.event(batch[n - 1], by_number[n].model_dump()) for n in sorted(by_number)]
-    return events, usage
+    return events, usage, problems, unanswered

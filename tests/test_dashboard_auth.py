@@ -86,6 +86,18 @@ def test_sessions_expire_and_end_when_the_password_changes():
     assert not login.valid(token)
 
 
+def test_malformed_sessions_and_csrf_tokens_are_refused_not_crashed(client):
+    """Anyone can send a cookie or header: a non-ASCII signature or an absurdly long expiry must read as
+    "not logged in" / "bad token", never as a 500."""
+    for cookie in ("1.\xe9", "9" * 5000 + ".x", "\xb2.x", "..", "1"):
+        page = client.get("/", headers={b"cookie": f"{auth.COOKIE}={cookie}".encode("latin-1")}, follow_redirects=False)
+        assert (page.status_code, page.headers["location"]) == (303, "/login?next=/"), cookie
+
+    log_in(client)
+    assert client.post("/logout", headers={b"x-csrf-token": "\xe9".encode("latin-1")}).status_code == 403
+    assert client.get("/").status_code == 200  # still logged in: the bad token did nothing
+
+
 def test_short_passwords_are_refused():
     with pytest.raises(ValueError, match="at least 12"):
         auth.Auth("hunter2")

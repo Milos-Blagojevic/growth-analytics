@@ -73,15 +73,27 @@ def load_profile(path):
 
 
 def load_companies(path):
-    """CSV rows of name,domain (extra columns ignored). Blank lines and '#' comments are skipped."""
+    """CSV rows of name,domain (extra columns ignored). Blank lines and '#' comments are skipped.
+
+    Domains are normalised (scheme, www. and path dropped, lower-cased) since they name the saved
+    result files; a domain with a path or no dot exits, and a repeated domain keeps its first row.
+    """
     companies = []
-    with open(path, newline="") as f:
+    seen = set()
+    with open(path, newline="", encoding="utf-8-sig") as f:
         for row in csv.reader(f):
             if not row or row[0].strip().startswith("#"):
                 continue
             if len(row) < 2 or not row[0].strip() or not row[1].strip():
                 sys.exit(f"{path}: each row needs name,domain; got {row!r}")
-            companies.append((row[0].strip(), row[1].strip()))
+            name, domain = row[0].strip(), runs.normalize_domain(row[1])
+            if "/" in runs.without_scheme(row[1]).rstrip("/") or "." not in domain:
+                sys.exit(f"{path}: {row[1].strip()!r} is not a domain (expected e.g. acme.com); got {row!r}")
+            if domain in seen:
+                logger.warning("%s: duplicate domain %s (%s); keeping the first row", path, domain, name)
+                continue
+            seen.add(domain)
+            companies.append((name, domain))
     if not companies:
         sys.exit(f"{path}: no companies found")
     return companies
@@ -125,7 +137,14 @@ def format_company(result):
         lines.append(f"Gap: {fit['gap_note']}")
     lines += [f"Build: {idea}" for idea in fit.get("proof_ideas", [])]
     lines.append(f"Next: {fit['next_step']}")
+    lines += _warning_lines(result)
     return "\n".join(lines)
+
+
+def _warning_lines(result):
+    """A 'warnings:' line for the research warnings (e.g. a failed ATS fallback search), or nothing."""
+    warnings = (result.get("research") or {}).get("warnings") or []
+    return [f"warnings: {'; '.join(warnings)}"] if warnings else []
 
 
 def _by_verdict(results):
@@ -133,10 +152,10 @@ def _by_verdict(results):
     return {v: [r for r in scored if r["fit"]["verdict"] == v] for v in VERDICTS}
 
 
-def _header(results, by_verdict):
+def _header(results, by_verdict, date=None):
     errors = sum("error" in r for r in results)
     return (
-        f"Job hunt digest {datetime.now():%Y-%m-%d} | {len(results)} companies | "
+        f"Job hunt digest {date or datetime.now():%Y-%m-%d} | {len(results)} companies | "
         f"{len(by_verdict['apply'])} apply, {len(by_verdict['consider'])} consider, {len(by_verdict['stretch'])} stretch, "
         f"{len(by_verdict['check_careers'])} check careers, {len(by_verdict['skip'])} skip, {errors} errors"
     )
@@ -164,13 +183,14 @@ def build_digest(results):
     return blocks
 
 
-def build_notification(results):
+def build_notification(results, *, date=None):
     """Short Telegram text blocks: header, one entry per apply/consider/stretch role, failures, dashboard link.
 
     The full reasoning lives in the dashboard; each entry keeps the posting URL so it works away from the laptop.
+    `date` is the run's date (defaults to today; `send` passes the saved run's).
     """
     by_verdict = _by_verdict(results)
-    blocks = [_header(results, by_verdict)]
+    blocks = [_header(results, by_verdict, date)]
     for verdict in NOTIFY_VERDICTS:
         for r in by_verdict[verdict]:
             fit = r["fit"]
@@ -238,6 +258,7 @@ def cmd_run(args):
     deliver = not (args.dry_run or args.research_only)
 
     # Fail before spending anything.
+    _require_exa()
     if score and not os.environ.get("ANTHROPIC_API_KEY"):
         sys.exit("ANTHROPIC_API_KEY is not set. Add it to .env (or use --research-only).")
     if deliver and not telegram.configured():
@@ -262,6 +283,8 @@ def cmd_run(args):
             print(f"  roles: {len(c['open_roles'])} (source: {r['research']['role_source']})")
             for role in c["open_roles"]:
                 print(f"  - {role['title']} | {role['location']} | {role['remote_or_relocation']} | {role['url']}")
+            for line in _warning_lines(r):
+                print(f"  {line}")
     elif deliver:
         messages = telegram.pack_blocks(build_notification(results))
         for message in messages:
@@ -272,13 +295,6 @@ def cmd_run(args):
 
     log_costs(results, score=score)
     return 1 if any("error" in r for r in results) else 0
-
-
-def normalize_domain(domain):
-    domain = domain.strip().lower()
-    for prefix in ("https://", "http://", "www."):
-        domain = domain.removeprefix(prefix)
-    return domain.split("/")[0]
 
 
 HISTORY_FIELDS = ["discovered_at", "name", "domain", "why", "focus"]
@@ -292,7 +308,7 @@ def append_history(path, discovered, focus, *, limit=None):
     path = Path(path)
     seen = set()
     if path.exists():
-        with open(path, newline="") as f:
+        with open(path, newline="", encoding="utf-8-sig") as f:
             seen = {row["domain"] for row in csv.DictReader(f)}
     new = []
     for name, domain, why in discovered:
@@ -376,13 +392,27 @@ def run_discovery_query(query, search_type, limit):
         raise RuntimeError("Exa returned no structured output")
     rows = []
     for company in response.output.content["companies"]:
-        name, domain = company["name"].strip(), normalize_domain(company["domain"])
+        name, domain = company["name"].strip(), runs.normalize_domain(company["domain"])
         if "." in domain and domain not in EXCLUDED_DOMAINS and not ANONYMOUS_NAME.search(name):
             rows.append((name, domain, company["why"].strip()))
     return rows
 
 
+def _run_date(run_dir):
+    """When the run was saved: the manifest's saved_at, else the folder name (older runs had no manifest), else today
+    (a hand-picked --run-dir). A manifest or saved_at that cannot be read falls through to the next source."""
+    try:
+        return datetime.fromisoformat((runs.load_manifest(run_dir) or {}).get("saved_at"))
+    except (OSError, ValueError, TypeError, AttributeError):  # unreadable, corrupt or non-object manifest; bad saved_at
+        pass
+    try:
+        return datetime.strptime(run_dir.name, "%Y%m%d-%H%M%S")
+    except ValueError:
+        return datetime.now()
+
+
 def cmd_discover(args):
+    _require_exa()
     profile = load_profile(args.profile)
     queries = discovery_queries(profile, args.focus)
 
@@ -401,7 +431,7 @@ def cmd_discover(args):
     if all(r is None for r in results):
         sys.exit("All discovery searches failed")
 
-    exclude = {normalize_domain(d) for d in profile["search"].get("exclude_domains", [])}
+    exclude = {runs.normalize_domain(d) for d in profile["search"].get("exclude_domains", [])}
     # Round-robin across queries so the limit does not favour the first role.
     merged = [
         row
@@ -436,7 +466,7 @@ def cmd_send(args):
         sys.exit(f"{run_dir}: no scored results (was it a --research-only run?)")
     if not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env.")
-    messages = telegram.pack_blocks(build_notification(results))
+    messages = telegram.pack_blocks(build_notification(results, date=_run_date(run_dir)))
     for message in messages:
         telegram.send(message)
     print(f"Sent {len(messages)} Telegram message(s) from {run_dir}/")
@@ -514,7 +544,10 @@ def cmd_mail(args):
             print(f"- other (Jev, confidence {m['jev_confidence']:.2f}): {m['from_address']} {m['subject']!r}")
     elif candidates:
         print("TYPESAFE_API_KEY is not set: Claude labels every one.")
-    events, usage = mail_labels.label(for_claude) if for_claude else ([], {"input_tokens": 0, "output_tokens": 0})
+    events, usage, problems, unanswered = (mail_labels.label(for_claude) if for_claude
+                                           else ([], {"input_tokens": 0, "output_tokens": 0}, [], []))
+    for p in problems:
+        print(f"Claude failed on {p}; those emails are labelled again next time.")
     for e in events:
         role = f" · {e['role']}" if e["role"] else ""
         print(f"- {e['outcome']}: {e['company'] or e['from']}{role} ({e['received_at'][:16].replace('T', ' ')})"
@@ -534,9 +567,9 @@ def cmd_mail(args):
                 telegram.send(part)
             print(f"Sent {len(updates)} email update(s) to Telegram.")
         # Only after a successful send, so a failed send is labelled and sent again next time.
-        labelled = {e["id"] for e in events}
+        labelled, skipped = {e["id"] for e in events}, {m["id"] for m in unanswered}
         new_state, given_up = mail.next_state(state, read_until, labelled | {m["id"] for m in dropped},
-                                              [m for m in for_claude if m["id"] not in labelled])
+                                              [m for m in for_claude if m["id"] not in labelled | skipped], unanswered)
         if len(labelled) < len(for_claude):
             logger.warning("Claude returned no label for %d email(s); %d will be labelled again next time",
                            len(for_claude) - len(labelled), len(for_claude) - len(labelled) - len(given_up))
@@ -546,7 +579,7 @@ def cmd_mail(args):
         mail.save_state(args.state, new_state)
     print(f"\nClaude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens"
           + (f" | {jev.summary_line()}" if jev.configured() else ""))
-    return 0
+    return 1 if problems else 0
 
 
 def cmd_news(args):
@@ -555,6 +588,7 @@ def cmd_news(args):
         topics = news.load_config(profile)
     except ValueError as exc:
         sys.exit(f"{args.profile}: {exc}")
+    _require_exa()
     _require_claude()
     if not args.dry_run and not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
@@ -607,6 +641,11 @@ def _require_claude():
         sys.exit("ANTHROPIC_API_KEY is not set. Add it to .env.")
 
 
+def _require_exa():
+    if not exa_client.configured():
+        sys.exit("EXA_API_KEY is not set. Add it to .env.")
+
+
 def fetch_posting(url):
     """Posting text from Exa (about $0.001), or "" when it cannot be fetched."""
     try:
@@ -643,6 +682,7 @@ def cmd_interview_prep(args):
     _require_claude()
     posting, source = interview.get("posting_text", ""), "pasted"
     if not posting and interview.get("posting_url"):
+        _require_exa()
         posting, source = fetch_posting(interview["posting_url"]), "fetched"
     posting = posting[:POSTING_CHARS * 2]
     lessons = interviews.past_reviews(".", exclude=path.name)  # hunt.py runs in the data folder

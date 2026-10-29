@@ -100,7 +100,23 @@ def test_exit_code_decides_the_job_status(root, app, monkeypatch):
     discover = finished(root, started_job_id(c.post("/runs", data={"kind": "discover", "focus": "fintech", "limit": "5"})))
 
     assert run["status"] == "partial"  # results saved, some companies failed
-    assert (discover["status"], discover["args"]) == ("failed", ["discover", "fintech", "--limit", "5"])
+    assert (discover["status"], discover["args"]) == ("failed", ["discover", "--limit", "5", "fintech"])
+
+
+def test_discover_focus_cannot_pass_hunt_options(root, app):
+    """A focus such as `--history=companies.csv` would otherwise reach hunt.py as an option and make `discover`
+    append its 5-column rows to companies.csv."""
+    c = client(app)
+
+    preview = c.post("/runs/preview", data={"kind": "discover", "focus": "--history=companies.csv"})
+    assert "focus cannot start with a dash" in preview.text
+    assert c.post("/runs", data={"kind": "discover", "focus": " -h"}).status_code == 400
+    conn = db.connect(root)
+    assert jobs.recent(conn, 10) == []
+    conn.close()
+
+    job = finished(root, started_job_id(c.post("/runs", data={"kind": "discover", "focus": "fintech"})))
+    assert job["args"] == ["discover", "--limit", "15", "fintech"]
 
 
 def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, app):

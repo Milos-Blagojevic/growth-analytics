@@ -1,6 +1,7 @@
-"""Saved-run format and the run lock, shared by hunt.py and the dashboard.
+"""Saved-run format, the domain normaliser and the run lock, shared by hunt.py and the dashboard.
 
 out/<%Y%m%d-%H%M%S>/ holds one <domain>.json per company and the MANIFEST (mode, times, counts, costs).
+Domains name those files, so companies.csv, discover and the dashboard all normalise them the same way here.
 LOCK_FILE lets one hunt.py command run at a time, whether started from a shell, cron or the dashboard.
 """
 
@@ -41,7 +42,20 @@ def is_locked(root="."):
             return False
     except Busy:
         return True
-MANIFEST = "_run.json"  # the underscore keeps it apart from <domain>.json files
+
+
+def without_scheme(domain):
+    """`domain` lower-cased, without a leading https://, http:// or www.; the path (if any) is kept."""
+    domain = domain.strip().lower()
+    for prefix in ("https://", "http://", "www."):
+        domain = domain.removeprefix(prefix)
+    return domain
+
+
+def normalize_domain(domain):
+    """The bare host of `domain` (scheme, www. and path dropped, lower-cased): what names the <domain>.json result file,
+    so every reader and writer of companies.csv and discovered.csv agrees on one spelling per company."""
+    return without_scheme(domain).split("/")[0]
 
 
 def run_dirs(out_dir):

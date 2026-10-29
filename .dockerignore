@@ -4,7 +4,7 @@ profile.toml
 cv.md
 companies.csv
 discovered.csv
-watch_state.json
+watch_state.json*
 watch.log
 out/
 hunt.db*
@@ -12,8 +12,8 @@ jobs/
 .hunt.lock
 interviews/
 mail/
-mail_state.json
-news_state.json
+mail_state.json*
+news_state.json*
 outlook_token.json*
 # Not needed at runtime
 .git/

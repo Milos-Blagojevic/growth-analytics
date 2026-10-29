@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 VERDICTS = ("apply", "consider", "stretch", "check_careers", "skip")  # hunt.VERDICTS, in board tab order
 NEW_VERDICTS = ("apply", "consider", "stretch")  # what the inbox and Telegram notification surface
-JSON_FIELDS = ("reasons", "concerns", "proof_ideas", "dead_roles", "grounding")
+JSON_FIELDS = ("reasons", "concerns", "proof_ideas", "dead_roles", "grounding", "warnings")
 
 # The latest scored result per company, with its run time, the best role's link status and your tracking
 # (status "new" when untracked; see tracking.key_for for which key a card uses).

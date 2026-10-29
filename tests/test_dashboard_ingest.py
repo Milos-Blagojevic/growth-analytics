@@ -130,6 +130,64 @@ def test_ingest_reads_watch_state_and_lead_status(tmp_path, conn):
     assert [i["domain"] for i in queries.leads(conn, status="new")["items"]] == ["echo.so"]
 
 
+def test_companies_csv_domains_are_normalised_and_deduplicated_like_hunt_reads_them(tmp_path, conn):
+    """`Acme,https://www.Acme.com/` is the company hunt.py saves as acme.com.json, so its lead is queued and
+    Add to companies.csv does not append it again."""
+    companies = tmp_path / "companies.csv"
+    companies.write_text("# name,domain\nAcme,https://www.Acme.com/\nAcme 2,www.acme.com\n")
+    (tmp_path / "discovered.csv").write_text("discovered_at,name,domain,why,focus\n2026-01-01T08:00:00,Acme,acme.com,Hiring,\n")
+
+    ingest.ingest(conn, tmp_path)
+
+    assert ingest.read_companies(companies) == [("Acme", "acme.com")]
+    assert [i["status"] for i in queries.leads(conn)["items"]] == ["queued"]
+    assert ingest.add_companies(companies, [("Acme", "acme.com")]) == []
+    assert companies.read_text() == "# name,domain\nAcme,https://www.Acme.com/\nAcme 2,www.acme.com\n"
+
+
+def test_csvs_saved_by_excel_with_a_byte_order_mark_are_read(tmp_path, conn):
+    companies = tmp_path / "companies.csv"
+    companies.write_bytes("\ufeffAcme,acme.com\n".encode())
+    (tmp_path / "discovered.csv").write_bytes(
+        "\ufeffdiscovered_at,name,domain,why,focus\n2026-01-01T08:00:00,Acme,acme.com,Hiring,\n".encode()
+    )
+
+    ingest.ingest(conn, tmp_path)
+
+    assert ingest.read_companies(companies) == [("Acme", "acme.com")]
+    assert queries.problems(conn) == []
+    assert [(i["domain"], i["status"]) for i in queries.leads(conn)["items"]] == [("acme.com", "queued")]
+
+
+def test_corrupt_watch_state_and_csvs_are_skipped_and_reported(tmp_path, conn):
+    two_runs(tmp_path)
+    (tmp_path / "watch_state.json").write_text("[]")
+    (tmp_path / "discovered.csv").write_text("discovered_at,name,domain,focus\n2026-01-01T08:00:00,Delta,delta.ai,\n")
+    (tmp_path / "companies.csv").write_text("Bad\x00Corp," + "x" * 200_000 + "\n")  # a field beyond csv's field limit
+    mail_dir = tmp_path / "mail"
+    mail_dir.mkdir()
+    (mail_dir / "20260108-090000.json").write_text(json.dumps({"updates": [
+        {"id": "m1", "received_at": "2026-01-08T08:00:00", "from": "Acme", "from_address": "hr@acme.com",
+         "subject": "Interview", "outcome": "interview", "company": "Acme", "role": "AE", "summary": "s"}]}))
+
+    ingest.ingest(conn, tmp_path)
+
+    assert [p.split(":")[0] for p in queries.problems(conn)] == ["watch_state.json", "companies.csv", "discovered.csv"]
+    assert queries.verdict_counts(conn)["apply"] == 2  # the sources after the broken ones are still ingested
+    assert conn.execute("SELECT COUNT(*) FROM mail_updates").fetchone()[0] == 1
+    assert queries.leads(conn)["items"] == []
+
+    (tmp_path / "discovered.csv").write_text("discovered_at,name,domain,why,focus\n2026-01-01T08:00:00,Delta,delta.ai,w,\n")
+    ingest.ingest(conn, tmp_path)
+    assert [p.split(":")[0] for p in queries.problems(conn)] == ["watch_state.json", "companies.csv"]
+    assert [(i["domain"], i["status"]) for i in queries.leads(conn)["items"]] == [("delta.ai", "new")]  # not queued: unknown
+
+    (tmp_path / "companies.csv").write_text("Delta,delta.ai\n")
+    ingest.ingest(conn, tmp_path)
+    assert [p.split(":")[0] for p in queries.problems(conn)] == ["watch_state.json"]
+    assert [(i["domain"], i["status"]) for i in queries.leads(conn)["items"]] == [("delta.ai", "queued")]
+
+
 def test_schema_version_change_rebuilds_derived_tables(tmp_path):
     conn = db.connect(tmp_path)
     conn.execute("INSERT INTO leads VALUES ('a.com', 'A', '', '', '', 0)")

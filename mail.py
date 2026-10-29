@@ -59,7 +59,7 @@ def likely(message):
         return False
     if domain_in(sender_domain(message["from_address"]), ATS_DOMAINS):
         return True
-    text = f"{message['subject']}\n{message['body'][:BODY_CHARS]}".lower()
+    text = f"{message['subject']}\n{excerpt(message['body'])}".lower()  # the same window Jev and Claude get
     return any(k in text for k in KEYWORDS)
 
 
@@ -87,26 +87,28 @@ def since(state, now, *, days=LOOKBACK_DAYS):
     return now - timedelta(days=days)
 
 
-def next_state(state, now, labelled_ids, missed=()):
+def next_state(state, now, labelled_ids, missed=(), unanswered=()):
     """State after a check that started at `now` (aware), and the emails given up on.
 
-    `labelled_ids` (labelled by Claude or screened out by Jev) are remembered as seen. `missed` are emails sent to
-    Claude that came back without a label: the next check starts early enough to read them again, until an email has
-    been missed MAX_TRIES times; then it is remembered as seen too and returned, so a skipped email cannot make every
-    later check pay for it again.
+    `labelled_ids` (labelled by Claude or screened out by Jev) are remembered as seen. `missed` are emails Claude
+    answered without a label: the next check starts early enough to read them again, until an email has been missed
+    MAX_TRIES times; then it is remembered as seen too and returned, so a skipped email cannot make every later check
+    pay for it again. `unanswered` are emails whose Claude call failed: the next check reads them again too, but a
+    failed call costs nothing, so they keep the tries count they had (if any) instead of using one up.
     """
     tries = dict(state.get("tries", {}))
     retry, given_up = [], []
     for m in missed:
         tries[m["id"]] = tries.get(m["id"], 0) + 1
         (given_up if tries[m["id"]] >= MAX_TRIES else retry).append(m)
-    until = min([now] + [datetime.fromisoformat(m["received_at"]).astimezone() + OVERLAP for m in retry])
+    again = [*retry, *unanswered]
+    until = min([now] + [datetime.fromisoformat(m["received_at"]).astimezone() + OVERLAP for m in again])
     stamp = now.isoformat(timespec="seconds")
     cutoff = (now - timedelta(days=SEEN_DAYS)).isoformat(timespec="seconds")
     seen = {i: t for i, t in state.get("seen", {}).items() if t >= cutoff}
     seen.update({i: stamp for i in [*labelled_ids, *(m["id"] for m in given_up)]})
     state = {"checked_until": until.isoformat(timespec="seconds"), "seen": seen,
-             "tries": {m["id"]: tries[m["id"]] for m in retry}}
+             "tries": {m["id"]: tries[m["id"]] for m in again if m["id"] in tries}}
     return state, given_up
 
 

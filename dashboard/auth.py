@@ -19,6 +19,7 @@ SESSION_DAYS = 30
 MIN_PASSWORD_LENGTH = 12
 MAX_FAILURES = 10  # failed logins allowed per FAILURE_WINDOW seconds before every attempt is refused
 FAILURE_WINDOW = 15 * 60
+MAX_EXPIRES_DIGITS = 20  # a real expiry has 10; int() refuses huge digit strings (CVE-2020-10735) and must not be reached
 _SALT = b"job-hunt-dashboard-session"
 
 
@@ -55,10 +56,13 @@ class Auth:
         return f"{expires}.{self._sign(expires)}"
 
     def valid(self, token):
+        """False for a missing, expired, forged or malformed token (never raises: the cookie is client input)."""
         expires, _, signature = (token or "").partition(".")
-        if not expires.isdigit() or int(expires) < self._clock():
+        if not (expires.isascii() and expires.isdigit()) or len(expires) > MAX_EXPIRES_DIGITS:
             return False
-        return secrets.compare_digest(signature, self._sign(int(expires)))
+        if int(expires) < self._clock():
+            return False
+        return secrets.compare_digest(signature.encode(), self._sign(int(expires)).encode())
 
     def _sign(self, expires):
         return hmac.new(self._key, str(expires).encode(), hashlib.sha256).hexdigest()

@@ -1,9 +1,11 @@
 import json
+import os
 import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 import responses
 
 import outlook
@@ -28,12 +30,15 @@ def belgrade(monkeypatch):
 
 
 def replies(http, method, url, *bodies):
-    """Serves (status, body) replies in order; returns the decoded form bodies of the requests."""
+    """Serves (status, body) replies in order (an exception instance as the body is raised instead); returns the decoded
+    form bodies of the requests."""
     queue, seen = list(bodies), []
 
     def callback(request):
         seen.append({k: v[0] for k, v in parse_qs(request.body).items()})
         status, body = queue.pop(0)
+        if isinstance(body, Exception):
+            return body
         return status, {}, json.dumps(body)
 
     http.add_callback(method, url, callback=callback, content_type="application/json")
@@ -67,6 +72,48 @@ def test_login_stops_when_the_sign_in_is_declined(http, tmp_path):
     with pytest.raises(outlook.AuthError, match="authorization_declined: No."):
         outlook.login(tmp_path / "t.json", show=lambda _: None, sleep=lambda _: None)
     assert not (tmp_path / "t.json").exists()
+
+
+def test_login_keeps_polling_through_a_network_blip(http, tmp_path):
+    http.post(f"{AUTH}/devicecode", json={"device_code": "dev-1", "expires_in": 900, "interval": 5, "message": "m"})
+    token_requests = replies(http, responses.POST, f"{AUTH}/token",
+                             (None, requests.ConnectionError("wifi dropped")),
+                             (400, {"error": "authorization_pending"}),
+                             (200, {"access_token": "at-1", "refresh_token": "rt-1"}))
+    sleeps = []
+    path = tmp_path / "outlook_token.json"
+
+    outlook.login(path, show=lambda _: None, sleep=sleeps.append)
+
+    assert len(token_requests) == 3 and sleeps == [5, 5, 5]  # the blip costs one normal polling interval
+    assert json.loads(path.read_text())["refresh_token"] == "rt-1"
+
+
+@pytest.mark.parametrize("stale_tmp", [False, True])  # a wider .tmp left behind by an interrupted save
+def test_saved_token_is_never_readable_by_others(tmp_path, monkeypatch, stale_tmp):
+    path = tmp_path / "outlook_token.json"
+    if stale_tmp:
+        path.with_suffix(".json.tmp").write_text("{ half written")
+        path.with_suffix(".json.tmp").chmod(0o644)
+    modes = []
+    real_dumps = json.dumps
+
+    def dumps(*args, **kwargs):  # runs while the token is being written: what can others see at that moment?
+        tmp = path.with_suffix(".json.tmp")
+        modes.append(tmp.stat().st_mode & 0o777 if tmp.exists() else None)
+        return real_dumps(*args, **kwargs)
+
+    monkeypatch.setattr(json, "dumps", dumps)
+    umask = os.umask(0o022)  # a permissive umask: files normally come out 0644
+    try:
+        outlook._save(path, {"refresh_token": "rt-1", "access_token": "at-1"})
+    finally:
+        os.umask(umask)
+
+    assert modes == [0o600]  # owner-only from the moment the file exists
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in tmp_path.iterdir()] == ["outlook_token.json"]  # no .tmp left behind
+    assert json.loads(path.read_text())["refresh_token"] == "rt-1"
 
 
 def test_access_token_replaces_the_saved_refresh_token(http, tmp_path):

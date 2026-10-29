@@ -3,7 +3,7 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -202,9 +202,9 @@ def check_posting(url):
         return "dead"
     if response.status_code != 200:
         return "unknown"
-    if response.url != url:
-        posting_id = segments[-1].split(".")[0]
-        if posting_id.lower() not in response.url.lower():
+    if unquote(response.url) != unquote(url):  # requests percent-encodes non-ASCII and spaces before sending
+        posting_id = unquote(segments[-1].split(".")[0])
+        if posting_id.lower() not in unquote(response.url).lower():
             return "dead"
     return "live"
 
@@ -289,9 +289,11 @@ def research_company(name, domain, profile, *, search_type="auto"):
     """Research one company.
 
     Returns {"name", "domain", "content": <schema dict>, "grounding": {field: {confidence, urls}},
-    "role_source": "main" | "ats_fallback" | "none", "dead_roles": [{"title", "url"}]}.
+    "role_source": "main" | "ats_fallback" | "none", "dead_roles": [{"title", "url"}],
+    "warnings": [str]}.
     Every posting URL is checked and dead ones are dropped. If no live role remains for a verified
-    company, a second search restricted to ATS domains looks for postings (also checked).
+    company, a second search restricted to ATS domains looks for postings (also checked); when that
+    search fails the main research is kept and the failure is listed in "warnings".
     """
     query = (
         f"{name} ({domain}): what the company does, recent funding and growth signals, and its data/analytics "
@@ -305,9 +307,15 @@ def research_company(name, domain, profile, *, search_type="auto"):
     content["open_roles"] = roles
     role_source = "main" if roles else "none"
 
+    warnings = []
     if not roles and content["identity_verified"]:
         logger.info("%s: no live roles in main search; trying ATS fallback", name)
-        fallback_roles, roles_grounding = find_roles_on_ats(name, domain, profile)
+        try:
+            fallback_roles, roles_grounding = find_roles_on_ats(name, domain, profile)
+        except Exception as exc:  # the fallback is a bonus: the main research is still worth saving
+            logger.warning("%s: ATS fallback search failed (%s); keeping main research", name, exc)
+            warnings.append(f"ATS fallback search failed: {type(exc).__name__}: {exc}")
+            fallback_roles, roles_grounding = [], None
         roles, dead = verify_roles(fallback_roles)
         dead_roles += [d for d in dead if d not in dead_roles]
         if roles:
@@ -325,4 +333,5 @@ def research_company(name, domain, profile, *, search_type="auto"):
         "grounding": grounding,
         "role_source": role_source,
         "dead_roles": dead_roles,
+        "warnings": warnings,
     }
