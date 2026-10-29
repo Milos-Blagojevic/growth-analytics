@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -218,15 +219,60 @@ def test_run_scores_every_role_with_claude_when_jev_fails(exa, http, workdir, mo
     [
         (run_args(dry_run=True), {}, "ANTHROPIC_API_KEY is not set"),
         (run_args(), {"ANTHROPIC_API_KEY": "k"}, "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set"),
+        (run_args(research_only=True), {"EXA_API_KEY": None}, "EXA_API_KEY is not set"),
     ],
-    ids=["no-anthropic-key", "no-telegram"],
+    ids=["no-anthropic-key", "no-telegram", "no-exa-key"],
 )
 def test_run_checks_keys_before_any_paid_call(http, workdir, monkeypatch, args, env, message):
     for key, value in env.items():
-        monkeypatch.setenv(key, value)
+        if value is None:
+            monkeypatch.delenv(key)
+        else:
+            monkeypatch.setenv(key, value)
 
     with pytest.raises(SystemExit, match=message):
         hunt.cmd_run(args)
+    assert len(http.calls) == 0
+    assert not Path("out").exists()
+
+
+def test_discover_and_news_check_the_exa_key_before_any_paid_call(http, workdir, monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    (workdir / "profile.toml").write_text(PROFILE_TOML + '\n[news]\ntopics = ["dbt releases"]\n')
+
+    with pytest.raises(SystemExit, match="EXA_API_KEY is not set"):
+        hunt.cmd_discover(argparse.Namespace(profile="profile.toml", focus="fintech", limit=2, history="discovered.csv"))
+    with pytest.raises(SystemExit, match="EXA_API_KEY is not set"):
+        hunt.cmd_news(argparse.Namespace(profile="profile.toml", dry_run=True, state="news_state.json", days=7))
+    assert len(http.calls) == 0
+    assert not Path("discovered.csv").exists()
+
+
+# companies.csv ----------------------------------------------------------------------------------
+
+
+def test_companies_domains_are_normalised_deduplicated_and_bom_stripped(workdir, caplog):
+    (workdir / "companies.csv").write_bytes(
+        "\ufeffAcme,https://www.Acme.com/\nAcme again,acme.com\nAcme www,www.acme.com\nBeta,beta.io\n".encode()
+    )
+
+    with caplog.at_level("WARNING", logger="hunt"):
+        companies = hunt.load_companies("companies.csv")
+
+    assert companies == [("Acme", "acme.com"), ("Beta", "beta.io")]
+    assert [r.message for r in caplog.records] == [
+        "companies.csv: duplicate domain acme.com (Acme again); keeping the first row",
+        "companies.csv: duplicate domain acme.com (Acme www); keeping the first row",
+    ]
+
+
+@pytest.mark.parametrize("domain", ["acme.com/careers", "https://acme.com/jobs/1", "localhost"])
+def test_run_rejects_a_domain_that_is_not_a_bare_domain_before_any_request(http, workdir, domain):
+    (workdir / "companies.csv").write_text(f"Acme,{domain}\n")
+
+    with pytest.raises(SystemExit, match="is not a domain"):
+        hunt.cmd_run(run_args(research_only=True))
     assert len(http.calls) == 0
     assert not Path("out").exists()
 
@@ -249,6 +295,18 @@ def scored(name, score, verdict, role="", url=""):
         "scope_note": "",
     }
     return {"name": name, "domain": f"{name.lower()}.com", "fit": fit}
+
+
+def test_digest_lists_research_warnings_under_the_company():
+    top = scored("Top", 90, "apply", "Lead AE", "https://top.com/jobs/1")
+    top["research"] = {"warnings": ["ATS fallback search failed: ValueError: Request failed with status code 500"]}
+
+    blocks = hunt.build_digest([top, scored("Low", 60, "consider")])
+
+    assert blocks[1].endswith(
+        "Next: Apply.\nwarnings: ATS fallback search failed: ValueError: Request failed with status code 500"
+    )
+    assert "warnings:" not in blocks[2]
 
 
 def test_notification_lists_only_actionable_roles(monkeypatch):
@@ -296,9 +354,61 @@ def test_send_uses_latest_run_and_ignores_its_manifest(http, workdir, monkeypatc
     assert hunt.cmd_send(argparse.Namespace(run_dir=None)) == 0
 
     (sent,) = [json.loads(call.request.body)["text"] for call in telegram_api.calls]
+    assert sent.startswith("Job hunt digest 2026-01-02 |")  # no saved_at in this manifest: the folder name dates it
     assert "| 1 companies | 1 apply" in sent
     assert "[90] APPLY Top: Lead AE" in sent
     assert "Old" not in sent
+
+
+def test_send_dates_the_header_from_the_run_not_today(http, workdir, monkeypatch):
+    run_dir = workdir / "out" / "20260105-090000"
+    run_dir.mkdir(parents=True)
+    result = scored("Top", 90, "apply", "Lead AE")
+    (run_dir / f"{result['domain']}.json").write_text(json.dumps(result))
+    (run_dir / "_run.json").write_text(json.dumps({"mode": "dry_run", "companies": 1, "saved_at": "2026-01-05T09:00:12"}))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    telegram_api = http.post("https://api.telegram.org/bottok/sendMessage", json={"ok": True})
+
+    assert hunt.cmd_send(argparse.Namespace(run_dir=str(run_dir))) == 0
+
+    (sent,) = [json.loads(call.request.body)["text"] for call in telegram_api.calls]
+    assert sent.startswith("Job hunt digest 2026-01-05 |")
+
+
+@pytest.mark.parametrize("manifest", ["{ half written", "[]"])  # interrupted while saving, or not an object at all
+def test_send_dates_the_header_from_the_folder_when_the_manifest_is_corrupt(http, workdir, monkeypatch, manifest):
+    run_dir = workdir / "out" / "20260106-090000"
+    run_dir.mkdir(parents=True)
+    result = scored("Top", 90, "apply", "Lead AE")
+    (run_dir / f"{result['domain']}.json").write_text(json.dumps(result))
+    (run_dir / "_run.json").write_text(manifest)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    telegram_api = http.post("https://api.telegram.org/bottok/sendMessage", json={"ok": True})
+
+    assert hunt.cmd_send(argparse.Namespace(run_dir=None)) == 0
+
+    (sent,) = [json.loads(call.request.body)["text"] for call in telegram_api.calls]
+    assert sent.startswith("Job hunt digest 2026-01-06 |")
+
+
+@pytest.mark.parametrize("manifest", [None, '{"saved_at": "yesterday"}'])  # no manifest, or a saved_at that is no date
+def test_send_dates_a_hand_picked_folder_today(http, workdir, monkeypatch, manifest):
+    run_dir = workdir / "picked"
+    run_dir.mkdir()
+    result = scored("Top", 90, "apply", "Lead AE")
+    (run_dir / f"{result['domain']}.json").write_text(json.dumps(result))
+    if manifest:
+        (run_dir / "_run.json").write_text(manifest)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    telegram_api = http.post("https://api.telegram.org/bottok/sendMessage", json={"ok": True})
+
+    assert hunt.cmd_send(argparse.Namespace(run_dir=str(run_dir))) == 0
+
+    (sent,) = [json.loads(call.request.body)["text"] for call in telegram_api.calls]
+    assert sent.startswith(f"Job hunt digest {datetime.now():%Y-%m-%d} |")
 
 
 def test_a_second_command_exits_while_one_holds_the_lock(workdir, monkeypatch):
@@ -335,6 +445,23 @@ def test_interview_prep_fetches_the_posting_and_learns_from_past_reviews(workdir
     for expected in ("experiments and AI Analyst", "Keep the intro to 90 seconds.", "the AI analyst at Tenderly",
                      "8 years of analytics engineering"):
         assert expected in prompt
+
+
+def test_interview_prep_checks_the_exa_key_only_when_it_would_fetch(workdir, http, fake_claude, monkeypatch):
+    write_interview(workdir, SER, posting_text="", posting_url="https://seranking.com/vacancies/1.html")
+    write_interview(workdir, RHO, posting_text="Pasted posting.", posting_url="https://rho.com/jobs/1")
+    fake = fake_claude(PREP)
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.delenv("EXA_API_KEY")
+
+    with pytest.raises(SystemExit, match="EXA_API_KEY is not set"):
+        hunt.cmd_interview_prep(interview_args(SER))
+    assert len(http.calls) == 0 and fake.calls == []
+    assert not (workdir / "interviews" / SER / "prep.json").exists()
+
+    assert hunt.cmd_interview_prep(interview_args(RHO)) == 0  # pasted text: no Exa needed
+    assert json.loads((workdir / "interviews" / RHO / "prep.json").read_text())["posting_source"] == "pasted"
 
 
 def test_interview_review_needs_your_speaker_and_saves_metrics_and_bounded_scores(workdir, fake_claude, monkeypatch):

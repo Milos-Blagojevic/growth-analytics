@@ -23,6 +23,9 @@ OUT_DIR = "out"
 DISCOVERED = "discovered.csv"
 COMPANIES = "companies.csv"
 WATCH_STATE = "watch_state.json"
+# What a corrupt or half-written source raises: bad JSON/CSV, a missing key or column, a wrong shape (AttributeError
+# when watch_state.json holds a list instead of a dict), a NUL byte in a CSV (csv.Error).
+UNREADABLE = (OSError, ValueError, KeyError, TypeError, AttributeError, csv.Error)
 
 
 def signature(root):
@@ -52,8 +55,9 @@ def refresh(conn, root):
 def ingest(conn, root, sig=None):
     """Replaces every derived row with what the source files hold now, in one transaction.
 
-    A run directory that cannot be read (for example a result file still being written) is skipped and listed
-    in meta 'problems'; the next refresh retries it because its files change.
+    A source that cannot be read (for example a result file still being written, or a corrupt watch_state.json,
+    discovered.csv or companies.csv) is skipped and listed in meta 'problems'; the other sources are still
+    ingested and the next refresh retries it because its files change.
     """
     root = Path(root)
     problems = []
@@ -63,21 +67,35 @@ def ingest(conn, root, sig=None):
         for run_dir in runs.run_dirs(root / OUT_DIR):
             try:
                 _ingest_run(conn, run_dir)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except UNREADABLE as exc:
                 logger.warning("skipping %s: %s", run_dir, exc)
                 problems.append(f"{run_dir.name}: {type(exc).__name__}: {exc}")
-        _ingest_watch(conn, root / WATCH_STATE)
-        _ingest_leads(conn, root / DISCOVERED, root / COMPANIES)
+        try:
+            _ingest_watch(conn, root / WATCH_STATE)
+        except UNREADABLE as exc:
+            logger.warning("skipping %s: %s", WATCH_STATE, exc)
+            problems.append(f"{WATCH_STATE}: {type(exc).__name__}: {exc}")
+        try:
+            queued = {domain for _, domain in read_companies(root / COMPANIES)}
+        except ValueError as exc:  # leads still show, none marked as queued; the Runs page cannot start a full run
+            logger.warning("skipping %s: %s", COMPANIES, exc)
+            problems.append(f"{COMPANIES}: {exc}")
+            queued = set()
+        try:
+            _ingest_leads(conn, root / DISCOVERED, queued)
+        except UNREADABLE as exc:
+            logger.warning("skipping %s: %s", DISCOVERED, exc)
+            problems.append(f"{DISCOVERED}: {type(exc).__name__}: {exc}")
         for path in interviews.interview_dirs(root):
             try:
                 _ingest_interview(conn, path)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except UNREADABLE as exc:
                 logger.warning("skipping %s: %s", path, exc)
                 problems.append(f"{interviews.DIR}/{path.name}: {type(exc).__name__}: {exc}")
         for path in mail.update_files(root):
             try:
                 _ingest_mail(conn, path)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except UNREADABLE as exc:
                 logger.warning("skipping %s: %s", path, exc)
                 problems.append(f"{mail.DIR}/{path.name}: {type(exc).__name__}: {exc}")
         meta = {
@@ -136,11 +154,11 @@ def _ingest_run(conn, run_dir):
         fit = r.get("fit") or {}
         conn.execute(
             "INSERT OR REPLACE INTO results VALUES (:run_id, :domain, :name, :verified, :business_summary, :signals,"
-            " :role_source, :dead_roles, :grounding, :score, :verdict, :best_role_title, :best_role_url,"
+            " :role_source, :dead_roles, :grounding, :warnings, :score, :verdict, :best_role_title, :best_role_url,"
             " :location_assessment, :next_step, :gap_note, :scope_note, :reasons, :concerns, :proof_ideas, :error)",
             {
                 "run_id": run_dir.name,
-                "domain": r["domain"],
+                "domain": runs.normalize_domain(r["domain"]),  # one card per company, whatever companies.csv spelled
                 "name": r["name"],
                 "verified": content.get("identity_verified"),
                 "business_summary": content.get("business_summary"),
@@ -148,6 +166,7 @@ def _ingest_run(conn, run_dir):
                 "role_source": research.get("role_source"),
                 "dead_roles": json.dumps(research.get("dead_roles", [])),
                 "grounding": json.dumps(research.get("grounding", {})),
+                "warnings": json.dumps(research.get("warnings", [])),  # runs saved before warnings lack the key
                 "score": fit.get("score"),
                 "verdict": fit.get("verdict"),
                 "best_role_title": fit.get("best_role_title"),
@@ -167,7 +186,7 @@ def _ingest_run(conn, run_dir):
             [
                 (
                     run_dir.name,
-                    r["domain"],
+                    runs.normalize_domain(r["domain"]),
                     role["url"],
                     role["title"],
                     role.get("location"),
@@ -220,24 +239,37 @@ def _ingest_interview(conn, path):
 
 
 def read_companies(path):
-    """(name, domain) rows of companies.csv as hunt.load_companies reads them; [] if the file is missing."""
+    """(name, domain) rows of companies.csv as hunt.load_companies reads them: domains normalised
+    (runs.normalize_domain) and a repeated domain keeps its first row; [] if the file is missing.
+
+    Unlike hunt.py it never exits: malformed rows are skipped. An unreadable file (e.g. a field beyond csv's
+    field limit) raises ValueError, which every caller handles.
+    """
     path = Path(path)
     if not path.exists():
         return []
-    with open(path, newline="") as f:
-        return [
-            (row[0].strip(), row[1].strip())
-            for row in csv.reader(f)
-            if len(row) >= 2 and not row[0].strip().startswith("#") and row[0].strip() and row[1].strip()
-        ]
+    companies = []
+    seen = set()
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            for row in csv.reader(f):
+                if len(row) < 2 or row[0].strip().startswith("#") or not row[0].strip() or not row[1].strip():
+                    continue
+                domain = runs.normalize_domain(row[1])
+                if domain not in seen:
+                    seen.add(domain)
+                    companies.append((row[0].strip(), domain))
+    except (OSError, csv.Error) as exc:  # a directory, no permission, a field beyond csv's limit, ...
+        raise ValueError(f"cannot be read: {exc}") from exc
+    return companies
 
 
 def add_companies(path, companies):
-    """Appends (name, domain) rows not yet in companies.csv (domains compared case-insensitively); creates the file
-    if needed. Returns the rows added."""
+    """Appends (name, domain) rows not yet in companies.csv (domains compared normalised, as hunt.py reads them);
+    creates the file if needed. Returns the rows added."""
     path = Path(path)
-    listed = {domain.lower() for _, domain in read_companies(path)}
-    new = [(name, domain) for name, domain in dict.fromkeys(companies) if domain.lower() not in listed]
+    listed = {domain for _, domain in read_companies(path)}
+    new = [(name, domain) for name, domain in dict.fromkeys(companies) if runs.normalize_domain(domain) not in listed]
     if not new:
         return []
     text = path.read_text() if path.exists() else ""
@@ -248,13 +280,14 @@ def add_companies(path, companies):
     return new
 
 
-def _ingest_leads(conn, discovered, companies):
+def _ingest_leads(conn, discovered, queued):
+    """`queued`: normalised domains of companies.csv."""
     if not discovered.exists():
         return
-    queued = {domain.lower() for _, domain in read_companies(companies)}
-    with open(discovered, newline="") as f:
+    with open(discovered, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     conn.executemany(
         "INSERT OR IGNORE INTO leads VALUES (?, ?, ?, ?, ?, ?)",
-        [(r["domain"], r["name"], r["why"], r["focus"], r["discovered_at"], r["domain"] in queued) for r in rows],
+        [(domain, r["name"], r["why"], r["focus"], r["discovered_at"], domain in queued)
+         for r in rows for domain in [runs.normalize_domain(r["domain"])]],  # discover writes it so; hand edits may not
     )

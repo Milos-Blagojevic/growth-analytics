@@ -6,12 +6,15 @@ the data folder; Microsoft returns a new one on every refresh, which replaces th
 """
 
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+
+logger = logging.getLogger("outlook")
 
 TOKEN_FILE = "outlook_token.json"
 SCOPES = "offline_access https://graph.microsoft.com/Mail.Read"
@@ -50,9 +53,12 @@ def _post(url, data):
 def _save(path, body):
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"refresh_token": body["refresh_token"],
-                               "saved_at": datetime.now().isoformat(timespec="seconds")}, indent=2))
-    tmp.chmod(0o600)
+    # A .tmp left behind by an interrupted save may be wider than 0600: never reuse it. Then the file is created
+    # owner-only before anything is written, so the token is never readable by others, not even briefly.
+    tmp.unlink(missing_ok=True)
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(json.dumps({"refresh_token": body["refresh_token"],
+                            "saved_at": datetime.now().isoformat(timespec="seconds")}, indent=2))
     tmp.replace(path)  # atomic: a crash never leaves a half-written token
 
 
@@ -72,11 +78,15 @@ def login(path=TOKEN_FILE, *, show=print, sleep=time.sleep):
     deadline = time.monotonic() + int(body.get("expires_in", 900))
     while time.monotonic() < deadline:
         sleep(interval)
-        status, reply = _post(f"{_authority()}/token", {
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            "client_id": client_id,
-            "device_code": body["device_code"],
-        })
+        try:
+            status, reply = _post(f"{_authority()}/token", {
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "client_id": client_id,
+                "device_code": body["device_code"],
+            })
+        except RuntimeError as exc:  # a network blip while you are still signing in: ask again, until the deadline
+            logger.warning("%s; trying again in %ds", exc, interval)
+            continue
         if status == 200 and reply.get("refresh_token"):
             _save(path, reply)
             return

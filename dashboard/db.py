@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
 
@@ -65,6 +65,22 @@ USER_MIGRATIONS = [
         decided_at TEXT NOT NULL
     );
     """,
+    # Company cards are keyed by runs.normalize_domain(domain) since results.domain is normalised at ingest; refs
+    # saved under an earlier spelling (www., upper case, a URL) follow. When a row's normalised twin already exists,
+    # OR IGNORE skips the conflicting step instead of failing the migration: the row is kept, under a ref no card
+    # matches, and the twin keeps the card.
+    """
+    UPDATE OR IGNORE tracking SET ref = lower(ref) WHERE kind = 'company';
+    UPDATE OR IGNORE tracking SET ref = substr(ref, 9) WHERE kind = 'company' AND ref LIKE 'https://%';
+    UPDATE OR IGNORE tracking SET ref = substr(ref, 8) WHERE kind = 'company' AND ref LIKE 'http://%';
+    UPDATE OR IGNORE tracking SET ref = substr(ref, 5) WHERE kind = 'company' AND ref LIKE 'www.%';
+    UPDATE OR IGNORE tracking SET ref = substr(ref, 1, instr(ref, '/') - 1) WHERE kind = 'company' AND instr(ref, '/') > 0;
+    UPDATE mail_decisions SET ref = lower(ref) WHERE kind = 'company';
+    UPDATE mail_decisions SET ref = substr(ref, 9) WHERE kind = 'company' AND ref LIKE 'https://%';
+    UPDATE mail_decisions SET ref = substr(ref, 8) WHERE kind = 'company' AND ref LIKE 'http://%';
+    UPDATE mail_decisions SET ref = substr(ref, 5) WHERE kind = 'company' AND ref LIKE 'www.%';
+    UPDATE mail_decisions SET ref = substr(ref, 1, instr(ref, '/') - 1) WHERE kind = 'company' AND instr(ref, '/') > 0;
+    """,
 ]
 
 SCHEMA = """
@@ -91,6 +107,7 @@ CREATE TABLE results (
     role_source TEXT,
     dead_roles TEXT,              -- JSON [{"title", "url"}]
     grounding TEXT,               -- JSON {field: {"confidence", "urls"}}
+    warnings TEXT,                -- JSON [str]: research warnings, e.g. a failed ATS fallback search
     score INTEGER,                -- NULL when not scored (research-only run or error)
     verdict TEXT,
     best_role_title TEXT,

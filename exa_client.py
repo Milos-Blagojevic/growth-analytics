@@ -4,6 +4,7 @@ Defaults follow the project setup: type="auto", highlights for content.
 Docs: https://docs.exa.ai/reference/search-api-guide-for-coding-agents
 """
 
+import functools
 import logging
 import os
 import random
@@ -13,9 +14,35 @@ import time
 
 from dotenv import load_dotenv
 from exa_py import Exa
+import exa_py.api
 import requests
 
 load_dotenv()
+
+TIMEOUT_SECONDS = (15, 120)  # (connect, read) for every Exa request; deep searches can take tens of seconds
+
+
+class _BoundedRequests:
+    """Stand-in for the `requests` module inside the Exa SDK: same verbs, always with a timeout.
+
+    The SDK calls bare `requests.get/post/patch/delete` (no timeout, so a stalled connection hangs the
+    pipeline and the retry on `requests.Timeout` never fires). Everything else resolves to the real module.
+    """
+
+    get = staticmethod(functools.partial(requests.get, timeout=TIMEOUT_SECONDS))
+    post = staticmethod(functools.partial(requests.post, timeout=TIMEOUT_SECONDS))
+    patch = staticmethod(functools.partial(requests.patch, timeout=TIMEOUT_SECONDS))
+    delete = staticmethod(functools.partial(requests.delete, timeout=TIMEOUT_SECONDS))
+
+    def __getattr__(self, name):
+        return getattr(requests, name)
+
+
+exa_py.api.requests = _BoundedRequests()
+
+
+def configured():
+    return bool(os.environ.get("EXA_API_KEY"))
 
 
 def get_client() -> Exa:

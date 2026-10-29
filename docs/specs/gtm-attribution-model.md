@@ -1,6 +1,6 @@
 # Spec: multi-touch attribution, CAC and payback-by-channel model on synthetic data
 
-Status: ready to implement, except the report layer (see [Report layer: open decision](#report-layer-open-decision)).
+Status: ready to implement, except the report layer (see [Report layer: open decision](#12-report-layer-open-decision)).
 Owner: Milos Blagojevic. Implementer: a coding agent working from this document alone.
 
 ## 1. Goal

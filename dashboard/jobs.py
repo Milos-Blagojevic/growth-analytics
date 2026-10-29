@@ -79,13 +79,15 @@ def build(conn, root, form):
         return _build_run(conn, root, form)
     if kind == "discover":
         focus = " ".join(form.get("focus", "").split())[:100]
+        if focus.startswith("-"):
+            raise ValueError("focus cannot start with a dash: hunt.py would read it as an option")
         try:
             limit = int(form.get("limit") or 15)
         except ValueError:
             raise ValueError("limit must be a number") from None
         if not 1 <= limit <= MAX_DISCOVER_LIMIT:
             raise ValueError(f"limit must be between 1 and {MAX_DISCOVER_LIMIT}")
-        args = ["discover"] + ([focus] if focus else []) + ["--limit", str(limit)]
+        args = ["discover", "--limit", str(limit)] + ([focus] if focus else [])  # options first: focus is positional
         label = f"Discover{f' “{focus}”' if focus else ''} (limit {limit})"
         return Spec("discover", args, label, {"kind": kind, "focus": focus, "limit": str(limit)},
                     estimate=[DISCOVER_ESTIMATE], warnings=["Appends new companies to discovered.csv."])
@@ -177,7 +179,10 @@ def _build_run(conn, root, form):
         target = companies[0][0] if len(companies) == 1 else f"{len(companies)} selected companies"
     else:
         companies = None
-        listed = ingest.read_companies(Path(root) / ingest.COMPANIES)
+        try:
+            listed = ingest.read_companies(Path(root) / ingest.COMPANIES)
+        except ValueError as exc:
+            raise ValueError(f"companies.csv {exc}") from exc
         if not listed:
             raise ValueError("companies.csv is missing or empty")
         target = f"{len(listed)} companies in companies.csv"

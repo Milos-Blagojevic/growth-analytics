@@ -2,6 +2,8 @@ import argparse
 import json
 from datetime import datetime, timezone
 
+import anthropic
+import httpx
 import pytest
 
 import hunt
@@ -116,17 +118,141 @@ def test_mail_reads_an_email_claude_left_unlabelled_again(workdir, mailbox, fake
     assert set(json.loads((workdir / "mail_state.json").read_text())["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"}
 
 
-def test_mail_gives_up_on_an_email_claude_keeps_skipping(workdir, mailbox, fake_claude, monkeypatch, http):
-    no_labels = fake_claude({"emails": []})
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [({"emails": []}, 0), (None, 1)],  # Claude skips every email / returns nothing parsable: a problem
+)
+def test_mail_gives_up_on_an_email_claude_keeps_skipping(workdir, mailbox, fake_claude, monkeypatch, http, fields, code):
+    no_labels = fake_claude(fields)
     monkeypatch.setattr(scoring, "_client", lambda: no_labels)
 
-    for _ in range(mail.MAX_TRIES + 2):
-        assert hunt.cmd_mail(mail_args()) == 0
+    for i in range(1, mail.MAX_TRIES + 1):
+        assert hunt.cmd_mail(mail_args()) == code
+        tries = json.loads((workdir / "mail_state.json").read_text())["tries"]  # saved after each check, failed or not
+        assert tries == ({"<m1@mail.example>": i, "<m3@mail.example>": i} if i < mail.MAX_TRIES else {})
+    for _ in range(2):
+        assert hunt.cmd_mail(mail_args()) == 0  # given up on: nothing left for Claude to fail on
 
     assert len(no_labels.calls) == mail.MAX_TRIES  # paid for at most MAX_TRIES times, then left alone
     state = json.loads((workdir / "mail_state.json").read_text())
     assert set(state["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"} and state["tries"] == {}
     assert datetime.fromisoformat(state["checked_until"]) > datetime(2026, 10, 14, tzinfo=timezone.utc)
+    assert not mail.update_files(workdir)
+
+
+def test_mail_keeps_the_other_batches_when_claude_fails_on_one(workdir, fake_claude, monkeypatch, http, capsys):
+    ats = [graph_message(n, "no-reply@us.greenhouse-mail.io", f"Your application to Co{n}", "Unfortunately no.")
+           for n in range(10, 35)]  # 25 candidates: a batch of 20 and one of 5
+    for n, m in enumerate(ats):
+        m["receivedDateTime"] = f"2026-10-20T09:{n:02d}:00Z"
+    http.post(TOKEN_URL, json={"access_token": "at", "refresh_token": "rt-2"})
+    http.get(INBOX, json={"value": ats})
+    http.get(JUNK, json={"value": []})
+    telegram_api = http.post(TELEGRAM, json={"ok": True})
+
+    class Flaky(fake_claude):
+        def parse(self, **kwargs):
+            if self.calls:  # the second batch
+                self.calls.append(kwargs)
+                raise overloaded()
+            return super().parse(**kwargs)
+
+    flaky = Flaky({"emails": [{"number": n, "outcome": "rejected", "company": f"Co{n + 9}", "role": "",
+                               "summary": f"Co{n + 9} declined."} for n in range(1, mail_labels.BATCH + 1)]})
+    monkeypatch.setattr(scoring, "_client", lambda: flaky)
+
+    assert hunt.cmd_mail(mail_args()) == 1
+
+    assert len(flaky.calls) == 2
+    out = capsys.readouterr().out
+    assert "Claude failed on emails 21-25 of 25: APIStatusError" in out
+    (saved,) = mail.update_files(workdir)
+    updates = json.loads(saved.read_text())["updates"]
+    assert [u["company"] for u in updates] == [f"Co{n}" for n in range(10, 30)]  # the first batch, saved and sent
+    (text,) = [json.loads(c.request.body)["text"] for c in telegram_api.calls]
+    assert "Rejected: Co10" in text and "Rejected: Co29" in text and "Co30" not in text
+    state = json.loads((workdir / "mail_state.json").read_text())
+    assert set(state["seen"]) == {f"<m{n}@mail.example>" for n in range(10, 30)}
+    assert state["tries"] == {}  # the failed call cost nothing: the batch is not a try closer to being given up on
+    # The next check starts early enough to read the failed batch again: an hour before its oldest email (09:20Z).
+    assert datetime.fromisoformat(state["checked_until"]) == datetime(2026, 10, 20, 10, 20, tzinfo=timezone.utc)
+
+
+def test_mail_keeps_trying_until_claude_answers(workdir, mailbox, fake_claude, monkeypatch, http):
+    class Down(fake_claude):
+        def parse(self, **kwargs):
+            if len(self.calls) < mail.MAX_TRIES:  # key or billing problem for the first checks: no answer at all
+                self.calls.append(kwargs)
+                raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
+            return super().parse(**kwargs)
+
+    down = Down(LABELS)
+    monkeypatch.setattr(scoring, "_client", lambda: down)
+
+    for _ in range(mail.MAX_TRIES):
+        assert hunt.cmd_mail(mail_args()) == 1
+        state = json.loads((workdir / "mail_state.json").read_text())
+        assert state["seen"] == {} and state["tries"] == {}  # nothing was billed, so nothing counts against them
+        assert datetime.fromisoformat(state["checked_until"]) - mail.OVERLAP == datetime(2026, 10, 11, 9, tzinfo=timezone.utc)
+    telegram_api = http.post(TELEGRAM, json={"ok": True})
+
+    assert hunt.cmd_mail(mail_args()) == 0  # Claude is back: labelled, saved and sent on this check
+
+    assert len(down.calls) == mail.MAX_TRIES + 1
+    (saved,) = mail.update_files(workdir)
+    assert [u["company"] for u in json.loads(saved.read_text())["updates"]] == ["Acme", "Beta"]
+    (text,) = [json.loads(c.request.body)["text"] for c in telegram_api.calls]
+    assert "Rejected: Acme" in text and "Beta" in text
+    state = json.loads((workdir / "mail_state.json").read_text())
+    assert set(state["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"} and state["tries"] == {}
+
+
+def test_mail_counts_an_unparsable_claude_reply_as_a_try(workdir, mailbox, fake_claude, monkeypatch, http):
+    nothing = fake_claude(None)
+    monkeypatch.setattr(scoring, "_client", lambda: nothing)
+
+    assert hunt.cmd_mail(mail_args()) == 1
+
+    assert len(nothing.calls) == 1 and not mail.update_files(workdir)  # nothing saved, nothing sent (Telegram unmocked)
+    state = json.loads((workdir / "mail_state.json").read_text())
+    assert state["seen"] == {} and state["tries"] == {"<m1@mail.example>": 1, "<m3@mail.example>": 1}
+
+
+def test_mail_counts_an_answer_the_sdk_cannot_validate_as_a_try(workdir, mailbox, fake_claude, monkeypatch, http):
+    """Claude answered (billed) but its JSON was cut off: the SDK raises before parsed_output exists."""
+    class CutOff(fake_claude):
+        def parse(self, **kwargs):
+            self.calls.append(kwargs)
+            mail_labels.Labels.model_validate_json('{"emails": [{"number": 1, "outcome": "rej')
+
+    cut_off = CutOff(LABELS)
+    monkeypatch.setattr(scoring, "_client", lambda: cut_off)
+
+    for n in range(1, mail.MAX_TRIES + 1):
+        assert hunt.cmd_mail(mail_args()) == 1
+        state = json.loads((workdir / "mail_state.json").read_text())
+        if n < mail.MAX_TRIES:
+            assert state["tries"] == {"<m1@mail.example>": n, "<m3@mail.example>": n} and state["seen"] == {}
+    assert state["tries"] == {} and set(state["seen"]) == {"<m1@mail.example>", "<m3@mail.example>"}  # given up
+    assert len(cut_off.calls) == mail.MAX_TRIES
+    assert hunt.cmd_mail(mail_args()) == 0 and len(cut_off.calls) == mail.MAX_TRIES  # not paid for again
+
+
+def overloaded():
+    response = httpx.Response(529, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
+    return anthropic.APIStatusError("overloaded", response=response, body=None)
+
+
+def test_next_state_keeps_the_tries_of_emails_claude_never_answered_about():
+    now = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+    older = {"id": "<a>", "received_at": "2026-10-20T09:00:00"}  # already missed by Claude's answers, twice
+    newer = {"id": "<b>", "received_at": "2026-10-20T11:00:00"}
+
+    state, given_up = mail.next_state({"tries": {"<a>": mail.MAX_TRIES - 1}}, now, [], unanswered=[older, newer])
+
+    assert given_up == [] and state["seen"] == {}
+    assert state["tries"] == {"<a>": mail.MAX_TRIES - 1}  # not a try more, and none for the email never answered about
+    assert datetime.fromisoformat(state["checked_until"]) == datetime.fromisoformat(older["received_at"]).astimezone() + mail.OVERLAP
 
 
 def test_mail_continues_where_a_capped_check_stopped(workdir, mailbox, fake, http, monkeypatch):
@@ -236,16 +362,25 @@ def test_only_outlooks_daily_agenda_is_skipped_locally(sender, subject, likely):
     assert mail.likely(message) is likely
 
 
+def test_local_filter_reads_the_same_text_the_models_get():
+    # Enough blank lines to fill the raw 2,000-character window; the wording only shows once whitespace is collapsed.
+    body = "\n \n" * 800 + "Unfortunately we will not move forward with your application."
+    message = {"from_address": "ana@beta.io", "subject": "Update", "body": body}
+
+    assert mail.likely(message) is True
+    assert "unfortunately" in mail.excerpt(body).lower()
+
+
 def test_mail_labels_survive_bad_numbers_from_claude(fake_claude):
     messages = [{"id": f"<{n}>", "received_at": "2026-10-18T09:00:00", "from_name": "", "from_address": "a@b.io",
                  "subject": "s", "body": "b", "web_link": ""} for n in range(2)]
     label = {"outcome": "other", "company": "", "role": "", "summary": "s"}
     fake = fake_claude({"emails": [{"number": 2, **label}, {"number": 9, **label}, {"number": 2, **label, "outcome": "rejected"}]})
 
-    events, usage = mail_labels.label(messages, client=fake)
+    events, usage, problems, unanswered = mail_labels.label(messages, client=fake)
 
     assert [(e["id"], e["outcome"], e["from"]) for e in events] == [("<1>", "other", "a@b.io")]
-    assert usage == {"input_tokens": 1200, "output_tokens": 300}
+    assert usage == {"input_tokens": 1200, "output_tokens": 300} and problems == [] and unanswered == []
 
 
 @pytest.mark.parametrize(

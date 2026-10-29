@@ -148,3 +148,20 @@ def test_missing_api_key_fails_before_any_request(exa, monkeypatch):
     with pytest.raises(RuntimeError, match="EXA_API_KEY is not set"):
         exa_client.search("q")
     assert exa.requests() == []
+
+
+def test_every_exa_request_has_a_timeout(exa, monkeypatch):
+    exa.on_search(search_response())
+    seen = []
+    original = requests.adapters.HTTPAdapter.send
+
+    def send(self, request, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return original(self, request, **kwargs)
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+
+    exa_client.search("q")
+
+    assert seen == [exa_client.TIMEOUT_SECONDS]
+    assert exa_client.TIMEOUT_SECONDS[0] > 0 and exa_client.TIMEOUT_SECONDS[1] > 0

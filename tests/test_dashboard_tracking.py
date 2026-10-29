@@ -103,3 +103,30 @@ def test_your_data_survives_reingest_and_derived_schema_changes(root, app_client
     page = app_client.get("/c/acme.com", headers={"HX-Request": "true"}).text
     assert "Negotiating" in page and "85" in page
     assert "dbt package" in app_client.get("/projects").text
+
+
+def test_a_company_status_saved_under_an_old_domain_spelling_follows_the_card(tmp_path):
+    """Before domains were normalised, a companies.csv row `Gamma,www.Gamma.dev` saved `www.Gamma.dev.json` and the
+    check-careers status was keyed by that spelling; the next run saves `gamma.dev.json`. One card, status kept."""
+    write_run(tmp_path, "20260108-090000", [result("Gamma", "www.Gamma.dev", fit=fit(60, "check_careers"))])
+    old = db.connect(tmp_path)
+    old.executescript("BEGIN; DELETE FROM user_schema; INSERT INTO user_schema VALUES (2); COMMIT;")  # pre-migration
+    with old:
+        old.execute("INSERT INTO tracking VALUES ('company', 'www.Gamma.dev', 'saved', 'Ask Ana', NULL, '2026-01-08T10:00:00')")
+        old.execute("INSERT INTO tracking VALUES ('company', 'https://Delta.io/careers', 'saved', '', NULL, '2026-01-08T10:00:00')")
+        old.execute("INSERT INTO tracking VALUES ('company', 'delta.io', 'applied', 'twin', '2026-01-09', '2026-01-09T10:00:00')")
+        old.execute("INSERT INTO mail_decisions VALUES ('<m1>', 'applied', 'company', 'www.Gamma.dev', 'rejected', '2026-01-08T11:00:00')")
+    old.close()
+    write_run(tmp_path, "20260109-090000", [result("Gamma", "gamma.dev", fit=fit(62, "check_careers"))])
+
+    app_client = client(create_app(tmp_path))
+    board = app_client.get("/?verdict=check_careers").text.split('id="results"')[1]
+    assert board.count("Gamma") == 1 and "www.Gamma.dev" not in board  # one card, under the normalised domain
+    page = app_client.get("/c/gamma.dev", headers={"HX-Request": "true"}).text
+    assert "Ask Ana" in page and "62" in page
+    conn = db.connect(tmp_path)
+    refs = {r["ref"]: r["status"] for r in conn.execute("SELECT ref, status FROM tracking WHERE kind = 'company'")}
+    assert refs["gamma.dev"] == "saved" and refs["delta.io"] == "applied"  # the twin that already matched the card wins
+    assert len(refs) == 3 and list(refs.values()).count("saved") == 2  # the other Delta row is kept, unmatched, not lost
+    assert conn.execute("SELECT ref FROM mail_decisions").fetchone()["ref"] == "gamma.dev"
+    assert conn.execute("SELECT version FROM user_schema").fetchone()[0] == len(db.USER_MIGRATIONS)

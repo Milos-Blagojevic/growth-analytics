@@ -114,6 +114,13 @@
   </section>
   {% endif %}
 
+  {% if r.warnings %}
+  <section>
+    <div class="eyebrow">Research warnings</div>
+    <ul class="plain warn">{% for w in r.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+
   {% if r.business_summary or r.signals %}
   <section>
     <div class="eyebrow">Company</div>

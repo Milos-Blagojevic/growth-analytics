@@ -34,7 +34,8 @@ def fit(score, verdict, role="", url="", **extra):
     }
 
 
-def result(name, domain, *, fit=None, roles=(), error=None):
+def result(name, domain, *, fit=None, roles=(), error=None, warnings=None):
+    """A saved <domain>.json. `warnings=None` leaves the key out, as runs saved before research warnings did."""
     r = {"name": name, "domain": domain}
     if error:
         r["error"] = error
@@ -57,6 +58,8 @@ def result(name, domain, *, fit=None, roles=(), error=None):
         "role_source": "main" if roles else "none",
         "dead_roles": [],
     }
+    if warnings is not None:
+        r["research"]["warnings"] = warnings
     if fit:
         r["fit"] = fit
     return r

@@ -123,6 +123,24 @@ def test_ats_fallback_when_main_search_has_no_live_roles(exa, http, profile):
     assert out["grounding"]["open_roles"] == {"confidence": "medium", "urls": [found["url"]]}
 
 
+def test_ats_fallback_failure_keeps_the_main_research(exa, http, profile):
+    stale = role("Senior Data Engineer", "https://job-boards.greenhouse.io/acme/jobs/333")
+    main = structured_response(company([stale]))
+    exa.on_search(lambda body: error(500) if "includeDomains" in body else main)
+    http.get(stale["url"], status=404)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["content"]["business_summary"] == "Billing software for SMBs."
+    assert out["content"]["identity_verified"] is True
+    assert out["content"]["open_roles"] == []
+    assert out["role_source"] == "none"
+    assert out["dead_roles"] == [{"title": stale["title"], "url": stale["url"]}]
+    assert "open_roles" not in out["grounding"]
+    (warning,) = out["warnings"]
+    assert warning.startswith("ATS fallback search failed: ValueError: Request failed with status code 500")
+
+
 def test_no_ats_fallback_for_unverified_identity(exa, profile):
     exa.on_search(structured_response(company([], verified=False)))
 
@@ -172,3 +190,16 @@ def test_check_posting(http, setup, url, expected):
     setup(http)
 
     assert research.check_posting(url) == expected
+
+
+def test_check_posting_keeps_a_live_url_with_non_ascii_or_spaces(http):
+    http.get("https://acme.com/jobs/ing%C3%A9nieur-donn%C3%A9es%20senior", status=200)
+
+    assert research.check_posting("https://acme.com/jobs/ingénieur-données senior") == "live"
+
+
+def test_check_posting_still_sees_a_redirect_away_from_an_encoded_url_as_dead(http):
+    http.get("https://acme.com/jobs/ing%C3%A9nieur", status=302, headers={"Location": "https://acme.com/careers"})
+    http.get("https://acme.com/careers", status=200)
+
+    assert research.check_posting("https://acme.com/jobs/ingénieur") == "dead"

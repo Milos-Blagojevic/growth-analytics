@@ -147,7 +147,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             origin = request.headers.get("origin")
             if origin is not None and urlparse(origin).netloc != host:
                 return PlainTextResponse("Cross-origin request refused.", status_code=403)
-            if not secrets.compare_digest(request.headers.get("x-csrf-token", ""), csrf_token):
+            if not secrets.compare_digest(request.headers.get("x-csrf-token", "").encode(), csrf_token.encode()):
                 return PlainTextResponse("This page is out of date (the dashboard restarted). Reload it.", status_code=403)
         path = request.url.path
         if login and not path.startswith(PUBLIC_PATHS) and not login.valid(request.cookies.get(auth.COOKIE)):
@@ -289,7 +289,10 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         if not domains or unknown:
             return PlainTextResponse(f"Unknown companies: {', '.join(unknown)}" if unknown else "Select companies first.",
                                      status_code=400)
-        ingest.add_companies(root / ingest.COMPANIES, [(names[d], d) for d in domains])
+        try:
+            ingest.add_companies(root / ingest.COMPANIES, [(names[d], d) for d in domains])
+        except ValueError as exc:  # companies.csv is unreadable (the banner names it): nothing is appended blind
+            return PlainTextResponse(f"companies.csv {exc}", status_code=400)
         return Response(status_code=204, headers={"HX-Refresh": "true"})
 
     # Pipeline and side projects -----------------------------------------------------------------------------
@@ -466,6 +469,10 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs_page(request: Request):
+        try:
+            companies = len(ingest.read_companies(root / ingest.COMPANIES))
+        except ValueError:  # the ingest banner names the file; the run button is disabled
+            companies = 0
         with connection() as conn:
             return render(
                 request,
@@ -475,7 +482,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 busy=runner.busy(),
                 jobs=jobs.recent(conn),
                 saved=queries.saved_runs(conn),
-                companies=len(ingest.read_companies(root / ingest.COMPANIES)),
+                companies=companies,
                 modes=jobs.RUN_MODES,
                 schedules=scheduler.status() if scheduler else None,
             )
