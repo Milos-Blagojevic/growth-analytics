@@ -14,17 +14,16 @@ import json
 import logging
 import os
 import re
-import secrets
-import time
 import webbrowser
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlencode
 
 import requests
+
+import oauth
 
 logger = logging.getLogger("gmail")
 
@@ -76,64 +75,26 @@ def _error(body):
     return f"{body.get('error', 'error')}: {description}" if description else body.get("error", "error")
 
 
-class _Redirect(BaseHTTPRequestHandler):
-    """Catches Google's redirect back to the loopback server: one GET / with `code` and `state`, or `error`."""
-
-    def do_GET(self):  # noqa: N802 (http.server's name)
-        query = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
-        if urlparse(self.path).path != "/" or query.get("state") != self.server.state:
-            self._reply(400, "Unexpected request; go back to the terminal and start the sign-in again.")
-            return  # not our redirect: keep waiting
-        if query.get("error"):
-            self.server.error = query["error"]
-            self._reply(200, "Sign-in declined; you can close this tab.")
-        elif query.get("code"):
-            self.server.code = query["code"]
-            self._reply(200, "Signed in; you can close this tab.")
-        else:
-            self._reply(400, "Missing code; go back to the terminal and start the sign-in again.")
-
-    def _reply(self, status, text):
-        body = text.encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):  # noqa: A002 (http.server's signature)
-        logger.debug(format, *args)
+def _auth_url(client_id, redirect_uri, state):
+    return AUTH + "?" + urlencode({
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": SCOPES,
+        "access_type": "offline",  # a refresh token
+        "prompt": "consent",  # Google only hands out a refresh token when consent is shown
+        "state": state,
+    })
 
 
-def login(path=TOKEN_FILE, *, show=print, open_browser=webbrowser.open, timeout=900):
+def login(path=TOKEN_FILE, *, show=print, open_browser=webbrowser.open, timeout=oauth.TIMEOUT):
     """Browser sign-in (installed-app loopback flow): shows the URL, catches the redirect, saves the refresh token."""
     client_id, client_secret = os.environ["GMAIL_CLIENT_ID"], os.environ["GMAIL_CLIENT_SECRET"]
-    with HTTPServer(("127.0.0.1", 0), _Redirect) as server:
-        server.state, server.code, server.error = secrets.token_urlsafe(16), None, None
-        server.timeout = 1  # handle_request returns every second so the deadline is checked
-        redirect_uri = f"http://127.0.0.1:{server.server_port}"
-        url = AUTH + "?" + urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": SCOPES,
-            "access_type": "offline",  # a refresh token
-            "prompt": "consent",  # Google only hands out a refresh token when consent is shown
-            "state": server.state,
-        })
-        show(f"Sign in to Google in your browser (this window is listening on {redirect_uri}):\n{url}")
-        try:
-            open_browser(url)
-        except Exception:  # noqa: BLE001 (no browser here: the URL is on screen)
-            pass
-        deadline = time.monotonic() + timeout
-        while server.code is None and server.error is None:
-            if time.monotonic() >= deadline:
-                raise AuthError("sign-in timed out; start it again")
-            server.handle_request()
-        if server.error:
-            raise AuthError(f"sign-in failed ({server.error})")
-        code = server.code
+    try:
+        code, redirect_uri = oauth.browser_code(lambda uri, state: _auth_url(client_id, uri, state),
+                                                show=show, open_browser=open_browser, timeout=timeout)
+    except (oauth.Declined, TimeoutError) as exc:
+        raise AuthError(f"sign-in failed ({exc})" if isinstance(exc, oauth.Declined) else str(exc)) from None
     status, body = _post(TOKEN, {
         "grant_type": "authorization_code",
         "code": code,

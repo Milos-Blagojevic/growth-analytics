@@ -1,21 +1,25 @@
-"""Outlook mail through Microsoft Graph: device-code sign-in, token refresh, recent messages, search, drafts.
+"""Outlook mail through Microsoft Graph: browser sign-in, token refresh, recent messages, search, drafts.
 
-Sign-in uses your own app registration (OUTLOOK_CLIENT_ID, a public client) with the delegated Mail.ReadWrite
-permission, so this code can read mail and create drafts (the chat bot's new emails and replies) but never send,
-move or delete it: Mail.Send is never requested. `hunt.py mail` reads untrusted email and asks for read-only
-(Mail.Read) access tokens from the same refresh token. The refresh token lives in TOKEN_FILE in the data folder;
-Microsoft returns a new one on every refresh, which replaces the old one there.
+Sign-in uses your own app registration (OUTLOOK_CLIENT_ID, a public client with the `http://localhost` desktop
+redirect) with the delegated Mail.ReadWrite permission, so this code can read mail and create drafts (the chat
+bot's new emails and replies) but never send, move or delete it: Mail.Send is never requested. `hunt.py mail`
+reads untrusted email and asks for read-only (Mail.Read) access tokens from the same refresh token. The refresh
+token lives in TOKEN_FILE in the data folder; Microsoft returns a new one on every refresh, which replaces the old
+one there.
 """
 
 import html
 import json
 import logging
 import os
-import time
+import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 import requests
+
+import oauth
 
 logger = logging.getLogger("outlook")
 
@@ -74,36 +78,36 @@ def _error(body):
     return f"{body.get('error', 'error')}: {description}" if description else body.get("error", "error")
 
 
-def login(path=TOKEN_FILE, *, show=print, sleep=time.sleep):
-    """Device-code sign-in: shows the URL and code to enter in a browser, waits for it, saves the refresh token."""
+def _auth_url(client_id, redirect_uri, state):
+    return f"{_authority()}/authorize?" + urlencode({
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "response_mode": "query",
+        "scope": SCOPES,
+        "state": state,
+    })
+
+
+def login(path=TOKEN_FILE, *, show=print, open_browser=webbrowser.open, timeout=oauth.TIMEOUT):
+    """Browser sign-in (authorization code, loopback redirect): shows the URL, catches the redirect, saves the
+    refresh token. Microsoft's portal registers the desktop redirect as `http://localhost` and ignores the port."""
     client_id = os.environ["OUTLOOK_CLIENT_ID"]
-    status, body = _post(f"{_authority()}/devicecode", {"client_id": client_id, "scope": SCOPES})
-    if status != 200:
-        raise AuthError(f"could not start the sign-in ({_error(body)})")
-    show(body["message"])
-    interval = int(body.get("interval", 5))
-    deadline = time.monotonic() + int(body.get("expires_in", 900))
-    while time.monotonic() < deadline:
-        sleep(interval)
-        try:
-            status, reply = _post(f"{_authority()}/token", {
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                "client_id": client_id,
-                "device_code": body["device_code"],
-            })
-        except RuntimeError as exc:  # a network blip while you are still signing in: ask again, until the deadline
-            logger.warning("%s; trying again in %ds", exc, interval)
-            continue
-        if status == 200 and reply.get("refresh_token"):
-            _save(path, reply)
-            return
-        if reply.get("error") == "authorization_pending":
-            continue
-        if reply.get("error") == "slow_down":
-            interval += 5
-            continue
-        raise AuthError(f"sign-in failed ({_error(reply)})")
-    raise AuthError("sign-in timed out; start it again")
+    try:
+        code, redirect_uri = oauth.browser_code(lambda uri, state: _auth_url(client_id, uri, state), host="localhost",
+                                                show=show, open_browser=open_browser, timeout=timeout)
+    except (oauth.Declined, TimeoutError) as exc:
+        raise AuthError(f"sign-in failed ({exc})" if isinstance(exc, oauth.Declined) else str(exc)) from None
+    status, body = _post(f"{_authority()}/token", {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": SCOPES,
+    })
+    if status != 200 or not body.get("refresh_token"):
+        raise AuthError(f"sign-in failed ({_error(body)})")
+    _save(path, body)
 
 
 def access_token(path=TOKEN_FILE, *, scope=READ_SCOPE):

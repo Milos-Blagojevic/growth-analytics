@@ -15,8 +15,9 @@ Python 3.11+ CLI tools: an Exa search client (`exa_client.py`), a job-hunt pipel
 | `jev.py` | The only place that talks to TypeSafe's Jev decision model: retries, usage tally, cost per token; optional (`TYPESAFE_API_KEY`) |
 | `ashby.py` | Ashby public job-board API (link checks and watch list) |
 | `watch.py` | Watch list: new matching postings from Ashby boards |
-| `outlook.py` | Outlook through Microsoft Graph: device-code sign-in (consents to `Mail.ReadWrite`, never `Mail.Send`), refresh token in `outlook_token.json`, recent messages for `mail` (read-only tokens, `READ_SCOPE`), and search, full text and drafts for `chat`; never sends |
-| `gmail.py` | Gmail through the Gmail REST API: browser sign-in on a loopback port (`gmail.readonly` + `gmail.compose`), refresh token in `gmail_token.json`, search, full text and drafts for `chat`; never sends |
+| `outlook.py` | Outlook through Microsoft Graph: browser sign-in (consents to `Mail.ReadWrite`, never `Mail.Send`; the registration's desktop redirect is `http://localhost`), refresh token in `outlook_token.json`, recent messages for `mail` (read-only tokens, `READ_SCOPE`), and search, full text and drafts for `chat`; never sends |
+| `oauth.py` | The browser sign-in both providers share (`browser_code`): authorization code with a loopback redirect on 127.0.0.1; Google blocks Gmail scopes in the device-code flow and Microsoft's device-code consent fails for some accounts |
+| `gmail.py` | Gmail through the Gmail REST API: browser sign-in (`oauth.py`, `gmail.readonly` + `gmail.compose`), refresh token in `gmail_token.json`, search, full text and drafts for `chat`; never sends |
 | `chat.py` | The Telegram chat bot: Pydantic AI agent on the scoring model, tools over `outlook`/`gmail` (`list_emails`, `read_email`, `draft_email`, `draft_reply`), the in-memory conversation (`Conversation`, `trim`) and the `getUpdates` loop (`serve`) |
 | `mail.py` | Email updates: the local filter for what reaches Jev and Claude, `mail_state.json`, `mail/<timestamp>.json` files; shared by `hunt.py` and the dashboard, no paid clients |
 | `mail_labels.py` | Jev drops clear "other" emails (`screen`), then Claude labels the rest (`Label`: rejected, interview, other) |
@@ -83,7 +84,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 
 - Tests need no keys and make no network calls. The autouse `http` fixture in `tests/conftest.py` fails any test that makes an unmocked request.
 - Mock Exa at the HTTP level with the `exa` fixture (`tests/exa_mock.py`, Exa wire format), so the real SDK builds and parses requests. Do not patch `exa_client` functions.
-- Mock Ashby, posting pages, Telegram, Microsoft sign-in and Graph through `responses`; mock TypeSafe with the `jev_api` fixture (`tests/jev_mock.py`, its wire format); use the `claude` fixture (`FakeClaude`) instead of the Anthropic client (`fake_claude` for output models other than `Fit`). Microsoft Graph and the Gmail API are mocked through `responses` too; the chat agent runs on a scripted pydantic-ai `FunctionModel` (`tests/test_chat.py::scripted`), never on a real model.
+- Mock Ashby, posting pages, Telegram, Microsoft sign-in and Graph through `responses`; mock TypeSafe with the `jev_api` fixture (`tests/jev_mock.py`, its wire format); use the `claude` fixture (`FakeClaude`) instead of the Anthropic client (`fake_claude` for output models other than `Fit`). Microsoft Graph and the Gmail API are mocked through `responses` too; the chat agent runs on a scripted pydantic-ai `FunctionModel` (`tests/test_chat.py::scripted`), never on a real model; browser sign-ins are driven by `tests/browser_login.py`, which plays the redirect against the loopback server with `urllib` (outside the `responses` mock).
 - New behavior gets a test in the matching `tests/test_<module>.py` (dashboard: `tests/test_dashboard_<module>.py`, with pipeline files built by `tests/dashboard_data.py` and requests made through FastAPI's `TestClient`).
 
 ## Skills

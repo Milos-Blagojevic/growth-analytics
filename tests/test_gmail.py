@@ -5,7 +5,6 @@ import threading
 import time
 import urllib.request
 from email import message_from_bytes, policy
-from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -13,6 +12,7 @@ import requests
 import responses
 
 import gmail
+from browser_login import Login
 
 MESSAGES = f"{gmail.API}/messages"
 DRAFTS = f"{gmail.API}/drafts"
@@ -65,51 +65,11 @@ def test_configured_needs_both_the_client_id_and_the_secret(monkeypatch):
     assert not gmail.configured()
 
 
-class Login:
-    """Runs gmail.login in a thread and hands the test the URL it showed."""
-
-    def __init__(self, path, **kwargs):
-        self.shown, self.opened, self.error = [], [], None
-        self.ready = threading.Event()
-
-        def show(text):
-            self.shown.append(text)
-            self.ready.set()
-
-        def run():
-            try:
-                gmail.login(path, show=show, open_browser=self.opened.append, **kwargs)
-            except Exception as exc:  # noqa: BLE001 (re-raised by the test)
-                self.error = exc
-
-        self.thread = threading.Thread(target=run, daemon=True)
-        self.thread.start()
-        assert self.ready.wait(5), "login never showed a URL"
-        self.url = self.shown[0].split("\n")[-1]
-        self.query = {k: v[0] for k, v in parse_qs(urlparse(self.url).query).items()}
-        self.redirect = self.query["redirect_uri"]
-
-    def visit(self, **params):
-        """The browser landing on the loopback server after Google's redirect: returns (status, body)."""
-        url = self.redirect + "/?" + "&".join(f"{k}={v}" for k, v in params.items())
-        try:
-            with urllib.request.urlopen(url, timeout=5) as r:
-                return r.status, r.read().decode()
-        except HTTPError as exc:
-            return exc.code, exc.read().decode()
-
-    def finish(self):
-        self.thread.join(5)
-        assert not self.thread.is_alive(), "login is still running"
-        if self.error:
-            raise self.error
-
-
 def test_login_catches_the_browser_redirect_and_keeps_only_the_refresh_token(http, tmp_path):
     token_requests = replies(http, responses.POST, gmail.TOKEN,
                              (200, {"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3599}))
     path = tmp_path / "gmail_token.json"
-    login = Login(path)
+    login = Login(gmail.login, path)
 
     assert urlparse(login.url)._replace(query="").geturl() == gmail.AUTH
     assert login.query["client_id"] == "app-123.apps.googleusercontent.com"
@@ -133,7 +93,7 @@ def test_login_catches_the_browser_redirect_and_keeps_only_the_refresh_token(htt
 
 
 def test_login_stops_when_the_sign_in_is_declined(http, tmp_path):
-    login = Login(tmp_path / "t.json")
+    login = Login(gmail.login, tmp_path / "t.json")
 
     assert login.visit(error="access_denied", state=login.query["state"])[0] == 200
     with pytest.raises(gmail.AuthError, match="access_denied"):
@@ -142,7 +102,7 @@ def test_login_stops_when_the_sign_in_is_declined(http, tmp_path):
 
 
 def test_login_times_out_without_a_redirect(tmp_path):
-    login = Login(tmp_path / "t.json", timeout=0)
+    login = Login(gmail.login, tmp_path / "t.json", timeout=0)
 
     with pytest.raises(gmail.AuthError, match="timed out"):
         login.finish()
@@ -150,7 +110,7 @@ def test_login_times_out_without_a_redirect(tmp_path):
 
 def test_login_reports_a_failed_code_exchange(http, tmp_path):
     replies(http, responses.POST, gmail.TOKEN, (400, {"error": "invalid_grant", "error_description": "Bad Request"}))
-    login = Login(tmp_path / "t.json")
+    login = Login(gmail.login, tmp_path / "t.json")
     login.visit(code="c", state=login.query["state"])
 
     with pytest.raises(gmail.AuthError, match=r"invalid_grant: Bad Request"):

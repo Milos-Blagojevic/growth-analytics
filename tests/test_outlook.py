@@ -9,6 +9,7 @@ import requests
 import responses
 
 import outlook
+from browser_login import Login
 
 AUTH = "https://login.microsoftonline.com/common/oauth2/v2.0"
 INBOX = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
@@ -45,52 +46,58 @@ def replies(http, method, url, *bodies):
     return seen
 
 
-def test_login_waits_for_the_browser_sign_in_and_keeps_only_the_refresh_token(http, tmp_path):
-    device_requests = replies(http, responses.POST, f"{AUTH}/devicecode",
-                              (200, {"device_code": "dev-1", "user_code": "ABC123", "expires_in": 900, "interval": 5,
-                                     "message": "Open https://microsoft.com/devicelogin, enter ABC123"}))
+def test_login_catches_the_browser_redirect_and_keeps_only_the_refresh_token(http, tmp_path):
     token_requests = replies(http, responses.POST, f"{AUTH}/token",
-                             (400, {"error": "authorization_pending"}),
-                             (400, {"error": "slow_down"}),
                              (200, {"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600}))
-    shown, sleeps = [], []
     path = tmp_path / "outlook_token.json"
+    login = Login(outlook.login, path)
 
-    outlook.login(path, show=shown.append, sleep=sleeps.append)
+    assert urlparse(login.url)._replace(query="").geturl() == f"{AUTH}/authorize"
+    assert login.query["client_id"] == "app-123"
+    assert "Mail.ReadWrite" in login.query["scope"] and "Mail.Send" not in login.query["scope"]  # read and draft, never send
+    assert (login.query["response_type"], login.query["response_mode"]) == ("code", "query")
+    assert login.redirect.startswith("http://localhost:") and len(login.query["state"]) >= 16  # the portal's desktop URI
+    assert login.opened == [login.url]
 
-    (asked,) = device_requests  # read and draft, never send
-    assert asked["client_id"] == "app-123"
-    assert "Mail.ReadWrite" in asked["scope"] and "Mail.Send" not in asked["scope"]
-    assert shown == ["Open https://microsoft.com/devicelogin, enter ABC123"]
-    assert sleeps == [5, 5, 10]  # slow_down adds 5 seconds to the polling interval
-    assert {r["device_code"] for r in token_requests} == {"dev-1"}
+    assert login.visit(code="x", state="wrong-state")[0] == 400  # not our redirect: keep waiting
+    assert login.thread.is_alive() and token_requests == []
+    status, page = login.visit(code="auth-code-1", state=login.query["state"])
+    assert (status, page) == (200, "Signed in; you can close this tab.")
+    login.finish()
+
+    (sent,) = token_requests
+    assert sent == {"grant_type": "authorization_code", "code": "auth-code-1", "redirect_uri": login.redirect,
+                    "client_id": "app-123", "scope": outlook.SCOPES}
     saved = json.loads(path.read_text())
     assert saved["refresh_token"] == "rt-1" and "access_token" not in saved
     assert path.stat().st_mode & 0o777 == 0o600
 
 
-def test_login_stops_when_the_sign_in_is_declined(http, tmp_path):
-    http.post(f"{AUTH}/devicecode", json={"device_code": "d", "expires_in": 900, "interval": 1, "message": "m"})
-    replies(http, responses.POST, f"{AUTH}/token", (400, {"error": "authorization_declined", "error_description": "No."}))
+def test_login_stops_when_the_sign_in_is_declined_or_refused(http, tmp_path):
+    login = Login(outlook.login, tmp_path / "t.json")
 
-    with pytest.raises(outlook.AuthError, match="authorization_declined: No."):
-        outlook.login(tmp_path / "t.json", show=lambda _: None, sleep=lambda _: None)
+    status, page = login.visit(error="invalid_request", error_description="AADSTS50011:+redirect+mismatch", state=login.query["state"])
+    assert status == 200 and "invalid_request: AADSTS50011: redirect mismatch" in page  # the reason shows in the tab too
+    with pytest.raises(outlook.AuthError, match="sign-in failed \\(invalid_request: AADSTS50011: redirect mismatch\\)"):
+        login.finish()
+    assert not (tmp_path / "t.json").exists() and len(http.calls) == 0
+
+
+def test_login_times_out_without_a_redirect(tmp_path):
+    login = Login(outlook.login, tmp_path / "t.json", timeout=0)
+    with pytest.raises(outlook.AuthError, match="timed out"):
+        login.finish()
+
+
+def test_login_reports_a_failed_code_exchange(http, tmp_path):
+    replies(http, responses.POST, f"{AUTH}/token",
+            (400, {"error": "invalid_grant", "error_description": "AADSTS70000: bad code.\nTrace ID: x"}))
+    login = Login(outlook.login, tmp_path / "t.json")
+    login.visit(code="c", state=login.query["state"])
+
+    with pytest.raises(outlook.AuthError, match=r"sign-in failed \(invalid_grant: AADSTS70000: bad code\.\)"):
+        login.finish()
     assert not (tmp_path / "t.json").exists()
-
-
-def test_login_keeps_polling_through_a_network_blip(http, tmp_path):
-    http.post(f"{AUTH}/devicecode", json={"device_code": "dev-1", "expires_in": 900, "interval": 5, "message": "m"})
-    token_requests = replies(http, responses.POST, f"{AUTH}/token",
-                             (None, requests.ConnectionError("wifi dropped")),
-                             (400, {"error": "authorization_pending"}),
-                             (200, {"access_token": "at-1", "refresh_token": "rt-1"}))
-    sleeps = []
-    path = tmp_path / "outlook_token.json"
-
-    outlook.login(path, show=lambda _: None, sleep=sleeps.append)
-
-    assert len(token_requests) == 3 and sleeps == [5, 5, 5]  # the blip costs one normal polling interval
-    assert json.loads(path.read_text())["refresh_token"] == "rt-1"
 
 
 @pytest.mark.parametrize("stale_tmp", [False, True])  # a wider .tmp left behind by an interrupted save
