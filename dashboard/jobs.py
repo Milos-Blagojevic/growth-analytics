@@ -309,15 +309,19 @@ class Runner:
                 self._cancelled.discard(job_id)
 
     def read_log(self, job_id):
-        path = self.log_path(job_id)
-        if not path.exists():
-            return ""
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - LOG_TAIL_BYTES))
-            text = f.read().decode(errors="replace")
-        return text if size <= LOG_TAIL_BYTES else "…\n" + text.split("\n", 1)[-1]
+        return tail(self.log_path(job_id))
+
+
+def tail(path):
+    """The last LOG_TAIL_BYTES of a log file ("" when missing); a cut log starts with "…" and a whole line."""
+    if not path.exists():
+        return ""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - LOG_TAIL_BYTES))
+        text = f.read().decode(errors="replace")
+    return text if size <= LOG_TAIL_BYTES else "…\n" + text.split("\n", 1)[-1]
 
 
 def recent(conn, limit=30):

@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 
 import interviews
 import runs
-from dashboard import auth, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
+from dashboard import auth, bot, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
 
 HERE = Path(__file__).parent
 VERDICT_LABELS = {
@@ -83,21 +83,27 @@ def _safe_next(url):
     return url if url.startswith("/") and not url.startswith(("//", "/\\")) else "/"
 
 
-def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=()):
+def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
+               chat_bot=False):
     """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
     `password` turns on the login (required when serving beyond loopback); `schedule_entries` come from
-    schedule.parse(HUNT_SCHEDULE)."""
+    schedule.parse(HUNT_SCHEDULE); `chat_bot` keeps `hunt.py chat` running while the app serves (CHAT_BOT=1)."""
     root = Path(root).resolve()
     login = auth.Auth(password) if password else None
     scheduler = None  # set below, once the job helpers exist
+    chat = bot.Bot(root, hunt_command) if chat_bot else None
 
     @asynccontextmanager
     async def lifespan(app):
         if scheduler:
             scheduler.start()
+        if chat:
+            chat.start()
         yield
         if scheduler:
             scheduler.stop()
+        if chat:
+            chat.stop()
 
     app = FastAPI(title="Job hunt dashboard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -132,6 +138,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     ingest_lock = threading.Lock()  # one ingest at a time; requests run in a thread pool
     runner = jobs.Runner(root, hunt_command)
     app.state.runner = runner
+    app.state.bot = chat
     app.state.csrf_token = csrf_token
     startup = db.connect(root)
     runner.recover(startup)
@@ -485,7 +492,18 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 companies=companies,
                 modes=jobs.RUN_MODES,
                 schedules=scheduler.status() if scheduler else None,
+                chat=chat.status() if chat else None,
+                chat_log=chat.read_log() if chat else "",
             )
+
+    @app.get("/runs/chat", response_class=HTMLResponse)
+    def chat_status(request: Request):
+        """Polled every 5 s by the chat bot block on the Runs page."""
+        if chat is None:
+            raise HTTPException(404, "The chat bot is not running here")
+        return templates.TemplateResponse(
+            request, "partials/chat_bot.html", {"chat": chat.status(), "chat_log": chat.read_log()}
+        )
 
     @app.post("/runs/preview", response_class=HTMLResponse)
     async def run_preview(request: Request):

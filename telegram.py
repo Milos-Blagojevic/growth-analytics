@@ -1,10 +1,11 @@
-"""Telegram delivery via the Bot API (sendMessage, plain text)."""
+"""Telegram Bot API: sendMessage (plain text) and getUpdates long polling for the chat bot."""
 
 import os
 
 import requests
 
 MAX_MESSAGE_CHARS = 4096  # Telegram sendMessage text limit
+POLL_SECONDS = 30  # getUpdates long-poll wait; the HTTP timeout allows for it
 
 
 def configured():
@@ -71,3 +72,26 @@ def send(text):
     data = response.json()
     if not data.get("ok"):
         raise RuntimeError(f"Telegram sendMessage failed: {data.get('description')} (code {data.get('error_code')})")
+
+
+def updates(offset=None, *, timeout=POLL_SECONDS):
+    """Incoming updates via getUpdates long polling: waits up to `timeout` seconds for one.
+
+    `offset` is the update id to start from (one more than the last one handled), which also confirms the earlier
+    ones to Telegram. Only message updates are requested. Raises RuntimeError without the token on failure.
+    """
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    params = {"timeout": timeout, "allowed_updates": ["message"]}
+    if offset is not None:
+        params["offset"] = offset
+    try:
+        response = requests.post(f"https://api.telegram.org/bot{token}/getUpdates", json=params, timeout=timeout + 15)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Telegram request failed: {type(exc).__name__}") from None
+    try:
+        data = response.json()
+    except ValueError:
+        raise RuntimeError(f"Telegram getUpdates failed: HTTP {response.status_code}") from None
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram getUpdates failed: {data.get('description')} (code {data.get('error_code')})")
+    return data["result"]

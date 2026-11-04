@@ -1,12 +1,14 @@
 """Serve the dashboard on a throwaway data folder where every job runs a fake hunt.py, for /verify smoke runs.
 
     .venv/bin/python .claude/skills/verify/scripts/sandbox.py --root DIR [--code DIR] [--port 8765] [--seed]
-        [--schedule HUNT_SCHEDULE] [--password DASHBOARD_PASSWORD]
+        [--schedule HUNT_SCHEDULE] [--password DASHBOARD_PASSWORD] [--chat-bot]
 
 `python -m dashboard` always starts the hunt.py next to the dashboard package (jobs.HUNT_SCRIPT), whatever --root
 is, so a Run button or HUNT_SCHEDULE entry there spends money and can message Telegram. This launcher passes
 `hunt_command` instead: jobs from buttons and from --schedule run DIR/fake_hunt.py, which prints its arguments,
-sleeps FAKE_HUNT_SECONDS (default 1) and exits with FAKE_HUNT_EXIT (default 0).
+sleeps FAKE_HUNT_SECONDS (default 1) and exits with FAKE_HUNT_EXIT (default 0). With --chat-bot (CHAT_BOT=1) the
+dashboard keeps `fake_hunt.py chat` running: it prints a line and sleeps FAKE_HUNT_CHAT_SECONDS (default 3600),
+so the Runs page shows a running bot.
 
 DIR must be new or empty, or a folder this script created before (it leaves a .verify-sandbox marker), so it never
 runs migrations on a copy of real data. --code is the code tree to serve (default: the current directory), so the
@@ -25,6 +27,9 @@ MARKER = ".verify-sandbox"
 
 FAKE_HUNT = """import os, sys, time
 print("fake hunt.py", *sys.argv[1:], flush=True)
+if sys.argv[1:2] == ["chat"]:
+    time.sleep(float(os.environ.get("FAKE_HUNT_CHAT_SECONDS", "3600")))
+    sys.exit(0)
 time.sleep(float(os.environ.get("FAKE_HUNT_SECONDS", "1")))
 sys.exit(int(os.environ.get("FAKE_HUNT_EXIT", "0")))
 """
@@ -69,6 +74,7 @@ def main():
     parser.add_argument("--seed", action="store_true", help="write sample files into a new --root")
     parser.add_argument("--schedule", default="", help="HUNT_SCHEDULE value; entries run the fake hunt.py")
     parser.add_argument("--password", default=None, help="DASHBOARD_PASSWORD value (turns on the login)")
+    parser.add_argument("--chat-bot", action="store_true", help="CHAT_BOT=1: keep the fake hunt.py chat running")
     args = parser.parse_args()
     root, code = args.root.resolve(), args.code.resolve()
     seedable = not root.exists() or not any(root.iterdir())
@@ -86,7 +92,8 @@ def main():
     from dashboard.app import create_app
 
     app = create_app(root, hunt_command=[sys.executable, str(fake)], password=args.password,
-                     schedule_entries=schedule.parse(args.schedule))
+                     schedule_entries=schedule.parse(args.schedule),
+                     **({"chat_bot": True} if args.chat_bot else {}))  # older trees (--code) lack the kwarg
     print(f"SANDBOX http://127.0.0.1:{args.port} {app.state.csrf_token}", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=args.port)
 

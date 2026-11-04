@@ -118,19 +118,21 @@ python hunt.py run --dry-run                   # research + score, print the ful
 python hunt.py run                             # research + score + send the notification to Telegram
 python hunt.py send                            # send the latest saved run's notification to Telegram (no new research or scoring)
 python hunt.py watch                           # send new growth-role postings from watched Ashby boards to Telegram
-python hunt.py outlook-login                   # sign in to Outlook once (read-only), for `mail`
+python hunt.py outlook-login                   # sign in to Outlook once (read, create drafts), for `mail` and `chat`
 python hunt.py mail                            # rejections and interview invites in new email: Telegram + dashboard suggestions (Claude)
 python hunt.py news                            # news digest on your [news].topics to Telegram (Exa + Claude)
 python hunt.py interview-prep interviews/<id>  # prep brief for one interview (Claude; see Interviews)
 python hunt.py interview-review interviews/<id> # review one interview's transcript (Claude; see Interviews)
+python hunt.py gmail-login                     # sign in to Gmail once (read, create drafts), for `chat`
+python hunt.py chat                            # Telegram chat bot over your mail: summaries, search, reply drafts (Claude; see Chat with your mail)
 python -m dashboard                            # dashboard at http://127.0.0.1:8000: results, your tracking, starting runs (see Dashboard)
 ```
 
-Options (`python hunt.py <command> --help` lists them): `--profile FILE` before the command reads another profile (default `profile.toml`); `run --companies FILE` (default `companies.csv`); `discover --limit N` (default 15) and `--history FILE` (default `discovered.csv`); `send [DIR]` (a directory under `out/`, default the latest run); `watch --state FILE` (default `watch_state.json`); `outlook-login --token FILE` and `mail --token FILE` (default `outlook_token.json`); `mail --state FILE` (default `mail_state.json`) and `--days N` (default 14); `news --state FILE` (default `news_state.json`) and `--days N` (default 7). `run`, `watch`, `mail` and `news` take `--dry-run`.
+Options (`python hunt.py <command> --help` lists them): `--profile FILE` before the command reads another profile (default `profile.toml`); `run --companies FILE` (default `companies.csv`); `discover --limit N` (default 15) and `--history FILE` (default `discovered.csv`); `send [DIR]` (a directory under `out/`, default the latest run); `watch --state FILE` (default `watch_state.json`); `outlook-login --token FILE` and `mail --token FILE` (default `outlook_token.json`); `mail --state FILE` (default `mail_state.json`) and `--days N` (default 14); `news --state FILE` (default `news_state.json`) and `--days N` (default 7); `gmail-login --token FILE` (default `gmail_token.json`); `chat --outlook-token FILE` and `--gmail-token FILE` (the two sign-in files). `run`, `watch`, `mail` and `news` take `--dry-run`.
 
 Each run saves raw research and scores to `out/<timestamp>/<domain>.json` (with the Jev screen of each role in `screen`, see Jev screening, and any research warnings, such as a failed ATS fallback search, in `warnings`), plus `out/<timestamp>/_run.json` with the run's mode (`research_only`, `dry_run` or `deliver`), start and save times, company and error counts, the Exa cost summary and, for scored runs, the scoring model and Claude token totals and, when `TYPESAFE_API_KEY` is set, the Jev model, requests, input tokens and dollars (`jev`). It also prints Exa cost, Claude token usage and Jev usage; a company's research warnings are printed under it in the digest and in the `--research-only` output. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call: `run`, `discover` and `news` refuse to start without `EXA_API_KEY` (so does `interview-prep` when it would fetch the posting), and the same check covers `ANTHROPIC_API_KEY` and the Telegram values for the commands that use them.
 
-One `hunt.py` command runs at a time per project folder: each command holds a lock (`.hunt.lock`, git-ignored) while it runs, and a second one exits at once with "Another hunt.py command is running here". This covers commands from a shell, cron and the dashboard alike. A cron `watch` that starts during a run exits with that message and checks again at its next scheduled time. The OS releases the lock when a command exits, so a crashed command never leaves it stuck. `outlook-login` is the exception: it can wait up to 15 minutes for you to sign in in the browser and touches only `outlook_token.json`, so it does not hold the lock; it only refuses to start while another command runs.
+One `hunt.py` command runs at a time per project folder: each command holds a lock (`.hunt.lock`, git-ignored) while it runs, and a second one exits at once with "Another hunt.py command is running here". This covers commands from a shell, cron and the dashboard alike. A cron `watch` that starts during a run exits with that message and checks again at its next scheduled time. The OS releases the lock when a command exits, so a crashed command never leaves it stuck. Three commands do not hold the lock: `outlook-login` can wait up to 15 minutes for you to sign in in the browser and touches only `outlook_token.json`, so it only refuses to start while another command runs; `gmail-login` touches only `gmail_token.json`, which no other command rewrites; and `chat` runs for as long as you leave it and shares no file with the other commands except `outlook_token.json` (see Chat with your mail).
 
 The Telegram notification is short: the digest's count header, one entry per apply, consider and stretch role (score, verdict, company, role title and posting URL, so it works away from the laptop), the names of failed companies, and a link to the dashboard (`DASHBOARD_URL` in `.env`; default `https://<RAILWAY_PUBLIC_DOMAIN>` on Railway, otherwise `http://127.0.0.1:8000`). Reasons, concerns, gap notes and side-project ideas are in the dashboard and in the `--dry-run` digest.
 
@@ -172,7 +174,7 @@ Only Ashby boards are supported. To run it on a schedule while the laptop is on,
 
 `python hunt.py mail` reads new mail in your Outlook inbox and junk folder, finds rejections and interview invites, sends them to Telegram, and suggests the matching status changes on the dashboard's Pipeline page. You confirm or dismiss each suggestion there: email never changes a status by itself.
 
-1. It reads mail received since the last check through Microsoft Graph with read-only access (`Mail.Read`), so it cannot send, move or delete mail. The first check reads `--days` back (default 14); later checks start an hour before the previous one, so mail that arrives late is not missed. One check reads at most 500 emails per folder, oldest first; when a folder (often Junk) holds more, the next check carries on from the newest one read, so nothing is skipped.
+1. It reads mail received since the last check through Microsoft Graph with a read-only access token (`Mail.Read`; the sign-in also allows creating drafts, which only `chat` uses, and never sending, moving or deleting mail). The first check reads `--days` back (default 14); later checks start an hour before the previous one, so mail that arrives late is not missed. One check reads at most 500 emails per folder, oldest first; when a folder (often Junk) holds more, the next check carries on from the newest one read, so nothing is skipped.
 2. It keeps only email that looks like application email: sent through an applicant tracking system (Greenhouse, Lever, Ashby, Workable, Workday, SmartRecruiters, Teamtailor, Personio and others; `mail.ATS_DOMAINS`) or using application wording such as "your application", "interview", "unfortunately" or "other candidates" (`mail.KEYWORDS`). The wording is looked for in the same excerpt the models get: the subject and the first 2,000 characters of the text with runs of whitespace collapsed, so a phrase deep in a long email does not match. Outlook's daily agenda (from `no-reply@microsoft.com` with a subject starting "Today:", such as "Today: Interview with …") is skipped, since it only repeats interviews already on your calendar; other mail from that address is not. Other email never leaves your machine.
 3. With `TYPESAFE_API_KEY` set, Jev first sorts each of those emails (sender, subject, received time and the first 2,000 characters of the text) into rejected, interview or other, one request per email. An email Jev calls other with confidence 0.85 or more (`mail_labels.OTHER_CONFIDENCE`; about a 90% chance of other) is dropped: it is remembered as checked and never reaches Claude, and `mail` prints each one with its confidence. Every other email, including any Jev calls rejected or interview, goes on to Claude, so the few real updates are still labelled by Claude. If a Jev request fails, that email and the rest go to Claude.
 4. Claude labels the remaining emails (the same fields, 20 emails per call) as rejected, interview or other, with the company, the role and a one-sentence summary. An interview invite includes confirming or moving an interview's time; reminders from other calendar apps count as other. Neither model gets tools and Claude's prompt treats the emails as data: Jev only returns probabilities, Claude only returns labels, and what a label leads to is fixed code. A crafted email can at worst hide itself or earn a wrong label, which you see before confirming anything.
@@ -185,11 +187,30 @@ On **Pipeline**, "From your email" lists each update (subject, sender, Claude's 
 Setup, once:
 
 1. Register an app in the [Microsoft Entra admin center](https://entra.microsoft.com) (**App registrations → New registration**). Any name; for an outlook.com or hotmail.com address choose an account type that includes personal Microsoft accounts; no redirect URI.
-2. In the app: **Authentication → Allow public client flows: Yes** (the sign-in below is a device-code flow), and **API permissions → Add a permission → Microsoft Graph → Delegated → `Mail.Read`**.
+2. In the app: **Authentication → Allow public client flows: Yes** (the sign-in below is a device-code flow), and **API permissions → Add a permission → Microsoft Graph → Delegated → `Mail.ReadWrite`** (read mail and create drafts; `Mail.Send` is never requested, so nothing here can send mail).
 3. Copy its **Application (client) ID** to `.env` as `OUTLOOK_CLIENT_ID`. If the registration accepts personal accounts only, also set `OUTLOOK_TENANT=consumers` (default `common`).
-4. `python hunt.py outlook-login` prints a web address and a code. Open it, sign in and allow reading your mail. It waits up to 15 minutes; a network error while it polls for your sign-in is retried until then, rather than ending the sign-in. The sign-in is saved to `outlook_token.json` (git-ignored, readable only by you: the file is created with mode 0600 before anything is written to it). Treat that file like a password: it gives read access to your mail. Each `mail` replaces it with the new token Microsoft returns. Microsoft ends the sign-in after 90 days without use, after a password change, or when you remove the app's access in your Microsoft account; then run `outlook-login` again.
+4. `python hunt.py outlook-login` prints a web address and a code. Open it, sign in and allow reading your mail and creating drafts. It waits up to 15 minutes; a network error while it polls for your sign-in is retried until then, rather than ending the sign-in. The sign-in is saved to `outlook_token.json` (git-ignored, readable only by you: the file is created with mode 0600 before anything is written to it). Treat that file like a password: it gives read access to your mail and lets drafts be created in it. Each `mail` and each `chat` token refresh replaces it with the new token Microsoft returns. Microsoft ends the sign-in after 90 days without use, after a password change, or when you remove the app's access in your Microsoft account; then run `outlook-login` again (if you signed in before this version asked for `Mail.ReadWrite`, sign in again too, or `chat` cannot create drafts).
 
 On Railway, add `OUTLOOK_CLIENT_ID` (and `OUTLOOK_TENANT` if you set it) to the service variables, run `outlook-login` on the laptop and upload the file: `railway volume files upload outlook_token.json /outlook_token.json`. Run `mail` in one place only (as with `watch`), or both will send the same updates. The dashboard refuses to start a `mail` job until `outlook_token.json` exists.
+
+### Chat with your mail
+
+`python hunt.py chat` is a Telegram bot you message in plain language about your mail: "what came in today?", "summarise the emails from Acme this week", "read the one from Ana", "draft a reply saying Tuesday 10:00 works", "draft an email to ana@acme.com about the invoice". It is a [Pydantic AI](https://ai.pydantic.dev) agent on the scoring model (`SCORING_MODEL`) with four tools over your Outlook and Gmail mailboxes: list recent or matching emails (newest first, or the best matches for a search; inbox by default, also spam/junk, sent or drafts), read one in full, create a new draft, and create a reply draft. It never sends mail: drafts land in the mailbox's Drafts folder (Outlook also quotes the original under a reply; a Gmail reply draft sits in the thread) and the bot answers with a link, so you finish and send from your mail app. Replies are plain text; long ones are split over several Telegram messages.
+
+- It answers messages from `TELEGRAM_CHAT_ID` only and ignores others (logged by chat id). `/new` starts a fresh conversation; `/start` or `/help` lists what it can do. The conversation lives in memory for as long as the bot runs (the last 20 exchanges, or as many as fit about 80,000 characters of context, since each full email read stays in it) and is not saved anywhere. Each batch of messages is confirmed to Telegram before it is answered, so a bot stopped mid-answer (a redeploy) does not answer the same message twice; the owner sends it again if the answer never came.
+- Emails are referred to by short handles the bot hands out (`o1`, `g2`: account letter plus a number), so you can say "read o3" or "reply to g1".
+- Email text is untrusted input: the bot is told to treat it as data and never follow instructions found inside an email, and the tools can only read and draft. The worst a crafted email can do is mislead an answer or produce an odd draft, which you see before sending anything. Each answer is bounded to 12 model calls, so a tool loop cannot run away.
+- Cost: one Claude request per message plus one per tool call it makes, each carrying the conversation so far; a summary of a day's inbox is typically a few cents. Reading Outlook and Gmail is free. The log shows the tokens of each answer (`answered with N model call(s) ...`); it never logs the text of your messages, emails or drafts.
+- Access tokens are refreshed at most every 45 minutes per account. `chat` needs the Telegram values, `ANTHROPIC_API_KEY`, and at least one mailbox set up and signed in (it exits with the sign-in command to run when a configured mailbox has no token file).
+
+Outlook: the Email updates setup above (the sign-in consents to `Mail.ReadWrite`; sign in again if you did it with an older version). Gmail, once:
+
+1. In [Google Cloud](https://console.cloud.google.com), create a project (any name) and enable the **Gmail API** (**APIs & Services → Library**).
+2. **APIs & Services → OAuth consent screen**: External, any app name, your address as the support and developer contact; add yourself as a test user. Google does not need to verify the app for your own use; while the app stays in Testing, Google ends the sign-in after 7 days, so once it works, set it to **In production** (the sign-in then shows an "unverified app" warning you click through once, and lasts until you revoke it).
+3. **Credentials → Create credentials → OAuth client ID → Desktop app**. Copy the client ID and client secret to `.env` as `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` (a Desktop app's secret is not really secret, but Google requires it on the token exchange).
+4. `python hunt.py gmail-login` opens the Google sign-in in your browser (and prints the address in case it cannot). Google does not allow Gmail scopes in the device-code flow, so it listens on a random `127.0.0.1` port for Google's redirect: sign in on the laptop. The scopes are `gmail.readonly` and `gmail.compose` (the narrowest Google offers for drafts; it would also allow sending, which this code never calls). The sign-in is saved to `gmail_token.json` (git-ignored, mode 0600); Google does not rotate it, so the file is never rewritten. Run `gmail-login` again when Google revokes it (you change the password, remove the app's access, or the app was still in Testing after 7 days).
+
+Run it on the laptop in a terminal (`Ctrl-C` stops it), or on Railway, where the dashboard keeps it running: set `CHAT_BOT=1` (see Deploy to Railway). Run it in one place only: Telegram delivers each message to one `getUpdates` poller, and two bots on the same token interrupt each other. The bot takes no run lock, so `mail` and the dashboard's jobs run alongside it; `mail` and `chat` both refresh `outlook_token.json`, and either token stays valid, so signing in again while the bot runs is also safe.
 
 ### News digest
 
@@ -224,6 +245,7 @@ Reading pages costs nothing. Only jobs you start on Runs, or with "Re-run" or "R
 - **Leads** (`/leads`): companies from `discovered.csv`, marked new, queued (in `companies.csv`) or researched (with the latest score). Tick companies and press **Run selected…** to research and score just those (they do not need to be in `companies.csv`), or **Add to companies.csv** to append them to `companies.csv`, so every full run (scheduled ones too) covers them. Companies already listed are not added twice (domains are compared as `run` reads them, so `https://www.Acme.com/` and `acme.com` are the same company); removing one means editing `companies.csv`.
 - **Runs** (`/runs`): start `hunt.py run` (dry run, run and notify, or research only) for every company in `companies.csv`, `discover` (focus, limit), `watch`, `mail` or `news` (each optionally dry run) or `send` (pick a saved scored run). Each opens a confirmation first. It shows the exact command, an estimated cost and side effects such as Telegram messages, file updates or what is sent to Claude; for a run you can switch the mode there. A `discover` focus may not start with `-`, so it cannot be read as a flag.
   - **Schedule:** the commands in `HUNT_SCHEDULE` (see Deploy to Railway) with their next time and the job each last started, or why it could not start.
+  - **Chat bot:** with `CHAT_BOT=1`, whether `hunt.py chat` is running (since when, starts, the tail of `jobs/chat.log`, refreshed every 5 seconds); otherwise a note on how to turn it on (see Chat with your mail).
   - **Estimates:** Exa is the average cost per company of saved runs that recorded it (`_run.json`). Claude is the README figure of $0.27 per 19 companies, an upper bound now that the Jev screen skips Claude for some companies. Jev is a fraction of a cent. Discover is the README figure of $0.15–0.20.
   - **Job pages:** each job gets a live log page with a Stop button (which sends SIGTERM; paid calls already made still cost). When the job finishes, the page shows the saved run's verdict counts and cost.
   - **History:** the page lists jobs started from the dashboard (scheduled ones are labelled "Scheduled ·"), plus every saved run in `out/` (from the dashboard, a shell or cron) with its mode, verdict counts, errors, Exa cost and Claude tokens.
@@ -258,7 +280,9 @@ Railway's own cron services cannot share a volume with the dashboard, so the das
    | `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optionally `SCORING_MODEL`, `TYPESAFE_API_KEY` and `JEV_MODEL` | As in your `.env` (the container has no `.env`). |
    | `TZ` | Your time zone, for example `Europe/Belgrade`. Schedules and saved-run times use it; default UTC. |
    | `HUNT_SCHEDULE` | Optional: scheduled commands (below). |
-   | `OUTLOOK_CLIENT_ID`, optionally `OUTLOOK_TENANT` | Only for email updates: as in your `.env` (see Email updates). |
+   | `OUTLOOK_CLIENT_ID`, optionally `OUTLOOK_TENANT` | Only for email updates and the chat bot: as in your `.env` (see Email updates). |
+   | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` | Only for the chat bot's Gmail access: as in your `.env` (see Chat with your mail). |
+   | `CHAT_BOT` | `1` keeps the Telegram chat bot (`hunt.py chat`) running alongside the dashboard (see Chat with your mail). |
    | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
 
 4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.
@@ -272,14 +296,15 @@ Railway's own cron services cannot share a volume with the dashboard, so the das
    railway volume files upload discovered.csv /discovered.csv
    railway volume files upload watch_state.json /watch_state.json
    railway volume files upload out /out
-   # optional: email updates (see Email updates), and their history
+   # optional: email updates and the chat bot (see Email updates, Chat with your mail), and their history
    railway volume files upload outlook_token.json /outlook_token.json
+   railway volume files upload gmail_token.json /gmail_token.json
    railway volume files upload mail_state.json /mail_state.json
    railway volume files upload news_state.json /news_state.json
    ```
 
    `railway volume browse` opens an interactive browser for editing these files later (for example to remove a company from `companies.csv`). To keep your statuses, notes and side projects, stop the local dashboard, then `railway volume files upload --overwrite hunt.db /hunt.db` while no job runs on Railway, and restart the service (**Deployments → Restart**).
-6. Open the domain, log in, and check the Runs page: the Schedule section lists what will run and when.
+6. Open the domain, log in, and check the Runs page: the Schedule section lists what will run and when, and with `CHAT_BOT=1` the Chat bot section shows the bot running (since when, how many starts, the tail of its output). The dashboard starts `hunt.py chat` when it starts, restarts it whenever it exits (after 10 seconds, then 1 and 5 minutes while it keeps exiting soon after starting, for example without a signed-in mailbox), and stops it at shutdown; its output goes to `jobs/chat.log` on the volume, truncated at each dashboard start. The bot is not a job: it holds no lock, so scheduled commands and Run buttons work as before.
 
 `HUNT_SCHEDULE` holds one entry per line, or entries separated by `;` (easier in Railway's variable editor): five cron fields (minute, hour, day of month, month, day of week with 0 or 7 for Sunday; numbers, `*`, ranges, lists and `*/n` steps), then a `hunt.py` command. Supported commands are the ones the Runs page starts: `run`, `run --dry-run`, `run --research-only`, `discover [focus] [--limit N]`, `watch`, `mail` and `news`, the last three also with `--dry-run`. For example, discovery every Monday at 07:00, a scored run with its Telegram notification every day at 07:30, the watch list every 6 hours, email every 2 hours from 08:00 to 20:00, and the news digest on Mondays at 08:30:
 
@@ -300,7 +325,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages and Telegram are mocked the same way, and TypeSafe in its wire format (`tests/jev_mock.py`); Claude is replaced by a fake client. Dashboard tests write pipeline files to a temporary directory (`tests/dashboard_data.py`) and call the app in-process with FastAPI's `TestClient`; job tests replace `hunt.py` with a small stub script, so no paid command runs.
+Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages, Telegram, Microsoft Graph and the Gmail API are mocked the same way, and TypeSafe in its wire format (`tests/jev_mock.py`); Claude is replaced by a fake client, and the chat bot's model by a scripted Pydantic AI `FunctionModel`. Dashboard tests write pipeline files to a temporary directory (`tests/dashboard_data.py`) and call the app in-process with FastAPI's `TestClient`; job and chat-bot tests replace `hunt.py` with a small stub script, so no paid command runs.
 
 CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
 
@@ -309,14 +334,14 @@ CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every
 Not built yet; recorded so they can be picked up later.
 
 - **Repeat scoring for borderline companies.** Because scores vary between runs (see Score noise), score companies whose first score lands near a verdict threshold (for example within 5 points of 75 or 50, or a stretch/apply split) two or three times and use the median score and the majority verdict. Costs roughly 2-3x the Claude spend for those companies only (a full 19-company run currently costs about $0.27 in Claude).
-- **Chat with the job hunt over Telegram.** A Pydantic AI agent you message in Telegram ("what is waiting on a reply for more than two weeks?") that answers from `hunt.db` with read-only tools. Needs incoming Telegram messages (polling or a webhook, accepting only `TELEGRAM_CHAT_ID`) and a new pinned dependency.
+- **Chat with the job hunt over Telegram.** Give the chat bot (see Chat with your mail) read-only tools over `hunt.db`, so "what is waiting on a reply for more than two weeks?" is answered from your pipeline. The Telegram loop and the agent exist; what is missing is the queries as tools and a way for the bot to find `hunt.db` (it runs next to the data folder already).
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `exa_client.py` | Exa search client |
-| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, and `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard) |
+| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic]` for the chat bot, and `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard) |
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`) |
 | `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
@@ -326,17 +351,19 @@ Not built yet; recorded so they can be picked up later.
 | `docs/specs/` | Specs handed to coding agents: `gtm-attribution-model.md` (public attribution, CAC and payback model) and `fee-verification-engine.md` (public payment fee verification engine on synthetic data) |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |
-| `hunt.py` | Job-hunt CLI: `discover`, `run`, `send`, `watch`, `outlook-login`, `mail`, `news`, `interview-prep` and `interview-review` |
+| `hunt.py` | Job-hunt CLI: `discover`, `run`, `send`, `watch`, `outlook-login`, `mail`, `news`, `interview-prep`, `interview-review`, `gmail-login` and `chat` |
 | `runs.py` | Saved-run format, the domain normaliser and the one-command-at-a-time lock, shared by `hunt.py` and the dashboard (`out/<timestamp>/`, `_run.json`, `.hunt.lock`) |
-| `dashboard/` | Dashboard (`python -m dashboard`): FastAPI app, login, scheduler, SQLite store and ingest, status tracking, side projects, job runner, Jinja templates, CSS and a vendored copy of htmx 2.0.7 |
+| `dashboard/` | Dashboard (`python -m dashboard`): FastAPI app, login, scheduler, chat-bot supervisor, SQLite store and ingest, status tracking, side projects, job runner, Jinja templates, CSS and a vendored copy of htmx 2.0.7 |
 | `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
 | `research.py` | Per-company Exa research (identity, signals, open roles) |
 | `scoring.py` | Jev role screen and Claude fit scoring (structured output) |
 | `jev.py` | TypeSafe's Jev decision model: the only place that calls TypeSafe (retries, usage tally, cost per token) |
-| `telegram.py` | Telegram delivery |
+| `telegram.py` | Telegram delivery and `getUpdates` polling for the chat bot |
 | `watch.py` | Watch list: poll job boards, report new matching postings |
 | `ashby.py` | Ashby public job-board API client (used by link checks and the watch list) |
-| `outlook.py` | Outlook through Microsoft Graph, read-only: device-code sign-in, token refresh, recent messages |
+| `outlook.py` | Outlook through Microsoft Graph: device-code sign-in, token refresh, recent messages for `mail`, and search, full text and drafts for `chat`; never sends |
+| `gmail.py` | Gmail through the Gmail API: browser sign-in, token refresh, search, full text and drafts for `chat`; never sends |
+| `chat.py` | The Telegram chat bot: the Pydantic AI agent, its mail tools, the conversation and the polling loop |
 | `mail.py` | Email updates: which emails go to Jev and Claude, `mail_state.json`, the saved `mail/` files; shared by `hunt.py` and the dashboard |
 | `mail_labels.py` | Jev drops clear non-updates, then Claude labels application emails: rejected, interview or other (structured output) |
 | `news.py` | News digest: Exa news search per topic, Jev's relevance screen, Claude's picks, `news_state.json` |
@@ -347,7 +374,8 @@ Not built yet; recorded so they can be picked up later.
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |
 | `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects, job history and answers to email suggestions (git-ignored; back it up with the dashboard stopped, since its `hunt.db-wal` and `hunt.db-shm` sidecars hold the newest changes until a checkpoint) |
-| `outlook_token.json` | Your Outlook sign-in, from `outlook-login` (git-ignored; gives read access to your mail) |
+| `outlook_token.json` | Your Outlook sign-in, from `outlook-login` (git-ignored; gives read access to your mail and lets drafts be created) |
+| `gmail_token.json` | Your Gmail sign-in, from `gmail-login` (git-ignored; same access) |
 | `mail/` | Rejections and interview invites `mail` found, one file per check that found some (git-ignored) |
 | `mail_state.json` | When mail was last checked and the emails already labelled (git-ignored) |
 | `news_state.json` | Articles the news digest has already considered (git-ignored) |

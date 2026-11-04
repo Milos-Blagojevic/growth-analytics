@@ -99,6 +99,16 @@
 </section>
 
 <section class="block">
+  <h2>Chat bot</h2>
+  {% if chat is none %}
+  <p class="muted small">Not running here. Set <code>CHAT_BOT=1</code> to keep <code>hunt.py chat</code> running alongside the dashboard (see the README).</p>
+  {% else %}
+  <p class="muted small">Answers your Telegram messages; restarted by the dashboard whenever it exits. Output in <code>jobs/chat.log</code>.</p>
+  {% include "partials/chat_bot.html" %}
+  {% endif %}
+</section>
+
+<section class="block">
   <h2>Started from the dashboard <span class="count">{{ jobs | length }}</span></h2>
   {% if jobs %}
   <table class="table">

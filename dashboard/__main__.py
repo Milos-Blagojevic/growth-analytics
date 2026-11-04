@@ -5,6 +5,7 @@ By default it serves the current directory on 127.0.0.1 only, without a login. A
 
   DASHBOARD_PASSWORD     turns on the login (at least 12 characters)
   HUNT_SCHEDULE          hunt.py commands to start on cron schedules (see dashboard/schedule.py)
+  CHAT_BOT               1/true/yes keeps `hunt.py chat` (the Telegram chat bot) running alongside the dashboard
   RAILWAY_PUBLIC_DOMAIN  set by Railway; accepted as Host name, like the host of DASHBOARD_URL
   PORT                   default for --port (set by Railway)
 """
@@ -40,9 +41,11 @@ def main():
     if args.host not in LOOPBACK_HOSTS and not password:
         # Without a login, anyone who can reach the port could read your data and start paid runs.
         parser.error(f"--host {args.host} serves beyond this machine: set DASHBOARD_PASSWORD first")
+    chat_bot = os.environ.get("CHAT_BOT", "").strip().lower() in ("1", "true", "yes")
     try:
         entries = schedule.parse(os.environ.get("HUNT_SCHEDULE", ""))
-        app = create_app(args.root, allowed_hosts=allowed_hosts(), password=password, schedule_entries=entries)
+        app = create_app(args.root, allowed_hosts=allowed_hosts(), password=password, schedule_entries=entries,
+                         chat_bot=chat_bot)
     except ValueError as exc:
         parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
