@@ -5,11 +5,13 @@
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
     python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
-    python hunt.py outlook-login             # sign in to Outlook once, for `mail`
+    python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
     python hunt.py mail [--dry-run]          # find rejections and interview invites in new email (Claude)
     python hunt.py news [--dry-run]          # news digest on your [news].topics (Exa + Claude)
     python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
     python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
+    python hunt.py gmail-login               # sign in to Gmail once, for `chat`
+    python hunt.py chat                      # answer Telegram messages about your mail, draft replies (Claude)
 """
 
 import argparse
@@ -25,8 +27,10 @@ from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
 
+import chat
 import coaching
 import exa_client
+import gmail
 import interviews
 import jev
 import mail
@@ -511,6 +515,38 @@ def cmd_outlook_login(args):
     return 0
 
 
+def cmd_gmail_login(args):
+    if not gmail.configured():
+        sys.exit("GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set. Add them to .env (see README, Chat with your mail).")
+    try:
+        gmail.login(args.token)
+    except gmail.AuthError as exc:
+        sys.exit(f"Gmail {exc}")
+    print(f"Signed in. Saved the Gmail sign-in to {args.token} (keep it private; on Railway, upload it to the volume).")
+    return 0
+
+
+def cmd_chat(args):
+    _require_claude()
+    if not telegram.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env.")
+    mailboxes = chat.Mailboxes()
+    for name, module, path in (("outlook", outlook, args.outlook_token), ("gmail", gmail, args.gmail_token)):
+        if not module.configured():
+            continue
+        if not Path(path).exists():
+            sys.exit(f"{name.capitalize()} is set up but not signed in ({path} is missing): run `python hunt.py {name}-login`.")
+        setattr(mailboxes, f"{name}_token", path)
+    if not mailboxes.accounts():
+        sys.exit("No mailbox is set up: set OUTLOOK_CLIENT_ID or GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET in .env "
+                 "(see README, Chat with your mail).")
+    try:
+        chat.serve(chat.build_agent(), mailboxes)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_mail(args):
     if not outlook.configured():
         sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see README, Email updates).")
@@ -757,7 +793,7 @@ def main():
     watch_cmd.add_argument("--dry-run", action="store_true", help="print new matches; do not send or save state")
     watch_cmd.set_defaults(func=cmd_watch)
 
-    login_cmd = sub.add_parser("outlook-login", help="sign in to Outlook (read-only) for the mail command")
+    login_cmd = sub.add_parser("outlook-login", help="sign in to Outlook (read, create drafts) for mail and chat")
     login_cmd.add_argument("--token", default=outlook.TOKEN_FILE, help="where the sign-in is saved")
     login_cmd.set_defaults(func=cmd_outlook_login)
 
@@ -782,11 +818,25 @@ def main():
     review_cmd.add_argument("interview", help="the interview's folder, interviews/<id>")
     review_cmd.set_defaults(func=cmd_interview_review)
 
+    gmail_cmd = sub.add_parser("gmail-login", help="sign in to Gmail (read, create drafts) for the chat command")
+    gmail_cmd.add_argument("--token", default=gmail.TOKEN_FILE, help="where the sign-in is saved")
+    gmail_cmd.set_defaults(func=cmd_gmail_login)
+
+    chat_cmd = sub.add_parser("chat", help="answer Telegram messages about your mail and draft replies (Claude)")
+    chat_cmd.add_argument("--outlook-token", default=outlook.TOKEN_FILE, help="the sign-in saved by outlook-login")
+    chat_cmd.add_argument("--gmail-token", default=gmail.TOKEN_FILE, help="the sign-in saved by gmail-login")
+    chat_cmd.set_defaults(func=cmd_chat)
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     if args.func is cmd_outlook_login:  # interactive, up to 15 minutes; writes only the token file, so no lock
         if runs.is_locked():  # a running `mail` could overwrite the new sign-in with the token it refreshed
             sys.exit("Another hunt.py command is running here; sign in when it finishes.")
+        sys.exit(args.func(args))
+    if args.func in (cmd_gmail_login, cmd_chat):
+        # gmail-login writes only gmail_token.json, which nothing else rewrites (Google keeps the refresh token).
+        # chat runs for hours and shares no file with the other commands except outlook_token.json, which it and
+        # `mail` replace atomically with tokens that are both valid, so neither needs the lock.
         sys.exit(args.func(args))
     # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
     try:

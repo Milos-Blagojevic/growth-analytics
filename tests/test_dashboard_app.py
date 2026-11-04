@@ -1,4 +1,6 @@
 import json
+import sys
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -175,3 +177,38 @@ def test_an_unreadable_companies_csv_disables_full_runs_without_taking_down_the_
     conn = db.connect(root)
     assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
     conn.close()
+
+
+def test_runs_page_points_at_chat_bot_when_the_dashboard_does_not_run_it(client):
+    page = client.get("/runs").text
+    assert "<h2>Chat bot</h2>" in page
+    assert "Not running here. Set <code>CHAT_BOT=1</code> to keep <code>hunt.py chat</code> running" in page
+    assert 'hx-get="/runs/chat"' not in page
+    assert client.get("/runs/chat").status_code == 404
+
+
+def test_runs_page_shows_the_chat_bot_it_keeps_running(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    (tmp_path / "stub_hunt.py").write_text(
+        "import os, sys, time\nprint('chat stub', *sys.argv[1:], flush=True)\ntime.sleep(float(os.environ['STUB_SLEEP']))\n"
+    )
+    app = create_app(tmp_path, hunt_command=[sys.executable, str(tmp_path / "stub_hunt.py")], chat_bot=True)
+    assert app.state.bot is not None and not app.state.bot.status()["running"]  # started by the lifespan
+    with make_client(app) as c:
+        deadline = time.monotonic() + 5
+        while not (app.state.bot.status()["running"] and "chat stub chat" in app.state.bot.read_log()):
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert not app.state.runner.busy()
+
+        page = c.get("/runs").text
+        assert "<h2>Chat bot</h2>" in page and "CHAT_BOT=1" not in page
+        assert 'id="chat-bot" class="job" hx-get="/runs/chat" hx-trigger="every 5s"' in page
+        assert "running" in page and "since just now · 1 start" in page and "chat stub chat" in page
+
+        partial = c.get("/runs/chat")
+        assert partial.status_code == 200
+        assert partial.text.startswith('<div id="chat-bot"') and "python hunt.py chat" in partial.text
+        assert 'id="chat-log">chat stub chat\n' in partial.text
+    assert not app.state.bot.status()["running"]  # stopped with the app
+    assert (tmp_path / "jobs" / "chat.log").read_text() == "chat stub chat\n"

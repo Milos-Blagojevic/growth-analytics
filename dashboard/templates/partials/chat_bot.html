@@ -1,0 +1,14 @@
+<div id="chat-bot" class="job" hx-get="/runs/chat" hx-trigger="every 5s" hx-swap="outerHTML">
+  <div class="job-meta">
+    {% if chat.running %}
+    <span class="badge j-running"><span class="dot pulse"></span> running</span>
+    <span class="muted small">since {{ chat.since | ago }} · {{ chat.starts }} start{{ 's' if chat.starts != 1 }}{% if chat.last_exit is not none %} · previous exit code {{ chat.last_exit }}{% endif %}</span>
+    {% else %}
+    <span class="badge j-failed">stopped</span>
+    <span class="muted small">{% if chat.last_exit is not none %}exit code {{ chat.last_exit }} · {% endif %}{% if chat.next_start %}next start at {{ chat.next_start[11:] }} · {% endif %}{{ chat.starts }} start{{ 's' if chat.starts != 1 }}</span>
+    {% endif %}
+    <code class="command">python hunt.py chat</code>
+  </div>
+  <pre class="log" id="chat-log">{{ chat_log or 'Waiting for output…' }}</pre>
+  <script>(() => { const log = document.getElementById("chat-log"); if (log) log.scrollTop = log.scrollHeight; })();</script>
+</div>

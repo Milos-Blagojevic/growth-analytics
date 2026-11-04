@@ -420,6 +420,53 @@ def test_a_second_command_exits_while_one_holds_the_lock(workdir, monkeypatch):
         hunt.main()
 
 
+def test_chat_and_gmail_login_run_without_the_lock(workdir, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["hunt.py", "chat"])
+    with runs.lock(workdir), pytest.raises(SystemExit, match="ANTHROPIC_API_KEY is not set"):  # past the lock check
+        hunt.main()
+
+    monkeypatch.setattr("sys.argv", ["hunt.py", "gmail-login"])
+    with runs.lock(workdir), pytest.raises(SystemExit, match="GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set"):
+        hunt.main()
+
+
+def chat_args(**overrides):
+    return argparse.Namespace(**{"outlook_token": "outlook_token.json", "gmail_token": "gmail_token.json", **overrides})
+
+
+def test_chat_needs_telegram_and_a_signed_in_mailbox_before_it_starts(http, workdir, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    with pytest.raises(SystemExit, match="TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set"):
+        hunt.cmd_chat(chat_args())
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    with pytest.raises(SystemExit, match="No mailbox is set up"):
+        hunt.cmd_chat(chat_args())
+
+    monkeypatch.setenv("OUTLOOK_CLIENT_ID", "app")
+    monkeypatch.setenv("GMAIL_CLIENT_ID", "gid")
+    monkeypatch.setenv("GMAIL_CLIENT_SECRET", "gsecret")
+    Path("outlook_token.json").write_text("{}")
+    with pytest.raises(SystemExit, match=r"Gmail is set up but not signed in \(gmail_token.json is missing\): run `python hunt.py gmail-login`"):
+        hunt.cmd_chat(chat_args())
+    assert len(http.calls) == 0
+
+    Path("gmail_token.json").write_text("{}")
+    served = []
+
+    def serve(agent, mailboxes):
+        served.append((agent, mailboxes))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(hunt.chat, "serve", serve)
+    monkeypatch.setattr(hunt.chat, "build_agent", lambda: "agent")
+    assert hunt.cmd_chat(chat_args()) == 0
+    ((agent, mailboxes),) = served
+    assert agent == "agent" and mailboxes.accounts() == ["outlook", "gmail"]
+    assert (mailboxes.outlook_token, mailboxes.gmail_token) == ("outlook_token.json", "gmail_token.json")
+
+
 RHO = "20261013-rho-senior-data-engineer"
 SER = "20261020-se-ranking-senior-data-analyst"
 

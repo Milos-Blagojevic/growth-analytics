@@ -1,29 +1,40 @@
-"""Outlook mail through Microsoft Graph, read-only: device-code sign-in, token refresh, recent messages.
+"""Outlook mail through Microsoft Graph: browser sign-in, token refresh, recent messages, search, drafts.
 
-Sign-in uses your own app registration (OUTLOOK_CLIENT_ID, a public client) with the delegated Mail.Read
-permission, so this code can read mail but never send, move or delete it. The refresh token lives in TOKEN_FILE in
-the data folder; Microsoft returns a new one on every refresh, which replaces the old one there.
+Sign-in uses your own app registration (OUTLOOK_CLIENT_ID, a public client with the `http://localhost` desktop
+redirect) with the delegated Mail.ReadWrite permission, so this code can read mail and create drafts (the chat
+bot's new emails and replies) but never send, move or delete it: Mail.Send is never requested. `hunt.py mail`
+reads untrusted email and asks for read-only (Mail.Read) access tokens from the same refresh token. The refresh
+token lives in TOKEN_FILE in the data folder; Microsoft returns a new one on every refresh, which replaces the old
+one there.
 """
 
+import html
 import json
 import logging
 import os
-import time
-from datetime import datetime, timezone
+import webbrowser
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 import requests
+
+import oauth
 
 logger = logging.getLogger("outlook")
 
 TOKEN_FILE = "outlook_token.json"
-SCOPES = "offline_access https://graph.microsoft.com/Mail.Read"
+SCOPES = "offline_access https://graph.microsoft.com/Mail.ReadWrite"  # consented at login: read and draft
+READ_SCOPE = "offline_access https://graph.microsoft.com/Mail.Read"  # what `mail` asks for: read only
 GRAPH = "https://graph.microsoft.com/v1.0"
 FOLDERS = ("inbox", "junkemail")  # Graph's well-known folder names; some rejections land in Junk
 MAX_MESSAGES = 500  # per folder and check
 PAGE_SIZE = 50
 TIMEOUT = 15
 SELECT = "id,internetMessageId,subject,from,receivedDateTime,body,webLink"
+CHAT_SELECT = "id,subject,from,toRecipients,receivedDateTime,bodyPreview,webLink"
+MAX_SEARCH = 50
+TEXT_BODY = {"Prefer": 'outlook.body-content-type="text"'}  # Graph converts HTML bodies to text for us
 LOGIN_HINT = "run `python hunt.py outlook-login` (see README, Email updates)"
 
 
@@ -67,40 +78,42 @@ def _error(body):
     return f"{body.get('error', 'error')}: {description}" if description else body.get("error", "error")
 
 
-def login(path=TOKEN_FILE, *, show=print, sleep=time.sleep):
-    """Device-code sign-in: shows the URL and code to enter in a browser, waits for it, saves the refresh token."""
+def _auth_url(client_id, redirect_uri, state):
+    return f"{_authority()}/authorize?" + urlencode({
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "response_mode": "query",
+        "scope": SCOPES,
+        "state": state,
+    })
+
+
+def login(path=TOKEN_FILE, *, show=print, open_browser=webbrowser.open, timeout=oauth.TIMEOUT):
+    """Browser sign-in (authorization code, loopback redirect): shows the URL, catches the redirect, saves the
+    refresh token. Microsoft's portal registers the desktop redirect as `http://localhost` and ignores the port."""
     client_id = os.environ["OUTLOOK_CLIENT_ID"]
-    status, body = _post(f"{_authority()}/devicecode", {"client_id": client_id, "scope": SCOPES})
-    if status != 200:
-        raise AuthError(f"could not start the sign-in ({_error(body)})")
-    show(body["message"])
-    interval = int(body.get("interval", 5))
-    deadline = time.monotonic() + int(body.get("expires_in", 900))
-    while time.monotonic() < deadline:
-        sleep(interval)
-        try:
-            status, reply = _post(f"{_authority()}/token", {
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                "client_id": client_id,
-                "device_code": body["device_code"],
-            })
-        except RuntimeError as exc:  # a network blip while you are still signing in: ask again, until the deadline
-            logger.warning("%s; trying again in %ds", exc, interval)
-            continue
-        if status == 200 and reply.get("refresh_token"):
-            _save(path, reply)
-            return
-        if reply.get("error") == "authorization_pending":
-            continue
-        if reply.get("error") == "slow_down":
-            interval += 5
-            continue
-        raise AuthError(f"sign-in failed ({_error(reply)})")
-    raise AuthError("sign-in timed out; start it again")
+    try:
+        code, redirect_uri = oauth.browser_code(lambda uri, state: _auth_url(client_id, uri, state), host="localhost",
+                                                show=show, open_browser=open_browser, timeout=timeout)
+    except (oauth.Declined, TimeoutError) as exc:
+        raise AuthError(f"sign-in failed ({exc})" if isinstance(exc, oauth.Declined) else str(exc)) from None
+    status, body = _post(f"{_authority()}/token", {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": SCOPES,
+    })
+    if status != 200 or not body.get("refresh_token"):
+        raise AuthError(f"sign-in failed ({_error(body)})")
+    _save(path, body)
 
 
-def access_token(path=TOKEN_FILE):
-    """A fresh access token from the saved refresh token, saving the new refresh token Microsoft returns."""
+def access_token(path=TOKEN_FILE, *, scope=READ_SCOPE):
+    """A fresh access token for `scope` from the saved refresh token, saving the new refresh token Microsoft returns.
+
+    The default is read-only; the chat bot passes SCOPES to create drafts."""
     path = Path(path)
     if not path.exists():
         raise AuthError(f"not signed in to Outlook ({path} is missing): {LOGIN_HINT}")
@@ -109,7 +122,7 @@ def access_token(path=TOKEN_FILE):
         "grant_type": "refresh_token",
         "client_id": os.environ["OUTLOOK_CLIENT_ID"],
         "refresh_token": saved["refresh_token"],
-        "scope": SCOPES,
+        "scope": scope,
     })
     if status != 200 or not body.get("access_token"):
         raise AuthError(f"the Outlook sign-in no longer works ({_error(body)}): {LOGIN_HINT}")
@@ -138,6 +151,27 @@ def _message(m, folder):
     }
 
 
+def _request(method, url, token, *, params=None, json=None, headers=None, label="Outlook"):
+    """One Graph call; the decoded JSON body. 401 -> AuthError, any other failure -> RuntimeError (without the token)."""
+    headers = {"Authorization": f"Bearer {token}", **(headers or {})}
+    try:
+        response = requests.request(method, url, params=params, json=json, headers=headers, timeout=TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Outlook request failed: {type(exc).__name__}") from None
+    if response.status_code == 401:
+        raise AuthError(f"Outlook refused the sign-in: {LOGIN_HINT}")
+    if not 200 <= response.status_code < 300:
+        try:
+            detail = response.json().get("error", {}).get("message", "")
+        except ValueError:
+            detail = ""
+        raise RuntimeError(f"{label}: HTTP {response.status_code} {detail}".rstrip())
+    try:
+        return response.json()
+    except ValueError:
+        return {}
+
+
 def messages(token, since):
     """Messages received at or after `since` (an aware datetime) in FOLDERS, oldest first per folder.
 
@@ -145,7 +179,6 @@ def messages(token, since):
     receipt time (aware) of the newest message read there (the earliest such time over the folders), and the next
     check should start there; otherwise it is None.
     """
-    headers = {"Authorization": f"Bearer {token}", "Prefer": 'outlook.body-content-type="text"'}
     found, resume = [], None
     for folder in FOLDERS:
         url = f"{GRAPH}/me/mailFolders/{folder}/messages"
@@ -157,19 +190,7 @@ def messages(token, since):
         }
         count, last = 0, None
         while url:
-            try:
-                response = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
-            except requests.RequestException as exc:
-                raise RuntimeError(f"Outlook request failed: {type(exc).__name__}") from None
-            if response.status_code == 401:
-                raise AuthError(f"Outlook refused the sign-in: {LOGIN_HINT}")
-            if response.status_code != 200:
-                try:
-                    detail = response.json().get("error", {}).get("message", "")
-                except ValueError:
-                    detail = ""
-                raise RuntimeError(f"Outlook {folder}: HTTP {response.status_code} {detail}".rstrip())
-            page = response.json()
+            page = _request("GET", url, token, params=params, headers=TEXT_BODY, label=f"Outlook {folder}")
             values = page.get("value", [])
             taken = values[: MAX_MESSAGES - count]
             for m in taken:
@@ -183,3 +204,79 @@ def messages(token, since):
                     resume = cut if resume is None else min(resume, cut)
                 break
     return found, resume
+
+
+# The chat bot's view of a message. Unlike _message, `id` is the Graph id: that is what read() and
+# create_reply_draft() take, and the bot never stores it across checks.
+def _chat_message(m):
+    sender = (m.get("from") or {}).get("emailAddress") or {}
+    return {
+        "id": m["id"],
+        "received_at": _local(m["receivedDateTime"]),
+        "from_name": sender.get("name") or "",
+        "from_address": (sender.get("address") or "").lower(),
+        "to": _addresses(m.get("toRecipients")),
+        "subject": m.get("subject") or "",
+        "preview": m.get("bodyPreview") or "",
+        "web_link": m.get("webLink") or "",
+    }
+
+
+def _addresses(recipients):
+    return [a.lower() for a in (((r.get("emailAddress") or {}).get("address") or "") for r in recipients or ()) if a]
+
+
+def _draft(d):
+    return {"id": d["id"], "web_link": d.get("webLink") or "", "subject": d.get("subject") or "",
+            "to": _addresses(d.get("toRecipients"))}
+
+
+def search(token, query="", *, days=None, limit=20, folder="inbox"):
+    """Up to `limit` (at most MAX_SEARCH) messages in `folder` (a Graph well-known folder name), one page.
+
+    Without `query`: newest first, from the last `days` days when given. With one: Graph's $search (KQL, relevance
+    order; it cannot be combined with $orderby or $filter, so `days` becomes a `received>=` term in the query).
+    """
+    params = {"$select": CHAT_SELECT, "$top": str(max(1, min(limit, MAX_SEARCH)))}
+    if query:
+        kql = query.replace('"', '\\"')
+        if days is not None:
+            kql += f" received>={datetime.now(timezone.utc) - timedelta(days=days):%Y-%m-%d}"
+        params["$search"] = f'"{kql}"'
+    else:
+        params["$orderby"] = "receivedDateTime desc"
+        if days is not None:
+            params["$filter"] = f"receivedDateTime ge {datetime.now(timezone.utc) - timedelta(days=days):%Y-%m-%dT%H:%M:%SZ}"
+    page = _request("GET", f"{GRAPH}/me/mailFolders/{folder}/messages", token, params=params)
+    return [_chat_message(m) for m in page.get("value", [])]
+
+
+def read(token, message_id):
+    """One message by Graph id, with its whole body as plain text."""
+    m = _request("GET", f"{GRAPH}/me/messages/{message_id}", token, params={"$select": f"{CHAT_SELECT},body"},
+                 headers=TEXT_BODY)
+    return {**_chat_message(m), "body": (m.get("body") or {}).get("content") or ""}
+
+
+def create_draft(token, *, to, subject, body):
+    """A new plain-text draft in Drafts; nothing is sent."""
+    draft = _request("POST", f"{GRAPH}/me/messages", token, json={
+        "subject": subject,
+        "body": {"contentType": "Text", "content": body},
+        "toRecipients": [{"emailAddress": {"address": a}} for a in to],
+    })
+    return _draft(draft)
+
+
+def create_reply_draft(token, message_id, body):
+    """A reply draft to the message's sender (Graph picks Reply-To or From and the "Re:" subject, and keeps the
+    thread) with `body` above the quoted original; nothing is sent."""
+    draft = _request("POST", f"{GRAPH}/me/messages/{message_id}/createReply", token, json={})
+    original = draft.get("body") or {}
+    if (original.get("contentType") or "").lower() == "html":
+        content = {"contentType": "HTML",
+                   "content": f"<div>{html.escape(body).replace(chr(10), '<br>')}</div><br>{original.get('content') or ''}"}
+    else:
+        content = {"contentType": "Text", "content": f"{body}\n\n{original.get('content') or ''}"}
+    _request("PATCH", f"{GRAPH}/me/messages/{draft['id']}", token, json={"body": content})
+    return _draft(draft)

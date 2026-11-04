@@ -15,6 +15,7 @@ mail/
 mail_state.json*
 news_state.json*
 outlook_token.json*
+gmail_token.json*
 # Not needed at runtime
 .git/
 .github/
