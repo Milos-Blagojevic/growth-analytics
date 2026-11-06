@@ -1,0 +1,42 @@
+name: Verify
+
+# The verify skill, unattended: .claude/skills/verify/scripts/ci.py runs a Pydantic AI Coder agent on a copy of the
+# pull request in a Docker container without network access, and posts its report to the job summary. Each run is a
+# paid Claude session, so it starts only when the `verify` label is added to a pull request, or from the Actions tab.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      intent:
+        description: "What the change should do (empty: inferred from the commits and the diff)"
+        required: false
+
+permissions:
+  contents: read
+
+# The label is in the key so that adding any other label does not cancel a running verification.
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'verify'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}  # the branch itself, not the merge commit
+          fetch-depth: 0  # origin/main and the history back to the merge base
+
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      # The exit status fails the check on BLOCK and FIX BEFORE MERGE.
+      - name: Verify
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body || inputs.intent }}
+        run: uv run .claude/skills/verify/scripts/ci.py --intent "$(printf '%s\n\n%s' "$TITLE" "$BODY")"

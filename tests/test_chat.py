@@ -75,7 +75,8 @@ def test_list_emails_formats_entries_with_handles_per_account(mailboxes, monkeyp
     ], mailboxes)
 
     assert answer == "done"
-    assert searches == [("outlook", "at-outlook", "", 2, 20, "junkemail"), ("gmail", "at-gmail", "acme", None, 50, "inbox")]
+    # Pydantic AI runs the two calls concurrently, so the searches can happen in either order.
+    assert sorted(searches) == [("gmail", "at-gmail", "acme", None, 50, "inbox"), ("outlook", "at-outlook", "", 2, 20, "junkemail")]
     outlook_list, gmail_list = returned(seen[1])
     assert outlook_list.startswith("o1 · Sun 18 Oct 09:01 · Ana <ana@acme.com>\n  Subject: Subject 1\n  Hi there long xxx")
     assert outlook_list.endswith("…\no2 · Sun 18 Oct 09:02 · ana@acme.com\n  Subject: Subject 2\n  Preview 2")
