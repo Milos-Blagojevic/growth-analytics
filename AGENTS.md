@@ -34,7 +34,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-CI runs the same suite on Python 3.11 and 3.13 for every pull request and push to `main`. Keep code 3.11-compatible.
+CI runs the same suite on Python 3.11 and 3.13 for every pull request and push to `main`. Keep code 3.11-compatible. The separate Verify workflow runs the `verify` skill on a pull request when it gets the `verify` label (see Skills).
 
 Do not run these without asking: they spend money or send real messages.
 
@@ -44,6 +44,7 @@ Do not run these without asking: they spend money or send real messages.
 - `hunt.py mail` (any mode): reads the owner's mailbox and sends matching emails to Jev (when `TYPESAFE_API_KEY` is set) and Claude; without `--dry-run` it also sends to Telegram and updates `mail_state.json`. `hunt.py outlook-login` signs in to the owner's Microsoft account; `hunt.py gmail-login` to their Google account.
 - `hunt.py chat`: polls the owner's Telegram bot (two pollers on one token interrupt each other) and answers with paid Claude calls that read the owner's mail and can create drafts in it.
 - `hunt.py news` (any mode): paid Exa, Jev and Claude calls; without `--dry-run` it sends to Telegram and updates `news_state.json`.
+- `.claude/skills/verify/scripts/ci.py`, and the Verify workflow (adding the `verify` label to a pull request, or starting it from the Actions tab): a paid Claude session of up to `--max-requests` model requests.
 - Deploying to Railway, or changing its service variables (a change redeploys and interrupts a running job).
 
 `python -m dashboard` costs nothing by itself, but its Runs page, **Run selected**, **Re-run** and any `HUNT_SCHEDULE` entry start real `hunt.py` commands (paid, and possibly Telegram): always the `hunt.py` next to the `dashboard` package, whatever `--root` is. For a local smoke run, serve a temporary folder of sample files with `.claude/skills/verify/scripts/sandbox.py`, which runs a fake `hunt.py` for every job and `HUNT_SCHEDULE` entry (and, with `--chat-bot`, for the chat bot); never use the owner's folder. With Docker, mount a fake over `/app/hunt.py`. Do not start jobs against the real `hunt.py` without asking. Tests pass a stub through `create_app(root, hunt_command=[...])`.
@@ -78,7 +79,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 - The dashboard reads its settings (`DASHBOARD_PASSWORD`, `HUNT_SCHEDULE`, `CHAT_BOT`, `RAILWAY_PUBLIC_DOMAIN`, `DASHBOARD_URL`, `PORT`) from the environment in `__main__.py` and passes them to `create_app`; it never loads `.env`.
 - The scoring model rejects `temperature`; do not add it.
 - One failing company must not abort a run: `hunt.process_company` never raises and returns errors in its result.
-- Dependencies are pinned in `requirements.txt` (runtime) and `requirements-dev.txt` (tests).
+- Dependencies are pinned in `requirements.txt` (runtime) and `requirements-dev.txt` (tests). `.claude/skills/verify/scripts/ci.py` pins its own in its inline script metadata (run with `uv run`): `pydantic-ai-harness` needs a newer `pydantic-ai-slim` than `chat.py` runs on.
 
 ## Tests
 
@@ -90,6 +91,8 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 ## Skills
 
 Before reporting a feature or behavior change done, committing it or opening a PR, have it checked by an agent that did not write it: the `verify` skill (`.claude/skills/verify/SKILL.md`). It runs the suite and free end-to-end smoke runs, reviews the diff adversarially and returns risks ranked by production impact with a verdict. In Claude Code it runs in a fresh subagent (`context: fork`); pass it what the change should do. Elsewhere, start a new subagent or session with none of the implementation history and give it the skill's body as its prompt, with that intent in place of `$ARGUMENTS`. On BLOCK or FIX BEFORE MERGE, fix the findings and verify again. README-only and test-only changes skip it. The owner can run it too: `/verify <what the change should do>`.
+
+The Verify workflow (`.github/workflows/verify.yml`) runs the same skill in CI: `.claude/skills/verify/scripts/ci.py` gives SKILL.md, with the pull request's title and description as `$ARGUMENTS`, to a Pydantic AI `Coder` agent working on a copy of the branch in a Docker container without network access, and fails the check on BLOCK or FIX BEFORE MERGE. The copy never holds files that HEAD lacks and that the working tree's ignore rules or the base commit's root `.gitignore` ignore (`ci.stage`), so keep private files git-ignored in the root `.gitignore`. SKILL.md has to keep working there: paths relative to the repo root, `$ARGUMENTS` in the body, and a step 7 report whose columns match `ci.Report` (change them together).
 
 `visualize-changes` (`.claude/skills/visualize-changes/SKILL.md`) builds an HTML report of the branch's changes in the git-ignored `.change-reports/`: short descriptions, before/after behavior, diagrams, old and new dashboard pages side by side, and a map of where the change lands, without a diff. Run it only when the owner asks for it.
 

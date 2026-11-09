@@ -329,6 +329,12 @@ Tests need no keys and make no network calls. Every HTTP request made through `r
 
 CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
 
+### Verify in CI
+
+The Verify workflow (`.github/workflows/verify.yml`) runs the `verify` skill (see Files) without Claude Code. `.claude/skills/verify/scripts/ci.py` gives the skill to a [Pydantic AI Coder](https://pydantic.dev/docs/ai/harness/coder/) agent on `claude-opus-5-5`, with the pull request's title and description as what the change should do. The agent works on a copy of the branch in a Docker container without network access. The copy holds the git history and the tracked and untracked files, never git-ignored ones (`.env`, the token files, `hunt.db`, ...), and the container gets none of the runner's environment, so the agent's commands cannot read the API key or reach Exa, Anthropic or Telegram. The report goes to the job summary, with the model requests, tokens and dollars it took, and the check fails on BLOCK and FIX BEFORE MERGE. The skill's Docker image check cannot run inside the container and is reported as skipped.
+
+Each run is a paid Claude session of up to 150 model requests (`--max-requests`), so it starts only when you add the `verify` label to a pull request (remove it and add it again to verify new commits), or from **Actions → Verify → Run workflow**. Setup: create the `verify` label and add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**). To run it on the laptop, with Docker running and `ANTHROPIC_API_KEY` exported (it never reads `.env`): `uv run .claude/skills/verify/scripts/ci.py --intent "<what the change should do>"`.
+
 ## Parked ideas
 
 Not built yet; recorded so they can be picked up later.
@@ -342,11 +348,12 @@ Not built yet; recorded so they can be picked up later.
 |---|---|
 | `exa_client.py` | Exa search client |
 | `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic]` for the chat bot, and `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard) |
-| `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`) |
+| `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`, `PyYAML` for the Verify workflow test) |
 | `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
+| `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see Verify in CI) |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
-| `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships (agents run it themselves; you can run `/verify <what the change should do>`); `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py` |
+| `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships (agents run it themselves; you can run `/verify <what the change should do>`); `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py`; `scripts/ci.py` runs the skill in CI (see Verify in CI) |
 | `.claude/skills/visualize-changes/` | `/visualize-changes` skill, run only when you ask: an HTML report that explains the branch's changes (short descriptions, before/after, diagrams, old and new dashboard pages side by side, where the change lands; no diff), saved in `.change-reports/` (git-ignored) |
 | `docs/specs/` | Specs handed to coding agents: `gtm-attribution-model.md` (public attribution, CAC and payback model) and `fee-verification-engine.md` (public payment fee verification engine on synthetic data) |
 | `.env.example` | Template for required environment variables |
