@@ -162,3 +162,6 @@ def test_workflow_starts_only_on_the_label_or_by_hand_with_a_read_only_token():
     assert set(triggers) == {"pull_request", "workflow_dispatch"}
     assert triggers["pull_request"] == {"types": ["labeled"]}
     assert workflow["permissions"] == {"contents": "read"}
+    # Without this filter, adding any label to a pull request would start a paid run.
+    assert workflow["jobs"]["verify"]["if"] == (
+        "github.event_name == 'workflow_dispatch' || github.event.label.name == 'verify'")
