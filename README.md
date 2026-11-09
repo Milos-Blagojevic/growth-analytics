@@ -2,9 +2,24 @@
 
 Growth analytics tooling: a thin client over the [Exa](https://exa.ai) search API (raw retrieval, schema-grounded structured answers, content fetching) and a job-hunt pipeline built on it.
 
+Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and sends a short notification to Telegram. A dashboard shows the full results. Runs locally, or on Railway with scheduled commands and a login so you can use it from your phone (see [Deploy to Railway](dashboard/README.md#deploy-to-railway)).
+
+## Layout
+
+| Path | Holds | Docs |
+|---|---|---|
+| `hunt.py` | The CLI entry point: `python hunt.py <command>` | [Commands](#commands) |
+| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram | [clients/README.md](clients/README.md) |
+| `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, watch list, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
+| `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot | [inbox/README.md](inbox/README.md) |
+| `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
+| `dashboard/` | The dashboard app and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
+| `tests/` | The test suite and Verify in CI | [tests/README.md](tests/README.md) |
+| `docs/` | Specs for coding agents and parked ideas | [docs/parked-ideas.md](docs/parked-ideas.md) |
+
 ## Setup
 
-Requires Python 3.11+ (`tomllib`), an Exa API key ([dashboard.exa.ai](https://dashboard.exa.ai)), and for the job-hunt pipeline an Anthropic API key and a Telegram bot. A TypeSafe API key ([console.typesafe.ai](https://console.typesafe.ai/keys)) is optional: it lets the Jev decision model screen out clear misses before Claude (see Jev screening).
+Requires Python 3.11+ (`tomllib`), an Exa API key ([dashboard.exa.ai](https://dashboard.exa.ai)), and for the job-hunt pipeline an Anthropic API key and a Telegram bot. A TypeSafe API key ([console.typesafe.ai](https://console.typesafe.ai/keys)) is optional: it lets the Jev decision model screen out clear misses before Claude (see [Jev screening](clients/README.md#jev-screening)).
 
 ```bash
 python -m venv .venv
@@ -16,365 +31,53 @@ cp .env.example .env   # then set EXA_API_KEY in .env
 Smoke test (searches "what is exa.ai" and prints 3 results with highlights):
 
 ```bash
-python exa_client.py
+python -m clients.exa_client
 ```
 
-## Usage
+## Configure
 
-All functions live in `exa_client.py`.
-
-```python
-from exa_client import search, search_structured, contents, fast_search, deep_search
-
-# Raw retrieval: results with query-relevant highlights
-results = search("B2B SaaS onboarding benchmarks", num_results=5)
-for r in results.results:
-    print(r.title, r.url, r.highlights)
-
-# Extra Exa options pass through kwargs
-search("PLG pricing teardown", include_domains=["lennysnewsletter.com"], category="news")
-
-# Override the contents view (default is {"highlights": True})
-search("inference outage postmortems", num_results=5, contents={"text": {"max_characters": 10000}})
-
-# Freshness: max_age_hours (not a publication-date filter)
-search("serverless GPU pricing", max_age_hours=24)     # cached content must be < 24h old
-search("current competitor pricing", max_age_hours=0)  # always fetch fresh
-
-# Search-type wrappers
-fast_search("who is hiring growth PMs", num_results=5)
-deep_search("how are PLG companies pricing AI features", num_results=5)
-
-# Synthesized search: grounded JSON in .output.content, citations in .output.grounding
-schema = {
-    "type": "object",
-    "properties": {"summary": {"type": "string"}},
-}
-out = search_structured("What is product-led growth?", schema)
-print(out.output.content, out.output.grounding)
-
-# Fetch content for URLs you already have
-page = contents(["https://exa.ai"])
-```
-
-### API
-
-| Function | Purpose |
-|---|---|
-| `get_client()` | Returns an `Exa` client. Raises `RuntimeError` if `EXA_API_KEY` is unset. |
-| `search(query, *, type="auto", num_results=10, contents=None, max_age_hours=None, **kwargs)` | Raw search results. `contents` defaults to highlights. |
-| `search_structured(query, output_schema, *, type="auto", system_prompt=None, contents=None, max_age_hours=None, **kwargs)` | Synthesized, grounded JSON output. `contents` defaults to highlights. |
-| `instant_search` / `fast_search` / `deep_lite_search` / `deep_search` / `deep_reasoning_search` `(query, **kwargs)` | `search()` with `type` preset (see below). |
-| `contents(urls, *, max_age_hours=None, highlights=True, **kwargs)` | Page contents for given URLs: highlights only by default (full text only if `text` is passed). `highlights=False` with `text={...}` fetches full text only. |
-
-`max_age_hours` controls content freshness, not publication date: `0` always fetches fresh, `-1` uses cache only, `N` uses cache if newer than `N` hours, `None` lets Exa decide. It overrides any `max_age_hours` inside `contents`.
-
-| Wrapper | `type` | Approx. latency |
-|---|---|---|
-| `instant_search` | `instant` | ~250 ms |
-| `fast_search` | `fast` | ~450 ms |
-| `deep_lite_search` | `deep-lite` | ~4 s |
-| `deep_search` | `deep` | 4-15 s |
-| `deep_reasoning_search` | `deep-reasoning` | 12-40 s |
-
-`search_structured` schema limits: max nesting depth 2, max 10 total properties. Don't add citation or confidence fields; grounding is returned automatically.
-
-### Retries and cost logging
-
-Every request made through the module functions goes through one internal path that:
-
-- **Retries** transient failures with exponential backoff (jittered, capped): HTTP 408/429/500/502/503/504 and `requests` connection/timeout errors. Other errors (400s, invalid options) raise immediately. Tune via module constants `MAX_ATTEMPTS` (default 4 total tries), `BACKOFF_BASE_SECONDS` (1.0), `BACKOFF_MAX_SECONDS` (30.0) and `RETRYABLE_STATUS`. Every request has a timeout (`TIMEOUT_SECONDS`: 15 s to connect, 120 s to read, since deep searches can take tens of seconds); a request that times out is retried like any other transient failure.
-- **Logs cost** at INFO on the `exa_client` logger, one line per request (`search:fast cost=$0.0070 search_time=450ms`), and retries at WARNING. Enable with `logging.basicConfig(level=logging.INFO)`.
-- **Tallies cost** per label (`search:<type>`, `search_structured:<type>`, `contents`), using the `costDollars` Exa reports.
-
-```python
-from exa_client import cost_summary, reset_costs
-
-cost_summary()
-# {"requests": 3, "dollars": 0.021, "by_label": {"search:fast": {"requests": 2, "dollars": 0.014}, ...}}
-reset_costs()
-```
-
-Notes: the tally is in-process only (not persisted) and counts successful requests; responses without cost data count as requests but add $0. The timeout means a hung connection fails and is retried instead of blocking the process (and, in the pipeline, holding `.hunt.lock`) forever.
-
-## Job-hunt pipeline
-
-Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and sends a short notification to Telegram. A dashboard shows the full results. Runs locally, or on Railway with scheduled commands and a login so you can use it from your phone (see Deploy to Railway).
-
-### Configure
-
-1. Add keys to `.env`: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (see `.env.example` for how to get the Telegram values), and optionally `TYPESAFE_API_KEY` (see Jev screening).
-2. `cp profile.example.toml profile.toml`. `[search].roles`, `seniority` and `work_mode` are required (a command exits with `[search].<key> is required` otherwise). Under `[candidate]`, set `location` and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). `notes` (preferences or deal-breakers) and `weak_spots` are also sent to the scorer (see Weak spots below); optionally fill `gaps` (see Stretch below).
+1. Add keys to `.env`: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (see `.env.example` for how to get the Telegram values), and optionally `TYPESAFE_API_KEY` (see [Jev screening](clients/README.md#jev-screening)).
+2. `cp profile.example.toml profile.toml`. `[search].roles`, `seniority` and `work_mode` are required (a command exits with `[search].<key> is required` otherwise). Under `[candidate]`, set `location` and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). `notes` (preferences or deal-breakers) and `weak_spots` are also sent to the scorer (see Weak spots in [Run](pipeline/README.md#run)); optionally fill `gaps` (see Stretch in [Run](pipeline/README.md#run)).
 3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies). Domains are normalised as in `discover` and the dashboard: `https://`, `http://`, `www.` and any path after the host are stripped. A row whose domain still contains a `/` or has no `.` stops the run before any paid call, with the row named. A domain listed twice (case-insensitive) is researched once, with a warning. A file saved by Excel as "CSV UTF-8" (with a byte-order mark) is read as is.
-4. Optional: `[news].topics` in `profile.toml` for the news digest, and an Outlook sign-in for email updates (see News digest and Email updates below).
-
-### Run
-
-```bash
-python hunt.py discover --limit 20             # suggests name,domain,why rows; logs them to discovered.csv
-python hunt.py discover "fintech" --limit 20   # same, with an extra focus
-python hunt.py run --research-only             # Exa only: no Claude, no Telegram
-python hunt.py run --dry-run                   # research + score, print the full digest
-python hunt.py run                             # research + score + send the notification to Telegram
-python hunt.py send                            # send the latest saved run's notification to Telegram (no new research or scoring)
-python hunt.py watch                           # send new growth-role postings from watched Ashby boards to Telegram
-python hunt.py outlook-login                   # sign in to Outlook once (read, create drafts), for `mail` and `chat`
-python hunt.py mail                            # rejections and interview invites in new email: Telegram + dashboard suggestions (Claude)
-python hunt.py news                            # news digest on your [news].topics to Telegram (Exa + Claude)
-python hunt.py interview-prep interviews/<id>  # prep brief for one interview (Claude; see Interviews)
-python hunt.py interview-review interviews/<id> # review one interview's transcript (Claude; see Interviews)
-python hunt.py gmail-login                     # sign in to Gmail once (read, create drafts), for `chat`
-python hunt.py chat                            # Telegram chat bot over your mail: summaries, search, reply drafts (Claude; see Chat with your mail)
-python -m dashboard                            # dashboard at http://127.0.0.1:8000: results, your tracking, starting runs (see Dashboard)
-```
-
-Options (`python hunt.py <command> --help` lists them): `--profile FILE` before the command reads another profile (default `profile.toml`); `run --companies FILE` (default `companies.csv`); `discover --limit N` (default 15) and `--history FILE` (default `discovered.csv`); `send [DIR]` (a directory under `out/`, default the latest run); `watch --state FILE` (default `watch_state.json`); `outlook-login --token FILE` and `mail --token FILE` (default `outlook_token.json`); `mail --state FILE` (default `mail_state.json`) and `--days N` (default 14); `news --state FILE` (default `news_state.json`) and `--days N` (default 7); `gmail-login --token FILE` (default `gmail_token.json`); `chat --outlook-token FILE` and `--gmail-token FILE` (the two sign-in files). `run`, `watch`, `mail` and `news` take `--dry-run`.
-
-Each run saves raw research and scores to `out/<timestamp>/<domain>.json` (with the Jev screen of each role in `screen`, see Jev screening, and any research warnings, such as a failed ATS fallback search, in `warnings`), plus `out/<timestamp>/_run.json` with the run's mode (`research_only`, `dry_run` or `deliver`), start and save times, company and error counts, the Exa cost summary and, for scored runs, the scoring model and Claude token totals and, when `TYPESAFE_API_KEY` is set, the Jev model, requests, input tokens and dollars (`jev`). It also prints Exa cost, Claude token usage and Jev usage; a company's research warnings are printed under it in the digest and in the `--research-only` output. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call: `run`, `discover` and `news` refuse to start without `EXA_API_KEY` (so does `interview-prep` when it would fetch the posting), and the same check covers `ANTHROPIC_API_KEY` and the Telegram values for the commands that use them.
-
-One `hunt.py` command runs at a time per project folder: each command holds a lock (`.hunt.lock`, git-ignored) while it runs, and a second one exits at once with "Another hunt.py command is running here". This covers commands from a shell, cron and the dashboard alike. A cron `watch` that starts during a run exits with that message and checks again at its next scheduled time. The OS releases the lock when a command exits, so a crashed command never leaves it stuck. Three commands do not hold the lock: `outlook-login` can wait up to 15 minutes for you to sign in in the browser and touches only `outlook_token.json`, so it only refuses to start while another command runs; `gmail-login` touches only `gmail_token.json`, which no other command rewrites; and `chat` runs for as long as you leave it and shares no file with the other commands except `outlook_token.json` (see Chat with your mail).
-
-The Telegram notification is short: the digest's count header, one entry per apply, consider and stretch role (score, verdict, company, role title and posting URL, so it works away from the laptop), the names of failed companies, and a link to the dashboard (`DASHBOARD_URL` in `.env`; default `https://<RAILWAY_PUBLIC_DOMAIN>` on Railway, otherwise `http://127.0.0.1:8000`). Reasons, concerns, gap notes and side-project ideas are in the dashboard and in the `--dry-run` digest.
-
-`send` rebuilds the notification from a saved run in `out/` (latest by default, or pass a directory). Use it after a `--dry-run` so what is delivered comes from the run you reviewed, without paying for a second run. The Telegram header carries the saved run's date, not the day you send it: from `_run.json`, or from the folder name when the run has no readable manifest (older runs, or one interrupted while saving); a directory you picked that has neither is dated today.
-
-Discovery runs one search per target role plus one deep search (6 searches, roughly $0.15-0.20 for `--limit 20`) because a single search returns only a handful of companies. Results are merged round-robin, filtered (job boards and anonymous employers dropped, `[search].exclude_domains` removed) and appended to `discovered.csv` (`discovered_at,name,domain,why,focus`). Domains already in the history are skipped, so repeated runs only return new companies. The printed `name,domain,why` rows load as `companies.csv` rows (extra columns are ignored); `discovered.csv` adds `discovered_at` and `focus` around them. The `why` column is Exa's unverified claim; `run` is what actually researches and scores each company.
-
-Scoring model: `claude-sonnet-5-5` by default, override with `SCORING_MODEL` in `.env`.
-
-Role screen (with `TYPESAFE_API_KEY`): before Claude, Jev answers yes/no and rubric questions about each open role (one request per role, given your target roles and `location`): is it one of your target roles, its seniority level (junior, mid, senior, lead or above), does the posting limit the role to regions that exclude your location, is it on-site or hybrid only, is the office in your country, and does it offer relocation. A role is dropped only when Jev is confident it fails a hard rule of the rubric: not a target role (probability 0.1 or less), junior or mid-level (0.9 or more; like the scoring rubric, the screen counts senior and above, whatever `[search].seniority` lists), or no relocation (0.1 or less) together with a region that excludes you (0.9 or more) or an on-site or hybrid office outside your country. Claude scores the company with the remaining roles; when no role remains, the company is a **skip** with score 0 and, as concerns, what each role failed (at most three: with more than three roles, two roles and a "<n> more open roles also failed the screen" line), and Claude is not called. The location questions are skipped when `location` is empty. Each role's answers and failures are saved under `screen` in `out/`, for tuning the thresholds (`scoring.SCREEN_YES`, `SCREEN_NO`, `BELOW_SENIOR_MIN`). Companies without open roles are not screened.
-
-Verdicts in the digest: **apply** (score 75+), **consider** (50-74), **stretch** (a role centred on one of your declared gaps; see below), **check careers** (no live role found, but the company scores 50+ on its own: look at its careers page), **skip** (below 50, identity not verified, the posting excludes your location without relocation support, or score 0 when the Jev screen dropped every open role). A live posting is required for apply/consider/stretch.
-
-Stretch: list areas where your experience is thin in `[candidate].gaps` (for example growth engineering with about 6 months of experience). When a posting's core work falls in such an area, the digest shows **STRETCH** instead of apply, with a `Gap:` line stating what you have, up to two `Build:` side-project ideas that would build credible proof, and a score reduced for the gap. Roles outside the gaps are unaffected.
-
-Weak spots and scope: `[candidate].weak_spots` lists specific tools you are weak in (for example PySpark). If a posting requires one, the digest adds it as a concern and gives one preparation step in `Next:`; unlike a gap, it does not change the verdict. When a posting's title and duties disagree (an analyst title with ETL/dbt work, say), the digest adds a `* Scope:` line saying which part of your background fits. The scorer reports compensation only as stated in the posting and never judges whether it is high or low.
-
-Role search: the main Exa call looks for postings. If it finds none for a verified company, a second call restricted to ATS/job-board domains (Ashby, Greenhouse, Lever, Workable, SmartRecruiters, Recruitee, Teamtailor, Personio) runs, costing about $0.007 extra. Only postings Exa marks as belonging to the company are kept; `role_source` in `out/` records which call supplied them (`main`, `ats_fallback`, `none`). The research step only quotes what each posting says about remote regions and relocation; judging eligibility for your `location` is the scorer's job.
-
-Link verification: Exa often returns stale posting URLs (about 30% were dead in one run, including top-scored roles), so every posting is checked before scoring and dead ones are dropped (recorded as `dead_roles` in `out/`). Ashby (`jobs.ashbyhq.com`) answers HTTP 200 for any URL, so its links are checked against Ashby's public posting API, which lists only open jobs. For other sites, 404/410 or a redirect away from the posting (a soft 404, e.g. Workable `?not_found=true`, Greenhouse `?error=true`) means dead. A URL that is only a board or careers homepage, or a check that is blocked or times out, is resolved with a fresh Exa fetch (about $0.001 per link); if that cannot confirm it either, the role is kept as `link_status: "unverified"` and the scorer tells you to confirm it. If every link for a company is dead, the ATS fallback search runs, and a company with no live role becomes "check careers". Not covered: sites that answer 200 for closed postings other than Ashby (none seen yet).
-
-Posting text: for up to 3 live roles per company, the posting text (first 4,000 characters, about $0.001 per page) is fetched and given to the scorer, because search summaries rarely contain responsibilities and required tools. Without it most concerns read "responsibilities not in the evidence". Roles whose link is only unverified are not fetched.
-
-Known limits: Exa is a search engine, not a jobs feed. Open-role coverage varies between runs, and "no roles found" does not mean no roles exist. Posting URLs may point to third-party job boards (for example a VC portfolio board) rather than the company's own ATS. Treat the digest as leads and confirm on the company's careers page.
-
-Score noise: the scoring model does not accept a temperature setting (`temperature is deprecated for this model`), so the same research can score differently between runs: typically within a few points, occasionally more. Verdict thresholds (75, 50) and the gap rule make borderline companies flip (one company went from 68 stretch to 82 apply on identical input). Read scores as bands, not exact values.
-
-### Watch list
-
-`python hunt.py watch` polls the Ashby job boards in `[watch].ashby_boards` (the slug in `jobs.ashbyhq.com/<slug>`) through Ashby's free, keyless posting API, which lists only open postings. Postings whose title contains any `title_keywords` entry (case-insensitive) and none of `title_exclude` are sent to Telegram with title, location and link, in as few messages as fit (Telegram allows 4,096 characters per message). Already-reported postings are kept in `watch_state.json` (ID, title, location, remote flag, link and when first seen; entries saved by older versions have only the title and time), so each posting is sent once and the dashboard can list them; the first run reports everything currently open. State is saved only after a successful send, so a failed send is retried on the next run. `--dry-run` prints matches without sending or saving state. A board that cannot be read (typo, API error) is logged, its state is left unchanged, and the exit code is 1. No Exa or Claude calls, so it costs nothing.
-
-Only Ashby boards are supported. To run it on a schedule while the laptop is on, add a cron entry (`crontab -e`), for example every 6 hours:
-
-```
-0 */6 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py watch >> watch.log 2>&1
-```
-
-### Email updates
-
-`python hunt.py mail` reads new mail in your Outlook inbox and junk folder, finds rejections and interview invites, sends them to Telegram, and suggests the matching status changes on the dashboard's Pipeline page. You confirm or dismiss each suggestion there: email never changes a status by itself.
-
-1. It reads mail received since the last check through Microsoft Graph with a read-only access token (`Mail.Read`; the sign-in also allows creating drafts, which only `chat` uses, and never sending, moving or deleting mail). The first check reads `--days` back (default 14); later checks start an hour before the previous one, so mail that arrives late is not missed. One check reads at most 500 emails per folder, oldest first; when a folder (often Junk) holds more, the next check carries on from the newest one read, so nothing is skipped.
-2. It keeps only email that looks like application email: sent through an applicant tracking system (Greenhouse, Lever, Ashby, Workable, Workday, SmartRecruiters, Teamtailor, Personio and others; `mail.ATS_DOMAINS`) or using application wording such as "your application", "interview", "unfortunately" or "other candidates" (`mail.KEYWORDS`). The wording is looked for in the same excerpt the models get: the subject and the first 2,000 characters of the text with runs of whitespace collapsed, so a phrase deep in a long email does not match. Outlook's daily agenda (from `no-reply@microsoft.com` with a subject starting "Today:", such as "Today: Interview with …") is skipped, since it only repeats interviews already on your calendar; other mail from that address is not. Other email never leaves your machine.
-3. With `TYPESAFE_API_KEY` set, Jev first sorts each of those emails (sender, subject, received time and the first 2,000 characters of the text) into rejected, interview or other, one request per email. An email Jev calls other with confidence 0.85 or more (`mail_labels.OTHER_CONFIDENCE`; about a 90% chance of other) is dropped: it is remembered as checked and never reaches Claude, and `mail` prints each one with its confidence. Every other email, including any Jev calls rejected or interview, goes on to Claude, so the few real updates are still labelled by Claude. If a Jev request fails, that email and the rest go to Claude.
-4. Claude labels the remaining emails (the same fields, 20 emails per call) as rejected, interview or other, with the company, the role and a one-sentence summary. An interview invite includes confirming or moving an interview's time; reminders from other calendar apps count as other. Neither model gets tools and Claude's prompt treats the emails as data: Jev only returns probabilities, Claude only returns labels, and what a label leads to is fixed code. A crafted email can at worst hide itself or earn a wrong label, which you see before confirming anything.
-5. Rejections and interview invites are saved to `mail/<timestamp>.json` (with how many emails Jev screened out and its usage) and sent to Telegram with a link to Pipeline. In the Telegram message, emails about the same application in one check (same company and outcome, and the same role or no role named, such as an invite, its confirmation and a new time) show as one entry with the newest email's summary and the number of emails. Emails that name no company, or different roles, keep their own entries. Every labelled or screened-out email is remembered for 30 days in `mail_state.json`, so it is not paid for or sent twice. As with `watch`, the state is saved only after a successful send, so a failed send is retried on the next check. If Claude fails on one batch of 20, the other batches are still saved and sent, the command exits 1 with a warning, and the failed batch's emails are read and sent again by the next check. How long that goes on depends on how it failed. When the call itself failed (an API error, a wrong `SCORING_MODEL`, a key or billing problem), Claude never answered and nothing was billed, so those emails are tried again on every check until Claude answers, with no limit: an outage that lasts days loses nothing. When Claude answered but the answer cannot be read, or leaves an email without a label, that check was paid for: such an email is sent again on at most 3 checks in all (`mail.MAX_TRIES`), then given up on with a warning in the log, so it cannot cost a Claude call on every scheduled check. While Claude is down, the local filter and, with `TYPESAFE_API_KEY`, the Jev screen do run again on the waiting emails each check (a fraction of a cent).
-
-`--dry-run` screens, labels and prints, without saving, sending or updating the state (the Jev and Claude calls still cost). Cost: Jev at $0.042 per million input tokens, a fraction of a cent per check; one Claude call per 20 emails Jev does not rule out, a few cents each, and nothing when no email matches; reading Outlook is free.
-
-On **Pipeline**, "From your email" lists each update (subject, sender, Claude's summary, an Open in Outlook link) with the tracked applications it matches: items you marked saved or beyond whose company name matches the one in the email, or extends it at the end ("Acme" and "Acme Analytics", but not "Analytics Co"; suffixes like Inc or GmbH are ignored, and "SE Ranking" also matches `seranking.com`), or whose domain the email was sent from. Applications whose title shares words with the role in the email come first. **Mark rejected** or **Mark interviewing** sets that status on one application; **Dismiss** hides the update. An update never moves an application backwards (an interview invite does not touch one at offer), and it is hidden when the applications it matches already have that status. An update that matches nothing you track is shown with Dismiss only: set the status yourself if it is yours. Your answers are kept in `hunt.db`.
-
-Setup, once:
-
-1. Register an app in the [Microsoft Entra admin center](https://entra.microsoft.com) (**App registrations → New registration**). Any name; for an outlook.com or hotmail.com address choose an account type that includes personal Microsoft accounts.
-2. In the app: **Authentication → Add a platform → Mobile and desktop applications**, custom redirect URI exactly `http://localhost` (the sign-in below opens your browser and catches Microsoft's redirect on a random local port; Microsoft ignores the port for localhost), and **API permissions → Add a permission → Microsoft Graph → Delegated → `Mail.ReadWrite`** (read mail and create drafts; `Mail.Send` is never requested, so nothing here can send mail). An older registration set up for the device-code sign-in only needs the redirect URI added.
-3. Copy its **Application (client) ID** to `.env` as `OUTLOOK_CLIENT_ID`. If the registration accepts personal accounts only, also set `OUTLOOK_TENANT=consumers` (default `common`).
-4. `python hunt.py outlook-login` opens the Microsoft sign-in in your browser (and prints the address in case it cannot): sign in and allow reading your mail and creating drafts; the tab ends on "Signed in". It waits up to 15 minutes, and a declined or refused sign-in shows the reason in the tab and in the terminal. Sign in on the laptop: the redirect goes to the machine running the command. The sign-in is saved to `outlook_token.json` (git-ignored, readable only by you: the file is created with mode 0600 before anything is written to it). Treat that file like a password: it gives read access to your mail and lets drafts be created in it. Each `mail` and each `chat` token refresh replaces it with the new token Microsoft returns. Microsoft ends the sign-in after 90 days without use, after a password change, or when you remove the app's access in your Microsoft account; then run `outlook-login` again (if you signed in before this version asked for `Mail.ReadWrite`, sign in again too, or `chat` cannot create drafts).
-
-On Railway, add `OUTLOOK_CLIENT_ID` (and `OUTLOOK_TENANT` if you set it) to the service variables, run `outlook-login` on the laptop and upload the file: `railway volume files upload outlook_token.json /outlook_token.json`. Run `mail` in one place only (as with `watch`), or both will send the same updates. The dashboard refuses to start a `mail` job until `outlook_token.json` exists.
-
-### Chat with your mail
-
-`python hunt.py chat` is a Telegram bot you message in plain language about your mail: "what came in today?", "summarise the emails from Acme this week", "read the one from Ana", "draft a reply saying Tuesday 10:00 works", "draft an email to ana@acme.com about the invoice". It is a [Pydantic AI](https://ai.pydantic.dev) agent on the scoring model (`SCORING_MODEL`) with four tools over your Outlook and Gmail mailboxes: list recent or matching emails (newest first, or the best matches for a search; inbox by default, also spam/junk, sent or drafts), read one in full, create a new draft, and create a reply draft. It never sends mail: drafts land in the mailbox's Drafts folder (Outlook also quotes the original under a reply; a Gmail reply draft sits in the thread) and the bot answers with a link, so you finish and send from your mail app. Replies are plain text; long ones are split over several Telegram messages.
-
-- It answers messages from `TELEGRAM_CHAT_ID` only and ignores others (logged by chat id). `/new` starts a fresh conversation; `/start` or `/help` lists what it can do. The conversation lives in memory for as long as the bot runs (the last 20 exchanges, or as many as fit about 80,000 characters of context, since each full email read stays in it) and is not saved anywhere. Each batch of messages is confirmed to Telegram before it is answered, so a bot stopped mid-answer (a redeploy) does not answer the same message twice; the owner sends it again if the answer never came.
-- Emails are referred to by short handles the bot hands out (`o1`, `g2`: account letter plus a number), so you can say "read o3" or "reply to g1".
-- Email text is untrusted input: the bot is told to treat it as data and never follow instructions found inside an email, and the tools can only read and draft. The worst a crafted email can do is mislead an answer or produce an odd draft, which you see before sending anything. Each answer is bounded to 12 model calls, so a tool loop cannot run away.
-- Cost: one Claude request per message plus one per tool call it makes, each carrying the conversation so far; a summary of a day's inbox is typically a few cents. Reading Outlook and Gmail is free. The log shows the tokens of each answer (`answered with N model call(s) ...`); it never logs the text of your messages, emails or drafts.
-- Access tokens are refreshed at most every 45 minutes per account. `chat` needs the Telegram values, `ANTHROPIC_API_KEY`, and at least one mailbox set up and signed in (it exits with the sign-in command to run when a configured mailbox has no token file).
-
-Outlook: the Email updates setup above (the sign-in consents to `Mail.ReadWrite`; sign in again if you did it with an older version). Gmail, once:
-
-1. In [Google Cloud](https://console.cloud.google.com), create a project (any name) and enable the **Gmail API** (**APIs & Services → Library**).
-2. **APIs & Services → OAuth consent screen**: External, any app name, your address as the support and developer contact; add yourself as a test user. Google does not need to verify the app for your own use; while the app stays in Testing, Google ends the sign-in after 7 days, so once it works, set it to **In production** (the sign-in then shows an "unverified app" warning you click through once, and lasts until you revoke it).
-3. **Credentials → Create credentials → OAuth client ID → Desktop app**. Copy the client ID and client secret to `.env` as `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` (a Desktop app's secret is not really secret, but Google requires it on the token exchange).
-4. `python hunt.py gmail-login` opens the Google sign-in in your browser (and prints the address in case it cannot). Google does not allow Gmail scopes in the device-code flow, so it listens on a random `127.0.0.1` port for Google's redirect: sign in on the laptop. The scopes are `gmail.readonly` and `gmail.compose` (the narrowest Google offers for drafts; it would also allow sending, which this code never calls). The sign-in is saved to `gmail_token.json` (git-ignored, mode 0600); Google does not rotate it, so the file is never rewritten. Run `gmail-login` again when Google revokes it (you change the password, remove the app's access, or the app was still in Testing after 7 days).
-
-Run it on the laptop in a terminal (`Ctrl-C` stops it), or on Railway, where the dashboard keeps it running: set `CHAT_BOT=1` (see Deploy to Railway). Run it in one place only: Telegram delivers each message to one `getUpdates` poller, and two bots on the same token interrupt each other. The bot takes no run lock, so `mail` and the dashboard's jobs run alongside it; `mail` and `chat` both refresh `outlook_token.json`, and either token stays valid, so signing in again while the bot runs is also safe.
-
-### News digest
-
-`python hunt.py news` searches Exa's news category for each `[news].topics` entry in `profile.toml` (articles published in the last `--days`, default 7; 8 results per topic) and drops articles already considered (`news_state.json`, kept 90 days). With `TYPESAFE_API_KEY` set, Jev then answers a relevance yes/no for each new article (one request per article, given your target roles and topics): an article below 0.3 (`news.RELEVANT_MIN`) is dropped and printed, and only the rest reach Claude. Claude picks at most 8 worth your time (developments in the job market for your target roles, and substantive news in your topics), with a one-sentence takeaway each and a short overview, and the digest goes to Telegram with the links. Jev and Claude get your target roles, the topics and the article titles and excerpts, not your CV. Dropped articles are recorded in `news_state.json` too, so they are not screened again. Cost: about $0.007 per Exa search (one per topic), a fraction of a cent for Jev, plus one Claude call, a few cents; no Claude call when nothing new is relevant. `--dry-run` prints the digest without sending it or updating the state. A topic whose search fails is listed at the end of the message, and the command exits 1. If a Jev request fails, that article and the rest go to Claude. Run it weekly, for example with `0 8 * * 1 news` in `HUNT_SCHEDULE` (see Deploy to Railway) or cron.
-
-### Jev screening
-
-[Jev](https://docs.typesafe.ai/introduction) is TypeSafe's decision model: it answers typed questions (yes/no, one of several options, a level on a rubric) about a piece of text with calibrated probabilities instead of written text, in well under a second and for $0.042 per million input tokens. With `TYPESAFE_API_KEY` set, `run`, `mail` and `news` use it to drop clear misses before Claude reads them: open roles that fail a hard requirement (see Role screen), emails that are clearly not about an application (Email updates) and irrelevant articles (News digest). It only drops what it is confident about; anything uncertain still goes to Claude, so the screen cuts Claude tokens without deciding close calls. Without the key, Claude reads everything, as before.
-
-All TypeSafe calls go through `jev.py` with a 15-second timeout, retries on 408, 429 (waiting as long as `Retry-After` asks, up to 30 seconds), 500, 502-504 and 529 (overloaded), and an in-process usage tally. The model is pinned to `jev-1.14.0` because the thresholds were chosen for it; override with `JEV_MODEL`. A request that still fails, or an answer missing a field the screen reads, counts as a Jev failure: the command carries on without the screen (Claude reads the rest) and logs a warning. Once a request has failed on TypeSafe being down, overloaded or unreachable (not on a rate limit), the rest of the command skips Jev instead of waiting through the retries again. Jev gets what Claude gets for the same step, minus your CV: role titles, locations and posting text with your target roles and `location`; email sender, subject and first 2,000 characters; article titles and excerpts. TypeSafe states it does not train on customer requests.
-
-### Dashboard
-
-```bash
-python -m dashboard              # http://127.0.0.1:8000
-python -m dashboard --port 8001
-python -m dashboard --root ~/hunt-data   # data folder other than the current directory
-```
-
-Run it from the project directory, or point `--root` at the folder holding `profile.toml`, `companies.csv`, `out/` and the other data files (jobs then run `hunt.py` with that folder as working directory). By default it listens on `127.0.0.1` only and has no login, so every request must name a loopback host. Every change (status, notes, projects, starting a job) must carry a token from the page and come from the dashboard's own origin, so another website open in your browser cannot start a paid run. If the dashboard restarts, open pages hold an old token: changes then show "This page is out of date… Reload it".
-
-With `DASHBOARD_PASSWORD` set (at least 12 characters), every page asks for that password first, and a session lasts 30 days on that browser; **Log out** ends it. Changing the password logs every browser out. After 10 wrong passwords in 15 minutes, logins are refused for everyone, you included, until the 15 minutes pass. Serving beyond this machine (`--host` other than loopback) refuses to start without a password. Besides loopback, the dashboard accepts the host names in `RAILWAY_PUBLIC_DOMAIN` and `DASHBOARD_URL`. The dashboard reads `DASHBOARD_PASSWORD`, `HUNT_SCHEDULE`, `DASHBOARD_URL`, `RAILWAY_PUBLIC_DOMAIN` and `PORT` from the shell environment only, never from `.env` (`export DASHBOARD_PASSWORD=…`, or `DASHBOARD_PASSWORD=… python -m dashboard`); the `hunt.py` jobs it starts load `.env` as usual.
-
-Reading pages costs nothing. Only jobs you start on Runs, or with "Re-run" or "Run selected", and the commands in `HUNT_SCHEDULE` call Exa, Claude or Telegram. Jobs you start ask for confirmation first.
-
-- **Board** (`/`): the latest scored result per company, in tabs for apply, consider, stretch, check careers and skip, with search (company, role, location and your notes), a status filter (dismissed cards are hidden unless you choose All or Dismissed), a minimum score and sorting. Each card shows the score, best role, location assessment, whether the posting link was confirmed live, and your status. A company whose latest run failed keeps its last scored result, and the board names the companies that failed in the most recent run. Click a card for the details: best role, your status and notes, next step, scope and gap notes, reasons and concerns, side-project ideas, score history across runs (with the 75 and 50 thresholds), open roles with link status, dropped dead links, research warnings (for example a failed ATS fallback search), company summary, evidence URLs, and a **Re-run** button that researches just that company. `/c/<domain>` opens the same details as a page.
-- **Your status and notes**: set a status (new, saved, applied, interviewing, offer, rejected, dismissed) and free-text notes in a company's details, or a status for watch-list postings in the inbox. Notes save as you type. A role is tracked by its posting URL, so when a later run picks a different best role for a company, the card starts as new again. A company without a posting (check careers) is tracked by its domain. The first time an item reaches applied or later, the date is kept as "applied".
-- **Inbox** (`/inbox`): apply, consider and stretch roles first scored in the last 7, 14 or 30 days or all time (a company counts again when its best role changes), and watch-list postings by when `watch` first reported them, each with a status menu.
-- **Pipeline** (`/pipeline`): everything you marked saved, applied, interviewing, offer or rejected, in columns, with your notes and applied date. Change a status there to move the card. Above the columns, "From your email" lists the rejections and interview invites `hunt.py mail` found, each with the applications it matches and a button to set the status (see Email updates).
-- **Interviews** (`/interviews`): your interviews on a board by stage of preparation (needs prep, ready for the call, to review, reviewed), the watch-outs for your next interview, and progress across reviewed interviews. Each interview has its own page to open on your phone before and during the call. See Interviews below.
-- **Projects** (`/projects`): side projects that build proof for your gaps, in idea, active, done and dropped columns. The scorer writes side-project ideas only for stretch roles (a role centred on one of your `[candidate].gaps`). Every idea from any saved run appears as a suggestion, newest run first, with the company, role, that run's score and verdict, and its age. Ideas from older runs stay even when a later run scores the company differently, because they are about your gap, not the company. **Add to ideas** turns one into a project, and **Dismiss** hides it. A handled idea is not suggested again, even if a later run repeats it with different case or spacing. **New project** adds your own, with a title, description, the gap it covers and a repository or write-up link. Deleting a project the scorer suggested hides it rather than letting it come back.
-- **Leads** (`/leads`): companies from `discovered.csv`, marked new, queued (in `companies.csv`) or researched (with the latest score). Tick companies and press **Run selected…** to research and score just those (they do not need to be in `companies.csv`), or **Add to companies.csv** to append them to `companies.csv`, so every full run (scheduled ones too) covers them. Companies already listed are not added twice (domains are compared as `run` reads them, so `https://www.Acme.com/` and `acme.com` are the same company); removing one means editing `companies.csv`.
-- **Runs** (`/runs`): start `hunt.py run` (dry run, run and notify, or research only) for every company in `companies.csv`, `discover` (focus, limit), `watch`, `mail` or `news` (each optionally dry run) or `send` (pick a saved scored run). Each opens a confirmation first. It shows the exact command, an estimated cost and side effects such as Telegram messages, file updates or what is sent to Claude; for a run you can switch the mode there. A `discover` focus may not start with `-`, so it cannot be read as a flag.
-  - **Schedule:** the commands in `HUNT_SCHEDULE` (see Deploy to Railway) with their next time and the job each last started, or why it could not start.
-  - **Chat bot:** with `CHAT_BOT=1`, whether `hunt.py chat` is running (since when, starts, the tail of `jobs/chat.log`, refreshed every 5 seconds); otherwise a note on how to turn it on (see Chat with your mail).
-  - **Estimates:** Exa is the average cost per company of saved runs that recorded it (`_run.json`). Claude is the README figure of $0.27 per 19 companies, an upper bound now that the Jev screen skips Claude for some companies. Jev is a fraction of a cent. Discover is the README figure of $0.15–0.20.
-  - **Job pages:** each job gets a live log page with a Stop button (which sends SIGTERM; paid calls already made still cost). When the job finishes, the page shows the saved run's verdict counts and cost.
-  - **History:** the page lists jobs started from the dashboard (scheduled ones are labelled "Scheduled ·"), plus every saved run in `out/` (from the dashboard, a shell or cron) with its mode, verdict counts, errors, Exa cost and Claude tokens.
-  - **Mechanics:** jobs run `python hunt.py …` in the data folder (`--root`) as a separate process, so they behave exactly like the CLI. Logs go to `jobs/<id>.log` and selected-company lists to `jobs/<id>-companies.csv` (both git-ignored). Only one job runs at a time (see the lock above). If the dashboard stops while a job runs, the job shows as interrupted after a restart. Ctrl+C in the dashboard's terminal stops the job too. A job that outlives the dashboard (for example after `kill` of the server process) keeps running and holds the lock until it finishes.
-
-The dashboard copies the pipeline files into `hunt.db` (SQLite, git-ignored) and copies them again whenever one of them changes, so a finished run shows up on the next page load. A run directory that cannot be read (for example while a run is still writing it) is skipped with a warning banner and read again once it changes; the banner also reports a `watch_state.json`, `discovered.csv` or `companies.csv` that cannot be read, and the pages keep working without it (with `companies.csv` unreadable, Runs counts no companies, a full run cannot be started and **Add to companies.csv** is refused until the file is fixed; Leads still lists every company, none marked as queued). Companies are keyed by their domain as `run` spells it (`runs.normalize_domain`: lower-case, without `https://`, `www.` or a path), so results saved under an older spelling such as `www.Acme.com` and new ones under `acme.com` make one card, and a check-careers status or note saved under the older spelling follows it (a one-time migration of `hunt.db` on the first start). Runs saved before `_run.json` existed show no mode or cost. `hunt.db` also holds your statuses, notes, side projects, job history and answers to email suggestions, which exist nowhere else: back it up if they matter, and do not delete it. The database is in SQLite's WAL mode, so the newest changes sit in `hunt.db-wal` and `hunt.db-shm` next to it until a checkpoint: copy or back up `hunt.db` only while the dashboard is stopped, or the copy misses them. The copied pipeline data is rebuilt automatically when needed; your own data is never touched by that.
-
-### Interviews
-
-Add an interview with **New interview…** on the Interviews page, or with **Prepare an interview…** in a researched company's details (which fills in the company and its best role). Give the company, role, stage (HR / recruiter screen, hiring manager, technical, final), date, interview language, and ideally the posting text: some job pages cannot be fetched, and the brief is only as specific as the posting. "What you want to emphasise" is passed on as is (for example a story to lead with, or your salary range).
-
-- **Prep brief** (**Write prep…**, runs `hunt.py interview-prep`): one Claude call with your profile and CV, the posting (fetched from the posting URL through Exa, about $0.001, if you did not paste it), the company's saved research, and the findings of your last five reviewed interviews. The interview's page shows your positioning for this role, a 60–90-second "tell me about yourself" in the interview language, stories mapped to what the role needs, likely questions with answer points, questions to ask, how to handle salary, requirements against your experience, and gaps with honest ways to handle them. The brief's watch-outs (reminders drawn from your past reviews) are shown on the Interviews page, for your next interview that has a brief; without one, it shows the "next time" actions of your latest review. Claude is told to use only facts from your CV; where a number would help it writes `[add: …]` instead of inventing one. Rewriting replaces the brief.
-- **Transcript**: upload a Wispr Flow meeting file (`~/Library/Application Support/Wispr Flow/meetings/<id>/refined.ndjson`; in the file picker press ⌘⇧G and paste the folder path) or paste text with one `Name: text` line per turn, optionally starting with `[mm:ss]`. Then choose which speaker is you. The page measures, for free: your share of the talking (by time when the transcript has timestamps, otherwise by words), the number and median length of your answers, your longest answer and when it started, and filler words per 100 words (English and Serbian lists; approximate, meant for tracking change). A one- to three-word reply from the other side ("okay") does not end your answer.
-- **Review** (**Review the interview…**, runs `hunt.py interview-review`): one Claude call with the whole transcript, the measured numbers, the posting and the prep brief you had. It scores six things from 1 to 5 (structure, positioning for the role, evidence, confidence, career moves, questions asked), quotes what worked and what to improve with timestamps and what to say instead, and lists up to five things to do next time. Those "next time" items become the next prep brief's watch-outs. Uploading a new transcript marks the review as outdated until you review again.
-- **Progress**: the Interviews page shows the latest value of each review score and of your talk share, longest answer and filler words, with a small bar per reviewed interview (oldest first) for the scores and talk share.
-
-Each Claude call costs a few cents; the saved prep and review record the tokens used. Both send personal data to Anthropic: the prep sends your profile and CV, the review sends the whole transcript including the interviewer's words. Interviews live in `interviews/<id>/` (`interview.json`, `transcript.json`, `prep.json`, `review.json`; git-ignored and kept out of the Docker image). On Railway they are on the `/data` volume with your other files, so you can read the brief on your phone during the call.
-
-### Deploy to Railway
-
-Runs the dashboard on [Railway](https://railway.com), so you can open it from your phone and have it start `discover`, `run` (with its Telegram notification), `watch`, `mail` and `news` on a schedule. Railway builds the `Dockerfile`: the code lives in `/app`, and your data (the same files as in the project folder) on a volume mounted at `/data`. Railway bills the always-on service and the volume; scheduled commands cost the same Exa and Claude money as from the laptop.
-
-Railway's own cron services cannot share a volume with the dashboard, so the dashboard process starts the scheduled commands itself, as jobs on the Runs page with the same one-at-a-time lock, logs and history.
-
-1. In Railway: **New project → Deploy from GitHub repo**, pick this repository.
-2. Attach a volume to the service with mount path `/data` (right-click the service → **Attach volume**, or `railway volume add --mount-path /data`). Without it the service does not start (`--root /data is not a directory`), so a missing volume never silently loses your data on the next deploy.
-3. Set the service variables:
-
-   | Variable | Value |
-   |---|---|
-   | `DASHBOARD_PASSWORD` | Required: the login password, at least 12 characters. A random one: `python -c "import secrets; print(secrets.token_urlsafe(18))"`. Anyone with it can start paid runs, so keep it to yourself. |
-   | `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optionally `SCORING_MODEL`, `TYPESAFE_API_KEY` and `JEV_MODEL` | As in your `.env` (the container has no `.env`). |
-   | `TZ` | Your time zone, for example `Europe/Belgrade`. Schedules and saved-run times use it; default UTC. |
-   | `HUNT_SCHEDULE` | Optional: scheduled commands (below). |
-   | `OUTLOOK_CLIENT_ID`, optionally `OUTLOOK_TENANT` | Only for email updates and the chat bot: as in your `.env` (see Email updates). |
-   | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` | Only for the chat bot's Gmail access: as in your `.env` (see Chat with your mail). |
-   | `CHAT_BOT` | `1` keeps the Telegram chat bot (`hunt.py chat`) running alongside the dashboard (see Chat with your mail). |
-   | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
-
-4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.
-5. Upload your files to the volume with the [Railway CLI](https://docs.railway.com/cli/volume) (volume paths start at `/data`, so `/profile.toml` is `/data/profile.toml`):
-
-   ```bash
-   railway volume files upload profile.toml /profile.toml
-   railway volume files upload cv.md /cv.md              # paths in profile.toml are relative to /data
-   railway volume files upload companies.csv /companies.csv
-   # optional: your history, so nothing is reported or suggested twice
-   railway volume files upload discovered.csv /discovered.csv
-   railway volume files upload watch_state.json /watch_state.json
-   railway volume files upload out /out
-   # optional: email updates and the chat bot (see Email updates, Chat with your mail), and their history
-   railway volume files upload outlook_token.json /outlook_token.json
-   railway volume files upload gmail_token.json /gmail_token.json
-   railway volume files upload mail_state.json /mail_state.json
-   railway volume files upload news_state.json /news_state.json
-   ```
-
-   `railway volume browse` opens an interactive browser for editing these files later (for example to remove a company from `companies.csv`). To keep your statuses, notes and side projects, stop the local dashboard, then `railway volume files upload --overwrite hunt.db /hunt.db` while no job runs on Railway, and restart the service (**Deployments → Restart**).
-6. Open the domain, log in, and check the Runs page: the Schedule section lists what will run and when, and with `CHAT_BOT=1` the Chat bot section shows the bot running (since when, how many starts, the tail of its output). The dashboard starts `hunt.py chat` when it starts, restarts it whenever it exits (after 10 seconds, then 1 and 5 minutes while it keeps exiting soon after starting, for example without a signed-in mailbox), and stops it at shutdown; its output goes to `jobs/chat.log` on the volume, truncated at each dashboard start. The bot is not a job: it holds no lock, so scheduled commands and Run buttons work as before.
-
-`HUNT_SCHEDULE` holds one entry per line, or entries separated by `;` (easier in Railway's variable editor): five cron fields (minute, hour, day of month, month, day of week with 0 or 7 for Sunday; numbers, `*`, ranges, lists and `*/n` steps), then a `hunt.py` command. Supported commands are the ones the Runs page starts: `run`, `run --dry-run`, `run --research-only`, `discover [focus] [--limit N]`, `watch`, `mail` and `news`, the last three also with `--dry-run`. For example, discovery every Monday at 07:00, a scored run with its Telegram notification every day at 07:30, the watch list every 6 hours, email every 2 hours from 08:00 to 20:00, and the news digest on Mondays at 08:30:
-
-```
-0 7 * * 1 discover --limit 15; 30 7 * * * run; 0 */6 * * * watch; 0 8-20/2 * * * mail; 30 8 * * 1 news
-```
-
-An entry that is not valid stops the dashboard from starting, with the reason in the deploy logs. A command that comes due while another one runs waits and starts as soon as that one finishes; one that cannot start (for example `companies.csv` is empty) shows the reason on the Runs page and in the logs. Commands due while the service is down (during a redeploy) are skipped, not caught up. Changing a variable redeploys the service, which interrupts a running job. `discover` only adds leads: use **Add to companies.csv** on Leads so the next scheduled `run` researches them.
-
-Railway and a laptop do not share files: once Railway runs `watch` on a schedule, remove the laptop's cron entry, or both will send the same postings. Railway can [back up the volume](https://docs.railway.com/volumes/backups); `railway volume files download /hunt.db` copies your tracking data to the laptop. Do either while the service is stopped (or at least no dashboard is running): the dashboard keeps the newest changes in `hunt.db-wal` until a checkpoint, and a copy of `hunt.db` taken while it runs misses them.
-
-To try the image on the laptop: `docker build -t hunt . && docker run -p 8000:8000 -e DASHBOARD_PASSWORD=… -v "$PWD":/data hunt`, then open `http://127.0.0.1:8000`. The container reads and writes this folder's data files, and its jobs see only the keys you pass with `-e`.
-
-## Tests
-
-```bash
-pip install -r requirements-dev.txt
-python -m pytest
-```
-
-Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages, Telegram, Microsoft Graph and the Gmail API are mocked the same way, and TypeSafe in its wire format (`tests/jev_mock.py`); Claude is replaced by a fake client, and the chat bot's model by a scripted Pydantic AI `FunctionModel`. Dashboard tests write pipeline files to a temporary directory (`tests/dashboard_data.py`) and call the app in-process with FastAPI's `TestClient`; job and chat-bot tests replace `hunt.py` with a small stub script, so no paid command runs.
-
-CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
-
-### Verify in CI
-
-The Verify workflow (`.github/workflows/verify.yml`) runs the `verify` skill (see Files) without Claude Code. `.claude/skills/verify/scripts/ci.py` gives the skill to a [Pydantic AI Coder](https://pydantic.dev/docs/ai/harness/coder/) agent on `claude-opus-5-5`, with the pull request's title and description as what the change should do. The agent works on a copy of the branch in a Docker container without network access. The copy holds the git history and the tracked and untracked files, never git-ignored ones (`.env`, the token files, `hunt.db`, ...), and the container gets none of the runner's environment, so the agent's commands cannot read the API key or reach Exa, Anthropic or Telegram. The report goes to the job summary, with the model requests, tokens and dollars it took, and the check fails on BLOCK and FIX BEFORE MERGE. The skill's Docker image check cannot run inside the container and is reported as skipped.
-
-Each run is a paid Claude session of up to 150 model requests (`--max-requests`), so it starts only when you add the `verify` label to a pull request (remove it and add it again to verify new commits), or from **Actions → Verify → Run workflow**. Setup: create the `verify` label and add `ANTHROPIC_API_KEY` as a repository secret (**Settings → Secrets and variables → Actions**). To run it on the laptop, with Docker running and `ANTHROPIC_API_KEY` exported (it never reads `.env`): `uv run .claude/skills/verify/scripts/ci.py --intent "<what the change should do>"`.
-
-## Parked ideas
-
-Not built yet; recorded so they can be picked up later.
-
-- **Repeat scoring for borderline companies.** Because scores vary between runs (see Score noise), score companies whose first score lands near a verdict threshold (for example within 5 points of 75 or 50, or a stretch/apply split) two or three times and use the median score and the majority verdict. Costs roughly 2-3x the Claude spend for those companies only (a full 19-company run currently costs about $0.27 in Claude).
-- **Chat with the job hunt over Telegram.** Give the chat bot (see Chat with your mail) read-only tools over `hunt.db`, so "what is waiting on a reply for more than two weeks?" is answered from your pipeline. The Telegram loop and the agent exist; what is missing is the queries as tools and a way for the bot to find `hunt.db` (it runs next to the data folder already).
+4. Optional: `[news].topics` in `profile.toml` for the news digest, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)).
+
+## Commands
+
+`python hunt.py <command> --help` lists each command's options. "Paid calls" are the APIs a command pays for; Jev is used only with `TYPESAFE_API_KEY` set.
+
+| Command | What it does | Paid calls | Telegram | Details |
+|---|---|---|---|---|
+| `python hunt.py discover` | Suggests new companies to research | Exa | No | [Run](pipeline/README.md#run) |
+| `python hunt.py run` | Researches and scores every company in `companies.csv` | Exa, Jev, Claude | Yes, unless `--dry-run` or `--research-only` | [Run](pipeline/README.md#run) |
+| `python hunt.py send` | Sends a saved run's notification again | No | Yes | [Run](pipeline/README.md#run) |
+| `python hunt.py watch` | New postings from watched Ashby boards | No | Yes, unless `--dry-run` | [Watch list](pipeline/README.md#watch-list) |
+| `python hunt.py outlook-login` | Signs in to Outlook once | No | No | [Email updates](inbox/README.md#email-updates) |
+| `python hunt.py mail` | Rejections and interview invites in new email | Jev, Claude | Yes, unless `--dry-run` | [Email updates](inbox/README.md#email-updates) |
+| `python hunt.py news` | News digest on your `[news].topics` | Exa, Jev, Claude | Yes, unless `--dry-run` | [News digest](pipeline/README.md#news-digest) |
+| `python hunt.py interview-prep` | Prep brief for one interview | Claude (and Exa for the posting) | No | [Interviews](interview/README.md#interviews) |
+| `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
+| `python hunt.py gmail-login` | Signs in to Gmail once | No | No | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
+| `python hunt.py chat` | Telegram chat bot over your mail | Claude | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
+| `python -m dashboard` | Dashboard: results, tracking, starting jobs | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard) |
+| `python -m pytest` | Test suite, no keys and no network | No | No | [Tests](tests/README.md#run-the-tests) |
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `exa_client.py` | Exa search client |
 | `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic]` for the chat bot, and `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard) |
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`, `PyYAML` for the Verify workflow test) |
-| `tests/` | Test suite; `tests/exa_mock.py` holds the Exa API mock |
+| `pytest.ini` | pytest settings: test paths and options |
+| `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
-| `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see Verify in CI) |
+| `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see [Verify in CI](tests/README.md#verify-in-ci)) |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
-| `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships (agents run it themselves; you can run `/verify <what the change should do>`); `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py`; `scripts/ci.py` runs the skill in CI (see Verify in CI) |
+| `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships (agents run it themselves; you can run `/verify <what the change should do>`); `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py`; `scripts/ci.py` runs the skill in CI (see [Verify in CI](tests/README.md#verify-in-ci)) |
 | `.claude/skills/visualize-changes/` | `/visualize-changes` skill, run only when you ask: an HTML report that explains the branch's changes (short descriptions, before/after, diagrams, old and new dashboard pages side by side, where the change lands; no diff), saved in `.change-reports/` (git-ignored) |
 | `docs/specs/` | Specs handed to coding agents: `gtm-attribution-model.md` (public attribution, CAC and payback model) and `fee-verification-engine.md` (public payment fee verification engine on synthetic data) |
+| `docs/parked-ideas.md` | Ideas not built yet |
 | `.env.example` | Template for required environment variables |
 | `.env` | Local secrets (git-ignored) |
-| `hunt.py` | Job-hunt CLI: `discover`, `run`, `send`, `watch`, `outlook-login`, `mail`, `news`, `interview-prep`, `interview-review`, `gmail-login` and `chat` |
-| `runs.py` | Saved-run format, the domain normaliser and the one-command-at-a-time lock, shared by `hunt.py` and the dashboard (`out/<timestamp>/`, `_run.json`, `.hunt.lock`) |
-| `dashboard/` | Dashboard (`python -m dashboard`): FastAPI app, login, scheduler, chat-bot supervisor, SQLite store and ingest, status tracking, side projects, job runner, Jinja templates, CSS and a vendored copy of htmx 2.0.7 |
-| `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
-| `research.py` | Per-company Exa research (identity, signals, open roles) |
-| `scoring.py` | Jev role screen and Claude fit scoring (structured output) |
-| `jev.py` | TypeSafe's Jev decision model: the only place that calls TypeSafe (retries, usage tally, cost per token) |
-| `telegram.py` | Telegram delivery and `getUpdates` polling for the chat bot |
-| `watch.py` | Watch list: poll job boards, report new matching postings |
-| `ashby.py` | Ashby public job-board API client (used by link checks and the watch list) |
-| `outlook.py` | Outlook through Microsoft Graph: browser sign-in, token refresh, recent messages for `mail`, and search, full text and drafts for `chat`; never sends |
-| `oauth.py` | The browser sign-in both mail providers use: authorization code with a loopback redirect |
-| `gmail.py` | Gmail through the Gmail API: browser sign-in, token refresh, search, full text and drafts for `chat`; never sends |
-| `chat.py` | The Telegram chat bot: the Pydantic AI agent, its mail tools, the conversation and the polling loop |
-| `mail.py` | Email updates: which emails go to Jev and Claude, `mail_state.json`, the saved `mail/` files; shared by `hunt.py` and the dashboard |
-| `mail_labels.py` | Jev drops clear non-updates, then Claude labels application emails: rejected, interview or other (structured output) |
-| `news.py` | News digest: Exa news search per topic, Jev's relevance screen, Claude's picks, `news_state.json` |
 | `profile.example.toml` | Template for `profile.toml` (git-ignored) |
 | `cv.example.md` | Template for `cv.md` (git-ignored) |
 | `companies.example.csv` | Template for `companies.csv` (git-ignored) |
@@ -389,6 +92,4 @@ Not built yet; recorded so they can be picked up later.
 | `news_state.json` | Articles the news digest has already considered (git-ignored) |
 | `jobs/` | Logs and company lists of jobs started from the dashboard (git-ignored) |
 | `interviews/` | Your interviews: details, transcripts, prep briefs and reviews (git-ignored) |
-| `interviews.py` | Interview files, transcript parsing and talk metrics, shared by `hunt.py` and the dashboard |
-| `coaching.py` | Claude interview prep and transcript review (structured output) |
 | `.hunt.lock` | Lock file that lets one `hunt.py` command run at a time (git-ignored) |

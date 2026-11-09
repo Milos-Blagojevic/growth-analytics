@@ -8,7 +8,7 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel
 
-import jev
+from clients import jev
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 

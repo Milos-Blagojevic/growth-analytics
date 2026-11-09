@@ -12,10 +12,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-import interviews
-import mail
-import runs
 from dashboard import db
+from inbox import mail
+from interview import interviews
+from pipeline import runs
 
 logger = logging.getLogger("dashboard.ingest")
 

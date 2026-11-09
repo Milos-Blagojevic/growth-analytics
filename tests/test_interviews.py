@@ -1,6 +1,6 @@
 import pytest
 
-import interviews
+from interview import interviews
 from dashboard_data import INTERVIEW_TURNS, wispr
 
 

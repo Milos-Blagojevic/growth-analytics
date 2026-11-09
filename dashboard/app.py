@@ -20,9 +20,9 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-import interviews
-import runs
 from dashboard import auth, bot, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
+from interview import interviews
+from pipeline import runs
 
 HERE = Path(__file__).parent
 VERDICT_LABELS = {

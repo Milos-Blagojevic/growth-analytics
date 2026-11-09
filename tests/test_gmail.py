@@ -11,7 +11,7 @@ import pytest
 import requests
 import responses
 
-import gmail
+from inbox import gmail
 from browser_login import Login
 
 MESSAGES = f"{gmail.API}/messages"

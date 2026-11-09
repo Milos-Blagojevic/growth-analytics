@@ -4,7 +4,7 @@ import pytest
 import requests
 import responses
 
-import telegram
+from clients import telegram
 
 
 def test_pack_blocks_fills_messages_up_to_limit():

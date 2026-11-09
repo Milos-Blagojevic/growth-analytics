@@ -4,7 +4,7 @@ import json
 import pytest
 
 import hunt
-import watch
+from pipeline import watch
 
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{}"
 

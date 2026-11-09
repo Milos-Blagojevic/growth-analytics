@@ -7,11 +7,10 @@ from pathlib import Path
 import pytest
 
 import hunt
-import jev
-import runs
-import scoring
+from clients import jev
 from dashboard_data import INTERVIEW_TURNS, PREP, review_fields, wispr, write_interview
 from exa_mock import contents_response, error, result, structured_response
+from pipeline import runs, scoring
 
 PROFILE_TOML = """
 [search]

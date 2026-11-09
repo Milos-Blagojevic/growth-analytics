@@ -3,7 +3,7 @@ import json
 import pytest
 import requests
 
-import jev
+from clients import jev
 
 QUESTIONS = {"relevant": jev.noul("Is this relevant?")}
 OK = {"model": "jev-1.14.0", "answers": {"relevant": {"type": "noul", "noul": 0.8}},

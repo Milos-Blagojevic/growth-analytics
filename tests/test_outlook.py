@@ -8,7 +8,7 @@ import pytest
 import requests
 import responses
 
-import outlook
+from inbox import outlook
 from browser_login import Login
 
 AUTH = "https://login.microsoftonline.com/common/oauth2/v2.0"

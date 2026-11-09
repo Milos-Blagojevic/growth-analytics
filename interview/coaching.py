@@ -9,8 +9,8 @@ import os
 
 from pydantic import BaseModel, create_model
 
-import interviews
-import scoring
+from interview import interviews
+from pipeline import scoring
 
 
 class Match(BaseModel):

@@ -20,7 +20,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-import runs
+from pipeline import runs
 from dashboard import jobs
 
 logger = logging.getLogger("dashboard.schedule")

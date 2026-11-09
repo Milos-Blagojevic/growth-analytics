@@ -4,7 +4,7 @@ import json
 
 import responses
 
-import jev
+from clients import jev
 
 INPUT_TOKENS = 500  # per request
 

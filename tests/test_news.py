@@ -4,9 +4,8 @@ import json
 import pytest
 
 import hunt
-import news
-import scoring
 from exa_mock import error, result, search_response
+from pipeline import news, scoring
 
 TELEGRAM = "https://api.telegram.org/bottok/sendMessage"
 PROFILE_TOML = """

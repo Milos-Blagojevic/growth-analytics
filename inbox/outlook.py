@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 
 import requests
 
-import oauth
+from inbox import oauth
 
 logger = logging.getLogger("outlook")
 
@@ -35,7 +35,7 @@ SELECT = "id,internetMessageId,subject,from,receivedDateTime,body,webLink"
 CHAT_SELECT = "id,subject,from,toRecipients,receivedDateTime,bodyPreview,webLink"
 MAX_SEARCH = 50
 TEXT_BODY = {"Prefer": 'outlook.body-content-type="text"'}  # Graph converts HTML bodies to text for us
-LOGIN_HINT = "run `python hunt.py outlook-login` (see README, Email updates)"
+LOGIN_HINT = "run `python hunt.py outlook-login` (see inbox/README.md, Email updates)"
 
 
 class AuthError(RuntimeError):
