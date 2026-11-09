@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-import research
+from pipeline import research
 from exa_mock import CONTENTS_URL, contents_response, error, grounded, result, search_response, structured_response
 
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{}"

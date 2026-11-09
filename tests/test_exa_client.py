@@ -1,9 +1,9 @@
 import pytest
 import requests
 
-import exa_client
-import research
+from clients import exa_client
 from exa_mock import CONTENTS_URL, contents_response, error, grounded, result, search_response, structured_response
+from pipeline import research
 
 
 def test_search_requests_highlights_by_default_and_parses_results(exa, http):

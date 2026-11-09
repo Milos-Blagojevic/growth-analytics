@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-import interviews
+from interview import interviews
 
 BASE_URL = "http://127.0.0.1:8000"  # the dashboard only accepts loopback Host headers
 

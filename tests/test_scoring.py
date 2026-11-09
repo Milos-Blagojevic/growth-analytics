@@ -1,6 +1,6 @@
 import pytest
 
-import scoring
+from pipeline import scoring
 
 LIVE = {"title": "Senior Analytics Engineer", "url": "https://jobs.ashbyhq.com/acme/1", "link_status": "live"}
 UNVERIFIED = {"title": "Lead Growth Engineer", "url": "https://acme.com/careers", "link_status": "unverified"}

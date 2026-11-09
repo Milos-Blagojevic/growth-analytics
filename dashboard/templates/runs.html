@@ -94,14 +94,14 @@
     </tbody>
   </table>
   {% else %}
-  <p class="muted small">Nothing scheduled. Set <code>HUNT_SCHEDULE</code> to start commands on a schedule (see the README).</p>
+  <p class="muted small">Nothing scheduled. Set <code>HUNT_SCHEDULE</code> to start commands on a schedule (see <code>dashboard/README.md</code>).</p>
   {% endif %}
 </section>
 
 <section class="block">
   <h2>Chat bot</h2>
   {% if chat is none %}
-  <p class="muted small">Not running here. Set <code>CHAT_BOT=1</code> to keep <code>hunt.py chat</code> running alongside the dashboard (see the README).</p>
+  <p class="muted small">Not running here. Set <code>CHAT_BOT=1</code> to keep <code>hunt.py chat</code> running alongside the dashboard (see <code>dashboard/README.md</code>).</p>
   {% else %}
   <p class="muted small">Answers your Telegram messages; restarted by the dashboard whenever it exits. Output in <code>jobs/chat.log</code>.</p>
   {% include "partials/chat_bot.html" %}

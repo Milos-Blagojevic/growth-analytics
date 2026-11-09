@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-import runs
+from pipeline import runs
 from dashboard import db, jobs
 from dashboard.app import create_app
 from dashboard_data import BASE_URL, client, fit, result, write_run

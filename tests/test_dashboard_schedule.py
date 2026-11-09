@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import runs
+from pipeline import runs
 from dashboard import db, jobs, schedule
 from dashboard.app import create_app
 from dashboard_data import client

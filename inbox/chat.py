@@ -23,10 +23,9 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.usage import UsageLimits
 
-import gmail
-import outlook
-import scoring
-import telegram
+from clients import telegram
+from inbox import gmail, outlook
+from pipeline import scoring
 
 logger = logging.getLogger("chat")
 

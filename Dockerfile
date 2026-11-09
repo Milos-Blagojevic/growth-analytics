@@ -1,5 +1,6 @@
 # Dashboard image for Railway (or any Docker host). The code lives in /app; your data (profile.toml, cv.md,
-# companies.csv, out/, hunt.db, ...) lives in /data, which must be a persistent volume. See README "Deploy to Railway".
+# companies.csv, out/, hunt.db, ...) lives in /data, which must be a persistent volume. See dashboard/README.md,
+# "Deploy to Railway".
 FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

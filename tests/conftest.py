@@ -4,12 +4,10 @@ import pytest
 import requests
 import responses
 
-import exa_client
-import jev
-import research
-import scoring
+from clients import exa_client, jev
 from exa_mock import ExaMock
 from jev_mock import JevMock
+from pipeline import research, scoring
 
 
 @pytest.fixture(autouse=True)

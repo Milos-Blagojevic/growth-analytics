@@ -13,9 +13,9 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel
 
-import jev
-import mail
-import scoring
+from clients import jev
+from inbox import mail
+from pipeline import scoring
 
 logger = logging.getLogger("mail_labels")
 

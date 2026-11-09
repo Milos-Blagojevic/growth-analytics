@@ -19,7 +19,7 @@ place of $ARGUMENTS. The report goes to stdout and, in GitHub Actions, to the jo
 SHIP and 1 for BLOCK or FIX BEFORE MERGE.
 
 The dependencies are pinned here, not in requirements*.txt: pydantic-ai-harness needs a newer pydantic-ai-slim than
-the one chat.py runs on.
+the one inbox/chat.py runs on.
 """
 
 import argparse

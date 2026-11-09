@@ -23,7 +23,7 @@ from urllib.parse import urlencode
 
 import requests
 
-import oauth
+from inbox import oauth
 
 logger = logging.getLogger("gmail")
 
@@ -34,7 +34,7 @@ TOKEN = "https://oauth2.googleapis.com/token"
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 TIMEOUT = 15
 MAX_RESULTS = 50
-LOGIN_HINT = "run `python hunt.py gmail-login` (see README, Chat with your mail)"
+LOGIN_HINT = "run `python hunt.py gmail-login` (see inbox/README.md, Chat with your mail)"
 METADATA_HEADERS = ("From", "To", "Subject")
 REPLY_HEADERS = ("From", "Reply-To", "Subject", "Message-ID", "References")
 

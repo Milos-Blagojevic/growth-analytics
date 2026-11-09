@@ -8,7 +8,7 @@ a button; your answer is kept in mail_decisions, so a handled update is not sugg
 import re
 from datetime import datetime
 
-import mail
+from inbox import mail
 from dashboard import tracking
 
 # The statuses an update may move an item from, per suggested status: an update never moves an item backwards.

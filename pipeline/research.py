@@ -7,8 +7,7 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
-import ashby
-import exa_client
+from clients import ashby, exa_client
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"

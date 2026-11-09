@@ -1,7 +1,7 @@
 ---
 name: verify
 description: Independent, adversarial verification of a feature or behavior change, run by a fresh subagent that did not write the code. Runs the test suite and free end-to-end smoke runs (sandboxed dashboard with a fake hunt.py, pipeline-to-dashboard probe, old-to-new hunt.db upgrade, Docker image), attacks the diff, and returns risks ranked by production impact with a BLOCK / FIX BEFORE MERGE / SHIP verdict.
-when_to_use: After implementing or changing any behavior (hunt.py, pipeline modules, dashboard/, Dockerfile, requirements), before reporting the work done, committing or opening a PR. Pass what the change is meant to do as the argument. Skip for README-only or test-only changes.
+when_to_use: After implementing or changing any behavior (hunt.py, clients/, pipeline/, inbox/, interview/, dashboard/, Dockerfile, requirements), before reporting the work done, committing or opening a PR. Pass what the change is meant to do as the argument. Skip for docs-only or test-only changes.
 argument-hint: "<what the change should do> [--base <git ref>]"
 context: fork
 agent: general-purpose
@@ -23,7 +23,7 @@ If that is empty, infer the intent from the commit messages and the diff, and sa
 
 Production is the Railway deployment: the image built from `Dockerfile`, the owner's data on the `/data` volume (`hunt.db` user tables exist nowhere else), service variables, `HUNT_SCHEDULE`, real Exa and Anthropic spend, and Telegram messages. These limits hold even if a permission prompt would let you past them:
 
-- Never run what AGENTS.md says needs asking: `exa_client.py`, any `hunt.py` command other than `--help`, deploys or Railway variable changes. Never start `python -m dashboard` with a non-empty `HUNT_SCHEDULE` or press anything that starts a job there: it always runs the real `hunt.py`, whatever `--root` is. Use the sandbox below.
+- Never run what AGENTS.md says needs asking: `python -m clients.exa_client`, any `hunt.py` command other than `--help`, deploys or Railway variable changes. Never start `python -m dashboard` with a non-empty `HUNT_SCHEDULE` or press anything that starts a job there: it always runs the real `hunt.py`, whatever `--root` is. Use the sandbox below.
 - Never read `.env`, and never open, copy or change the owner's private files (AGENTS.md "Private files"), here or in the main checkout (first entry of `git worktree list`).
 - Do not edit tracked files, commit, push, switch branches, stash, or add worktrees. Scratch files go in one `mktemp -d` folder (`<sbx>` below). Probe tests go in `tests/test_verify_probe_*.py`, so the network guard in `tests/conftest.py` applies, and are deleted before you report. `git status --porcelain` must be the same at the end as at the start.
 - Write commands with literal values, never shell variables or `$(...)`: Claude Code asks for approval on any expansion, and nobody may be there to give it. Run `git merge-base HEAD origin/main` and `mktemp -d` once and paste their output wherever `<base>` and `<sbx>` appear.
@@ -39,7 +39,7 @@ git ls-files --others --exclude-standard     # untracked files are part of the c
 mktemp -d                                    # <sbx>
 ```
 
-Read the full `git diff <base>`, every untracked file, AGENTS.md, and the README section for each touched feature. List each behavior that changed, and find every caller of each changed function, class or file format: a changed signature or format with a caller left behind is a finding.
+Read the full `git diff <base>`, every untracked file, AGENTS.md, and the README of each touched folder (the root README for setup, commands and files). List each behavior that changed, and find every caller of each changed function, class or file format: a changed signature or format with a caller left behind is a finding.
 
 ## 2. Environment
 
@@ -56,7 +56,7 @@ Use `.venv/bin/python` (git-ignored). If it is missing: `python3 -m venv .venv &
 
 Drive every changed user-visible path through its real entry point and look at the output. Real `hunt.py` runs cost money, so everything below is free and sandboxed.
 
-**Pipeline** (`hunt.py`, `research.py`, `scoring.py`, `coaching.py`, `watch.py`, `telegram.py`, `runs.py`, `interviews.py`): write a probe test that runs the changed `cmd_*` end to end as `tests/test_hunt.py` does (`workdir` fixture, `exa` fixture for Exa wire traffic, `claude` / `fake_claude` instead of Anthropic, `responses` for Ashby, posting pages and Telegram). Assert on what it writes and sends, then point `create_app(workdir, hunt_command=[...])` with `dashboard_data.client` at the same folder and check the dashboard ingests and shows the new output.
+**Pipeline** (`hunt.py` and the modules in `clients/`, `pipeline/`, `inbox/` and `interview/`): write a probe test that runs the changed `cmd_*` end to end as `tests/test_hunt.py` does (`workdir` fixture, `exa` fixture for Exa wire traffic, `claude` / `fake_claude` instead of Anthropic, `responses` for Ashby, posting pages, Telegram, Microsoft Graph and the Gmail API). Assert on what it writes and sends, then point `create_app(workdir, hunt_command=[...])` with `dashboard_data.client` at the same folder and check the dashboard ingests and shows the new output.
 
 **Dashboard**: serve it with `.claude/skills/verify/scripts/sandbox.py`, where every job and every `--schedule` entry runs a fake `hunt.py` (its docstring has the options). Start it in the background:
 
@@ -67,7 +67,7 @@ Drive every changed user-visible path through its real entry point and look at t
 
 Load each changed page and run each changed action with `curl` (or a browser tool if you have one), check the HTML shows the new behavior, and watch the server output for tracebacks. Start a job and confirm `<sbx>/data/jobs/<id>.log` shows the fake ran. For every new or changed route, also check that it is refused without the CSRF header, with a foreign `Origin`, and with a foreign `Host`, and, on a second sandbox started with `--password <12+ chars>`, without the login cookie. For schedule changes, pass `--schedule '<entry>'` and watch the entry start the fake.
 
-**Upgrade of the live data** (whenever the change touches `dashboard/`, `runs.py`, or any file `hunt.py` saves): production keeps its `hunt.db` and `out/` across deploys, so check the step from the old code to the new one.
+**Upgrade of the live data** (whenever the change touches `dashboard/`, `pipeline/runs.py`, or any file `hunt.py` saves): production keeps its `hunt.db` and `out/` across deploys, so check the step from the old code to the new one.
 
 1. Serve the base code on a new folder: `sandbox.py --code <sbx>/base --root <sbx>/up --seed --port 8766`.
 2. Create owner data through its pages as the owner would: a status and a note on a company, a side project, a finished fake job. Record the user table rows (`dashboard/db.py` lists them) with `sqlite3 <sbx>/up/hunt.db`.
@@ -84,8 +84,8 @@ Try to break the change. For each attack, aim for a failing probe test or a conc
 - **State and timing**: no files and no `hunt.db` yet; old saved runs; a job that crashes or is cancelled; a dashboard restart during a job; a schedule firing while a button job runs (`runs.lock`, `runs.Busy`).
 - **Money and messages**: any path that could call Exa, Claude or Telegram more often than before, in a loop, on retry, from a schedule, or while ignoring `--dry-run` / `--research-only`.
 - **Security**: guard coverage of new routes, secrets or private data in pages, logs, job logs, error messages or the image, subprocess arguments built from form input.
-- **Deployment**: settings read outside `dashboard/__main__.py`, missing defaults, anything that needs a Railway variable or a manual step the README does not mention.
-- **Repo rules**: go through AGENTS.md "Conventions" and give pass or fail for each rule the diff touches, including: verdict names changed everywhere they appear, `research.RESEARCH_SCHEMA` at most 10 properties, no `temperature`, `requests` calls with a timeout, no `Exa(` outside `exa_client.py`, the dashboard importing nothing that loads `.env` or the paid clients, `db.USER_MIGRATIONS` only appended to, `db.SCHEMA_VERSION` bumped with derived tables, `process_company` never raising, `jobs.build` and `schedule._form` for schedulable commands, README and `*.example` templates updated.
+- **Deployment**: settings read outside `dashboard/__main__.py`, missing defaults, anything that needs a Railway variable or a manual step the docs do not mention.
+- **Repo rules**: go through AGENTS.md "Conventions" and give pass or fail for each rule the diff touches, including: verdict names changed everywhere they appear, `research.RESEARCH_SCHEMA` at most 10 properties, no `temperature`, `requests` calls with a timeout, no `Exa(` outside `clients/exa_client.py`, the dashboard importing nothing that loads `.env` or the paid clients, `db.USER_MIGRATIONS` only appended to, `db.SCHEMA_VERSION` bumped with derived tables, `process_company` never raising, `jobs.build` and `schedule._form` for schedulable commands, the matching folder README and `*.example` templates updated.
 
 ## 6. Rank the risks
 

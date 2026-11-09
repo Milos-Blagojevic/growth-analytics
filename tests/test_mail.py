@@ -7,11 +7,9 @@ import httpx
 import pytest
 
 import hunt
-import jev
-import mail
-import mail_labels
-import outlook
-import scoring
+from clients import jev
+from inbox import mail, mail_labels, outlook
+from pipeline import scoring
 
 TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 INBOX = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"

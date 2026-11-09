@@ -8,9 +8,7 @@ import responses
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
-import chat
-import gmail
-import outlook
+from inbox import chat, gmail, outlook
 
 AUTH = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 INBOX = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"

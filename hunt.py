@@ -27,21 +27,10 @@ from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
 
-import chat
-import coaching
-import exa_client
-import gmail
-import interviews
-import jev
-import mail
-import mail_labels
-import news
-import outlook
-import research
-import runs
-import scoring
-import telegram
-import watch
+from clients import exa_client, jev, telegram
+from inbox import chat, gmail, mail, mail_labels, outlook
+from interview import coaching, interviews
+from pipeline import news, research, runs, scoring, watch
 
 logger = logging.getLogger("hunt")
 WORKERS = 4
@@ -506,7 +495,7 @@ def cmd_watch(args):
 
 def cmd_outlook_login(args):
     if not outlook.configured():
-        sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see README, Email updates).")
+        sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see inbox/README.md, Email updates).")
     try:
         outlook.login(args.token)
     except outlook.AuthError as exc:
@@ -517,7 +506,8 @@ def cmd_outlook_login(args):
 
 def cmd_gmail_login(args):
     if not gmail.configured():
-        sys.exit("GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set. Add them to .env (see README, Chat with your mail).")
+        sys.exit("GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set. Add them to .env "
+                 "(see inbox/README.md, Chat with your mail).")
     try:
         gmail.login(args.token)
     except gmail.AuthError as exc:
@@ -539,7 +529,7 @@ def cmd_chat(args):
         setattr(mailboxes, f"{name}_token", path)
     if not mailboxes.accounts():
         sys.exit("No mailbox is set up: set OUTLOOK_CLIENT_ID or GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET in .env "
-                 "(see README, Chat with your mail).")
+                 "(see inbox/README.md, Chat with your mail).")
     try:
         chat.serve(chat.build_agent(), mailboxes)
     except KeyboardInterrupt:
@@ -549,7 +539,7 @@ def cmd_chat(args):
 
 def cmd_mail(args):
     if not outlook.configured():
-        sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see README, Email updates).")
+        sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see inbox/README.md, Email updates).")
     _require_claude()
     if not args.dry_run and not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")

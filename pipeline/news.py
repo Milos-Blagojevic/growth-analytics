@@ -13,9 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-import exa_client
-import jev
-import scoring
+from clients import exa_client, jev
+from pipeline import scoring
 
 logger = logging.getLogger("news")
 

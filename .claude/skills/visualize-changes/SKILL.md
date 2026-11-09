@@ -23,7 +23,7 @@ git diff <base> --stat                       # committed and uncommitted changes
 git ls-files --others --exclude-standard     # untracked files count too
 ```
 
-If there are no changes, say so and stop. Read the full `git diff <base>` and every untracked file, plus the README section of each touched feature. Use this conversation for the reasons behind the change; when the reason is not known, leave it out rather than guess. Use `.venv/bin/python`; if it is missing, create it with `python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`.
+If there are no changes, say so and stop. Read the full `git diff <base>` and every untracked file, plus the README of each touched folder. Use this conversation for the reasons behind the change; when the reason is not known, leave it out rather than guess. Use `.venv/bin/python`; if it is missing, create it with `python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`.
 
 ## 2. Dashboard pages (when the change touches `dashboard/`)
 
