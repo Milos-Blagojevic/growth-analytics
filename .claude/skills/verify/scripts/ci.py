@@ -1,6 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pydantic-ai-harness[coder,anthropic]==0.66.0"]
+# [tool.uv]
+# exclude-newer = "2026-11-09T00:00:00Z"  # fixes the versions of the unpinned transitive dependencies too
 # ///
 """Run the verify skill unattended, for CI: a Pydantic AI Coder agent on a copy of the checkout in a Docker container.
 
@@ -102,23 +104,36 @@ def git(*args, cwd):
 
 def stage(repo, dest, base):
     """Copies HEAD's history and repo's tracked and untracked files to dest, uncommitted changes included; dest gets
-    no remote. Left out: files the working tree's or base's .gitignore ignores (so a branch that drops a private file
-    from .gitignore still keeps it out) and nested repositories."""
+    no remote. A file HEAD does not have (untracked, or staged as with `git add -f .env`) is copied only if both the
+    working tree's ignore rules and base's root .gitignore on its own allow it, so a branch can neither drop nor
+    negate (`!.env`) a rule of base's. Left out: files reached through a symlinked folder, nested repositories and
+    submodules."""
     bundle, base_rules = dest.with_suffix(".bundle"), dest.with_suffix(".gitignore")
     git("bundle", "create", "-q", str(bundle), "HEAD", cwd=repo)
     git("-c", "advice.detachedHead=false", "clone", "-q", str(bundle), str(dest), cwd=repo)
     bundle.unlink()
     git("remote", "remove", "origin", cwd=dest)
     for name in filter(None, git("ls-files", "-z", cwd=dest).split("\0")):
-        (dest / name).unlink()
+        if not (dest / name).is_dir():  # a submodule stays an empty folder
+            (dest / name).unlink()
     rules = subprocess.run(["git", "show", f"{base}:.gitignore"], cwd=repo, capture_output=True, text=True)
     base_rules.write_text(rules.stdout if rules.returncode == 0 else "")  # a base without .gitignore adds no rules
-    names = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", f"--exclude-from={base_rules}", cwd=repo)
+
+    def listed(*args):
+        return set(filter(None, git("ls-files", "-z", *args, cwd=repo).split("\0")))
+
+    in_head = set(filter(None, git("ls-tree", "-r", "-z", "--name-only", "HEAD", cwd=repo).split("\0")))
+    staged = listed("--cached") - (listed("--cached", "--ignored", f"--exclude-from={base_rules}") - in_head)
+    untracked = listed("--others", "--exclude-standard") & listed("--others", f"--exclude-from={base_rules}")
     base_rules.unlink()
-    for name in filter(None, names.split("\0")):
+    real_repo = repo.resolve()
+    for name in sorted(staged | untracked):
         source = repo / name
-        # A name ending in / is a nested repository; tracked files deleted in the working tree stay deleted.
-        if not name.endswith("/") and (source.exists() or source.is_symlink()):
+        if source.is_dir() and not source.is_symlink() or name.endswith("/"):  # submodule or nested repository
+            continue
+        if source.parent.resolve() != real_repo / Path(name).parent:  # reached through a symlinked folder
+            continue
+        if source.exists() or source.is_symlink():  # tracked files deleted in the working tree stay deleted
             (dest / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, dest / name, follow_symlinks=False)
 
@@ -191,7 +206,7 @@ def spend(result):
 
     try:
         dollars = sum(m.cost().total_price for m in result.all_messages() if isinstance(m, ModelResponse))
-    except LookupError:  # no price for this model
+    except Exception:  # pricing is best effort (unknown model, unmeasured usage); the report must still go out
         return tokens(result.usage)
     return f"{tokens(result.usage)}, ${dollars:.2f}"
 
@@ -238,8 +253,8 @@ def main():
         try:
             result = asyncio.run(verify(agent, checkout, f"{args.intent.strip()}\n\n--base {base}".strip(),
                                         args.max_requests, usage))
-        except Exception as error:  # a paid run that ends without a report still shows what it cost
-            publish(f"Verdict: none, the run stopped before its report: {error}\n\nUsage: {tokens(usage)}")
+        except BaseException as error:  # also a cancel or timeout: a paid run without a report still shows its cost
+            publish(f"Verdict: none, the run stopped before its report: {error!r}\n\nUsage: {tokens(usage)}")
             raise
     publish(render(result.output, spend(result)))
     sys.exit(0 if verdict(result.output.risks) == "SHIP" else 1)

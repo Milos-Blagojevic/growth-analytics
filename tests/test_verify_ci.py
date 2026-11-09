@@ -1,6 +1,7 @@
 """The CI verify runner (.claude/skills/verify/scripts/ci.py): what reaches the container, the prompt, the verdict,
 the report and the workflow that starts it."""
 
+import asyncio
 import importlib.util
 import subprocess
 import sys
@@ -26,7 +27,7 @@ def test_copy_has_the_history_and_working_tree_but_no_ignored_files(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     git("init", "-q", cwd=repo)
-    (repo / ".gitignore").write_text(".env\nhunt.db*\n")
+    (repo / ".gitignore").write_text(".env\nhunt.db*\nout/\n")
     (repo / "keep.py").write_text("a = 1\n")
     (repo / "gone.py").write_text("bye\n")
     git("add", ".", cwd=repo)
@@ -40,7 +41,9 @@ def test_copy_has_the_history_and_working_tree_but_no_ignored_files(tmp_path):
     (repo / "pkg" / "new.py").write_text("b = 1\n")
     (repo / ".env").write_text("ANTHROPIC_API_KEY=secret\n")
     (repo / "hunt.db-wal").write_text("owner data\n")
-    (repo / ".gitignore").write_text("hunt.db*\n")  # the branch drops .env; base's rules still apply
+    (repo / "out").mkdir()
+    (repo / "out" / "r.json").write_text("{}\n")
+    (repo / ".gitignore").write_text("hunt.db*\n!.env\n")  # the branch drops out/ and negates .env; base's rules win
     (repo / "vendor").mkdir()
     git("init", "-q", cwd=repo / "vendor")
     (repo / "vendor" / "tool.py").write_text("c = 1\n")
@@ -53,8 +56,39 @@ def test_copy_has_the_history_and_working_tree_but_no_ignored_files(tmp_path):
     assert sorted(git("status", "--porcelain", cwd=copy).splitlines()) == [
         " D gone.py", " M .gitignore", " M keep.py", "?? pkg/"]
     assert (copy / "keep.py").read_text() == "a = 3\n"
-    assert not (copy / ".env").exists() and not (copy / "hunt.db-wal").exists() and not (copy / "vendor").exists()
+    for private in (".env", "hunt.db-wal", "out", "vendor"):
+        assert not (copy / private).exists(), private
     assert git("remote", cwd=copy) == ""
+
+
+def test_copy_leaves_out_staged_private_files_symlinked_folders_and_submodules(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "vendor").mkdir()
+    git("init", "-q", cwd=repo)
+    git("init", "-q", cwd=repo / "vendor")
+    (repo / "vendor" / "tool.py").write_text("c = 1\n")
+    git("add", ".", cwd=repo / "vendor")
+    git("commit", "-q", "-m", "tool", cwd=repo / "vendor")
+    (repo / ".gitignore").write_text(".env\nout/\n")
+    (repo / "docs" / "a.md").write_text("doc\n")
+    git("add", ".", cwd=repo)  # vendor becomes a submodule entry
+    git("commit", "-q", "-m", "base", cwd=repo)
+    base = git("rev-parse", "HEAD", cwd=repo).strip()
+    (repo / ".env").write_text("ANTHROPIC_API_KEY=secret\n")
+    git("add", "-f", ".env", cwd=repo)
+    (repo / "out").mkdir()
+    (repo / "out" / "a.md").write_text("owner data\n")
+    (repo / "docs" / "a.md").unlink()
+    (repo / "docs").rmdir()
+    (repo / "docs").symlink_to("out")  # docs/a.md now reads out/a.md
+
+    copy = tmp_path / "copy"
+    ci.stage(repo, copy, base)
+
+    assert not (copy / ".env").exists()
+    assert not (copy / "docs" / "a.md").exists() and not (copy / "out").exists()
+    assert (copy / ".gitignore").exists() and not any((copy / "vendor").iterdir())
 
 
 def test_prompt_is_the_skill_body_with_the_arguments():
@@ -96,12 +130,14 @@ def test_report_lists_the_worst_risks_first_and_keeps_the_tables_intact():
     (report("S3"), SystemExit, 0, "Verdict: SHIP"),
     (report("S2"), SystemExit, 1, "Verdict: FIX BEFORE MERGE"),
     (UsageLimitExceeded("request_limit of 150"), UsageLimitExceeded, None,
-     "Verdict: none, the run stopped before its report: request_limit of 150"),
+     "Verdict: none, the run stopped before its report: UsageLimitExceeded("),
+    (asyncio.CancelledError(), asyncio.CancelledError, None,  # GitHub's cancel or timeout
+     "Verdict: none, the run stopped before its report: CancelledError()"),
 ])
 def test_main_fails_the_check_unless_ship_and_writes_the_job_summary(tmp_path, monkeypatch, outcome, raised, code,
                                                                      first_line):
     async def verify(agent, checkout, arguments, max_requests, usage):
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             raise outcome
         return SimpleNamespace(output=outcome, usage=usage, all_messages=list)
 
