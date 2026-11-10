@@ -37,7 +37,8 @@ def workdir(tmp_path, monkeypatch):
 
 def run_args(**overrides):
     return argparse.Namespace(
-        **{"profile": "profile.toml", "companies": "companies.csv", "dry_run": False, "research_only": False, **overrides}
+        **{"profile": "profile.toml", "companies": "companies.csv", "dry_run": False, "research_only": False,
+           "fiber": False, **overrides}
     )
 
 
@@ -147,14 +148,13 @@ def test_research_only_saves_results_and_reports_failures(exa, http, workdir, mo
     assert results["acme.com.json"]["research"]["content"]["open_roles"][0]["description"] == "dbt, Snowflake, Looker."
     assert "Request failed with status code 400" in results["beta.io.json"]["error"]
     manifest = results["_run.json"]
-    assert (manifest["mode"], manifest["companies"], manifest["errors"]) == ("research_only", 2, 1)
+    assert (manifest["mode"], manifest["fiber"], manifest["companies"], manifest["errors"]) == ("research_only", False, 2, 1)
     assert manifest["exa"]["requests"] == 2
     assert manifest["claude"] is None and manifest["jev"] is None
     assert "Exa: 2 requests" in capsys.readouterr().out  # Acme search + posting text; failures are not tallied
 
 
-def test_run_takes_open_roles_from_fiber_when_the_profile_asks_for_it(exa, http, workdir, capsys):
-    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "fiber"'))
+def test_run_with_fiber_takes_open_roles_from_fiber_and_records_it(exa, http, workdir, capsys):
     (workdir / "companies.csv").write_text("Acme,acme.com\n")
     role = {"title": "Data Engineer, Product", "url": "https://jobs.ashbyhq.com/acme/3333", "location": "Remote",
             "remote_or_relocation": "Remote (EU)"}  # fmt: skip
@@ -163,10 +163,11 @@ def test_run_takes_open_roles_from_fiber_when_the_profile_asks_for_it(exa, http,
     exa.on_contents(contents_response())
     http.get("https://api.ashbyhq.com/posting-api/job-board/acme", json={"jobs": [{"id": "3333", "title": "x"}]})
 
-    assert hunt.cmd_run(run_args(research_only=True)) == 0
+    assert hunt.cmd_run(run_args(research_only=True, fiber=True)) == 0
 
     results = saved_results(workdir)
     assert results["acme.com.json"]["research"]["role_source"] == "fiber"
+    assert results["_run.json"]["fiber"] is True  # the dashboard's estimates average Fiber runs apart from the others
     # the agent run and Fiber's charge are part of the run's Exa cost, which the dashboard's estimates average
     assert results["_run.json"]["exa"]["by_label"]["agent:low"] == {"requests": 1, "dollars": pytest.approx(0.205)}
     out = capsys.readouterr().out
@@ -175,8 +176,6 @@ def test_run_takes_open_roles_from_fiber_when_the_profile_asks_for_it(exa, http,
 
 
 def test_ctrl_c_during_a_run_cancels_the_agent_runs_its_workers_wait_for(exa, http, workdir):
-    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "fiber"'))
-
     def search(body):
         if "Beta" in body["query"]:
             return structured_response(company("Beta", "beta.io", []))
@@ -189,18 +188,23 @@ def test_ctrl_c_during_a_run_cancels_the_agent_runs_its_workers_wait_for(exa, ht
     exa.on_agent(agent_run(status="running"))  # it would run, billed, until Exa's own limit
 
     with pytest.raises(KeyboardInterrupt):
-        hunt.cmd_run(run_args(research_only=True))
+        hunt.cmd_run(run_args(research_only=True, fiber=True))
 
     assert f"{AGENT_URL}/agent_run_1/cancel" in [call.request.url for call in http.calls]
     assert not (workdir / "out").exists()
 
 
-def test_role_source_is_exa_unless_the_profile_names_another_known_one(workdir):
-    assert hunt.load_profile("profile.toml")["search"]["role_source"] == "exa"
+def test_run_without_fiber_never_starts_an_agent_run_even_with_the_old_profile_key(exa, http, workdir, caplog):
+    """[search].role_source used to turn Fiber on; it is now chosen per run, and a leftover key must not cost money."""
+    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "fiber"'))
+    research_exa(exa, http)
+    exa.on_agent(agent_run({"open_roles": []}))
 
-    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "linkedin"'))
-    with pytest.raises(SystemExit, match=r"profile.toml: \[search\].role_source must be one of: exa, fiber"):
-        hunt.load_profile("profile.toml")
+    hunt.cmd_run(run_args(research_only=True))
+
+    assert exa.requests(AGENT_URL) == []
+    assert saved_results(workdir)["_run.json"]["fiber"] is False
+    assert "[search].role_source is no longer read" in caplog.text
 
 
 def test_run_scores_and_sends_digest_to_telegram(exa, http, workdir, monkeypatch, claude, capsys):

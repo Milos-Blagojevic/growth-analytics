@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
 
@@ -87,6 +87,7 @@ SCHEMA = """
 CREATE TABLE runs (
     id TEXT PRIMARY KEY,          -- out/<id>/, a %Y%m%d-%H%M%S timestamp
     mode TEXT,                    -- research_only | dry_run | deliver; NULL for runs saved before the manifest
+    fiber INTEGER NOT NULL,       -- 1: open roles were also asked from Fiber (run --fiber)
     started_at TEXT,
     saved_at TEXT NOT NULL,
     companies INTEGER NOT NULL,

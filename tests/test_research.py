@@ -151,11 +151,7 @@ def test_no_ats_fallback_for_unverified_identity(exa, profile):
     assert len(exa.requests()) == 1
 
 
-# open roles from Fiber's jobs database: [search].role_source = "fiber" ----------------------------
-
-
-def with_fiber(profile):
-    return {**profile, "search": {**profile["search"], "role_source": "fiber"}}
+# open roles from Fiber's jobs database: hunt.py run --fiber -----------------------------------------
 
 
 def test_fiber_roles_come_first_and_the_main_searchs_other_roles_follow(exa, http, profile):
@@ -179,7 +175,7 @@ def test_fiber_roles_come_first_and_the_main_searchs_other_roles_follow(exa, htt
     ashby_board(http, "acme", "1111", "2222", "3333")
     http.get(own_site["url"], status=200)
 
-    out = research.research_company("Acme", "acme.com", with_fiber(profile))
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert [(r["title"], r["url"], r["link_status"]) for r in out["content"]["open_roles"]] == [
         ("Data Engineer, Product", posting, "live"),
@@ -205,7 +201,7 @@ def test_fiber_alone_supplies_the_roles_when_the_main_search_has_none(exa, http,
     exa.on_contents(contents_response())
     ashby_board(http, "acme", *(str(n) for n in range(10)))
 
-    out = research.research_company("Acme", "acme.com", with_fiber(profile))
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert out["role_source"] == "fiber"
     assert [r["title"] for r in out["content"]["open_roles"]] == [r["title"] for r in listed[: research.MAX_ROLES]]
@@ -242,7 +238,7 @@ def test_fiber_postings_are_kept_only_on_the_companys_own_site_or_a_job_board(ex
     ]
     exa.on_agent(agent_run({"open_roles": [role(f"Role {n}", url) for n, url in enumerate(kept + left_out)]}))
 
-    roles, _ = research.find_roles_on_fiber("Acme", "acme.com", with_fiber(profile))
+    roles, _ = research.find_roles_on_fiber("Acme", "acme.com", profile)
 
     assert [r["url"] for r in roles] == kept
 
@@ -273,7 +269,7 @@ def test_fiber_lists_each_posting_once_whatever_form_its_link_takes(exa, profile
     listed = [*one_ashby_posting, "https://JOBS.ASHBYHQ.COM/acme/2222", *one_site_posting, *one_embedded_posting, *distinct]
     exa.on_agent(agent_run({"open_roles": [role(f"Role {n}", url) for n, url in enumerate(listed)]}))
 
-    roles, _ = research.find_roles_on_fiber("Acme", "acme.com", with_fiber(profile))
+    roles, _ = research.find_roles_on_fiber("Acme", "acme.com", profile)
 
     assert [r["url"] for r in roles] == [
         "https://jobs.ashbyhq.com/acme/1111",
@@ -306,7 +302,7 @@ def test_a_posting_both_sources_list_keeps_the_main_searchs_link_unless_only_fib
     for url, status in checks.items():
         http.get(url, status=status)
 
-    out = research.research_company("Acme", "acme.com", with_fiber(profile))
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert [(r["title"], r["url"], r["link_status"]) for r in out["content"]["open_roles"]] == [
         ("A", www.format(1), "live"),
@@ -331,7 +327,7 @@ def test_postings_named_by_their_query_string_are_not_taken_for_one(exa, http, p
     for url in (page.format(111), page.format(222), page.format(333), tracked):
         http.get(url, status=200)
 
-    out = research.research_company("Acme", "acme.com", with_fiber(profile))
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
     # the first posting is listed by both: once, under the main search's link
     assert [r["url"] for r in out["content"]["open_roles"]] == [tracked, page.format(222), page.format(333)]
@@ -347,8 +343,8 @@ def test_an_unchecked_fiber_link_never_comes_before_or_pushes_out_a_live_role(ex
     exa.on_contents(contents_response())
     ashby_board(http, "acme", *(str(n) for n in range(research.MAX_ROLES)))
 
-    one_live = research.research_company("Acme", "acme.com", with_fiber(profile))
-    all_live = research.research_company("Busy", "acme.com", with_fiber(profile))
+    one_live = research.research_company("Acme", "acme.com", profile, fiber=True)
+    all_live = research.research_company("Busy", "acme.com", profile, fiber=True)
 
     assert [(r["url"], r["link_status"]) for r in one_live["content"]["open_roles"]] == [
         (live[0]["url"], "live"),
@@ -377,7 +373,7 @@ def test_without_fiber_roles_the_main_searchs_roles_stand(exa, http, profile, an
     exa.on_contents(contents_response())
     ashby_board(http, "acme", "1111")
 
-    out = research.research_company("Acme", "acme.com", with_fiber(profile))
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert out["role_source"] == "main"
     assert [r["url"] for r in out["content"]["open_roles"]] == [from_main["url"]]
@@ -392,7 +388,7 @@ def test_the_ats_fallback_still_runs_when_neither_fiber_nor_the_main_search_has_
     exa.on_contents(contents_response())
     ashby_board(http, "acme", "1111")
 
-    out = research.research_company("Acme", "acme.com", with_fiber(profile))
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert out["role_source"] == "ats_fallback"
     assert [r["url"] for r in out["content"]["open_roles"]] == [found["url"]]
@@ -403,7 +399,7 @@ def test_fiber_is_not_asked_about_a_company_whose_identity_is_not_verified(exa, 
     exa.on_search(structured_response(company([], verified=False)))
     exa.on_agent(agent_run({"open_roles": []}))
 
-    research.research_company("Acme", "acme.com", with_fiber(profile))
+    research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert exa.requests(AGENT_URL) == []  # an agent run costs 10 to 30 times the main search
 

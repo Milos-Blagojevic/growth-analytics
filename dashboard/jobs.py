@@ -39,6 +39,8 @@ JEV_RUN_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): under $0.001 per compan
 # pipeline/README.md: discovery runs 6 searches, "roughly $0.15-0.20 for --limit 20".
 DISCOVER_ESTIMATE = "Exa: roughly $0.15–0.20 (one search per target role plus one deep search; pipeline/README.md)"
 MAX_DISCOVER_LIMIT = 50
+# pipeline/README.md, Role search: what one company's Fiber search cost in the first runs.
+FIBER_DOLLARS_PER_COMPANY = (0.09, 0.40)
 MAIL_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): one request per application email, a fraction of a cent in total. "
                  "Claude: one call per 20 application emails Jev does not rule out, a few cents each; none when no "
                  "email looks like one. Reading Outlook is free.")
@@ -64,12 +66,31 @@ def _now():
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _exa_per_company(conn):
+def _exa_per_company(conn, fiber):
+    """Average Exa cost per company of the saved runs made with (or without) Fiber: (dollars, runs) or (None, 0)."""
     row = conn.execute(
         "SELECT SUM(exa_dollars) AS dollars, SUM(companies) AS n, COUNT(*) AS runs FROM runs"
-        " WHERE exa_dollars IS NOT NULL AND companies > 0"
+        " WHERE exa_dollars IS NOT NULL AND companies > 0 AND fiber = ?",
+        [fiber],
     ).fetchone()
     return (row["dollars"] / row["n"], row["runs"]) if row["n"] else (None, 0)
+
+
+def _exa_estimate(conn, n, fiber):
+    """Estimate lines for Exa over n companies, from saved runs made the same way: a company's Fiber search costs
+    $0.09 to $0.40 against about $0.01 for the rest of its research, so the two kinds of runs are averaged apart."""
+    per_company, history = _exa_per_company(conn, fiber)
+    if per_company is not None:
+        made = f"{history} saved run{'s' if history > 1 else ''} {'with' if fiber else 'without'} Fiber"
+        line = f"Exa: about ${per_company * n:.2f} (${per_company:.3f} per company, average of {made})."
+        return [line + (" Fiber's agent runs have no cost cap." if fiber else "")]
+    if not fiber:
+        return ["Exa: no cost history yet for runs without Fiber."]
+    low, high = FIBER_DOLLARS_PER_COMPANY
+    return _exa_estimate(conn, n, False) + [
+        f"Fiber: no saved run with Fiber yet; expect ${low:.2f} to ${high:.2f} more per verified company, up to "
+        f"${high * n:.2f} here, with no cost cap (pipeline/README.md, Role search)."
+    ]
 
 
 def build(conn, root, form):
@@ -166,6 +187,9 @@ def _build_run(conn, root, form):
     if mode not in RUN_MODES:
         raise ValueError(f"unknown run mode {mode!r}")
     name, flags = RUN_MODES[mode]
+    fiber = form.get("fiber") == "1"
+    if fiber:
+        name, flags = f"{name} with Fiber", [*flags, "--fiber"]
     domains = [d for d in form.getlist("domains") if d] if hasattr(form, "getlist") else form.get("domains", [])
     if domains:
         known = {
@@ -188,11 +212,7 @@ def _build_run(conn, root, form):
         target = f"{len(listed)} companies in companies.csv"
     n = len(companies or listed)
 
-    per_company, history = _exa_per_company(conn)
-    if per_company is None:
-        estimate = ["Exa: no cost history yet (saved runs record their cost from now on)."]
-    else:
-        estimate = [f"Exa: about ${per_company * n:.2f} (${per_company:.3f} per company, average of {history} saved run{'s' if history > 1 else ''})."]
+    estimate = _exa_estimate(conn, n, fiber)
     warnings = []
     if mode != "research_only":
         estimate.append(f"Claude: at most about ${CLAUDE_DOLLARS_PER_COMPANY * n:.2f} (docs/parked-ideas.md: $0.27 for 19 "
@@ -200,7 +220,8 @@ def _build_run(conn, root, form):
         estimate.append(JEV_RUN_ESTIMATE)
     if mode == "deliver":
         warnings.append("Sends the notification to Telegram.")
-    fields = {"kind": "run", "mode": mode, "domains": [d for _, d in companies] if companies else []}
+    fields = {"kind": "run", "mode": mode, "fiber": "1" if fiber else "",
+              "domains": [d for _, d in companies] if companies else []}
     return Spec("run", ["run", *flags], f"{name} · {target}", fields, companies=companies, estimate=estimate,
                 warnings=warnings)
 

@@ -1,3 +1,4 @@
+import re
 import sys
 import time
 
@@ -7,6 +8,8 @@ from pipeline import runs
 from dashboard import db, jobs
 from dashboard.app import create_app
 from dashboard_data import BASE_URL, client, fit, result, write_run
+
+FIBER_BOX = re.compile(r'<input type="checkbox" name="fiber" value="1"\s*(checked)?\s*>')
 
 # Stands in for hunt.py: echoes its arguments, can sleep, prints the line a saving run prints, exits as told.
 STUB = """
@@ -65,7 +68,7 @@ def test_preview_estimates_cost_from_saved_runs_and_names_side_effects(app):
 
     dry = c.post("/runs/preview", data={"kind": "run", "mode": "dry_run"}).text
     assert "2 companies in companies.csv" in dry
-    assert "Exa: about $0.24 ($0.120 per company, average of 1 saved run)" in dry  # $0.12 for 1 saved result
+    assert "Exa: about $0.24 ($0.120 per company, average of 1 saved run without Fiber)" in dry  # $0.12 for 1 result
     assert "Claude: at most about $0.03" in dry and "Telegram" not in dry
     assert "Jev (when TYPESAFE_API_KEY is set): under $0.001 per company" in dry
     research_only = c.post("/runs/preview", data={"kind": "run", "mode": "research_only"}).text
@@ -76,6 +79,40 @@ def test_preview_estimates_cost_from_saved_runs_and_names_side_effects(app):
 
     assert "unknown companies: nope.io" in c.post("/runs/preview", data={"kind": "run", "domains": ["nope.io"]}).text
     assert "limit must be between 1 and 50" in c.post("/runs/preview", data={"kind": "discover", "limit": "500"}).text
+
+
+def test_a_fiber_run_passes_the_flag_and_is_estimated_from_saved_runs_with_fiber(root, app):
+    c = client(app)
+
+    # Fiber is off unless ticked: the Runs page's box starts unticked, and the dialog's toggle shows what Start runs
+    assert FIBER_BOX.findall(c.get("/runs").text) == [""]
+    assert FIBER_BOX.findall(c.post("/runs/preview", data={"kind": "run", "domains": ["delta.ai"]}).text) == [""]
+
+    # no saved run with Fiber yet: the usual research, plus Fiber's range from the first runs for each company
+    first = c.post("/runs/preview", data={"kind": "run", "mode": "dry_run", "fiber": "1"}).text
+    assert "Dry run with Fiber · 2 companies in companies.csv" in first
+    assert "python hunt.py run --dry-run --fiber" in first
+    assert '<input type="hidden" name="fiber" value="1">' in first  # what Start submits: the run previewed
+    assert FIBER_BOX.findall(first) == ["checked"]
+    assert "Exa: about $0.24 ($0.120 per company, average of 1 saved run without Fiber)" in first
+    assert "Fiber: no saved run with Fiber yet; expect $0.09 to $0.40 more per verified company, up to $0.80 here" in first
+
+    # a saved run with Fiber is averaged on its own, and does not raise the estimate of runs without it
+    write_run(root, "20260109-090000", [result("Acme", "acme.com")],
+              manifest={"mode": "research_only", "fiber": True, "exa": {"requests": 3, "dollars": 0.30}})
+    later = c.post("/runs/preview", data={"kind": "run", "mode": "dry_run", "fiber": "1"}).text
+    assert "Exa: about $0.60 ($0.300 per company, average of 1 saved run with Fiber)." in later
+    assert "no saved run with Fiber yet" not in later
+    assert "average of 1 saved run without Fiber" in c.post("/runs/preview", data={"kind": "run"}).text
+    assert "research only · Fiber" in c.get("/runs").text  # the saved run is marked in the history
+
+    # Fiber on a run of selected companies, and off again
+    job = finished(root, started_job_id(c.post("/runs", data={"kind": "run", "mode": "research_only", "fiber": "1",
+                                                              "domains": ["delta.ai"]})))
+    assert job["args"][:3] == ["run", "--research-only", "--fiber"]
+    assert job["label"] == "Research only with Fiber · Delta"
+    plain = finished(root, started_job_id(c.post("/runs", data={"kind": "run", "mode": "dry_run", "fiber": ""})))
+    assert plain["args"] == ["run", "--dry-run"]
 
 
 def test_run_on_selected_leads_runs_hunt_with_a_companies_file(root, app):

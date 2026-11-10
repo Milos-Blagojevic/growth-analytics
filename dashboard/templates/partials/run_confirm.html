@@ -16,6 +16,7 @@
       {% for key, (text, flags) in modes.items() %}
       <label class="radio"><input type="radio" name="mode" value="{{ key }}" {{ 'checked' if key == spec.fields.mode }}><span>{{ text }}</span></label>
       {% endfor %}
+      <label class="radio"><input type="checkbox" name="fiber" value="1" {{ 'checked' if spec.fields.fiber }}><span>With Fiber</span></label>
     </form>
     {% endif %}
 

@@ -3,6 +3,7 @@
     python hunt.py discover [focus]          # suggest companies (name,domain) to research
     python hunt.py run [--dry-run]           # research + score + deliver for companies.csv
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
+    python hunt.py run --fiber               # also take open roles from Fiber's jobs database (paid agent runs)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
     python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
     python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
@@ -47,8 +48,9 @@ def load_profile(path):
     for key in ("roles", "seniority", "work_mode"):
         if not search.get(key):
             sys.exit(f"{path}: [search].{key} is required")
-    if search.setdefault("role_source", research.ROLE_SOURCES[0]) not in research.ROLE_SOURCES:
-        sys.exit(f"{path}: [search].role_source must be one of: {', '.join(research.ROLE_SOURCES)}")
+    if "role_source" in search:
+        logger.warning("%s: [search].role_source is no longer read; choose Fiber per run with `hunt.py run --fiber` "
+                       "or the Fiber option on the dashboard's Runs page", path)
     candidate = profile.setdefault("candidate", {})
     candidate.setdefault("experience", "")
     candidate.setdefault("notes", "")
@@ -94,11 +96,11 @@ def load_companies(path):
     return companies
 
 
-def process_company(name, domain, profile, *, score):
+def process_company(name, domain, profile, *, score, fiber=False):
     """Research (and optionally score) one company. Never raises; errors are returned in the result."""
     result = {"name": name, "domain": domain}
     try:
-        result["research"] = research.research_company(name, domain, profile)
+        result["research"] = research.research_company(name, domain, profile, fiber=fiber)
         if score:
             screen = None
             if jev.configured() and result["research"]["content"]["open_roles"]:
@@ -213,8 +215,8 @@ def _tokens(results):
     }
 
 
-def save_results(results, *, mode, started_at):
-    """Writes out/<timestamp>/<domain>.json per company plus the MANIFEST (mode, times, counts, costs)."""
+def save_results(results, *, mode, fiber, started_at):
+    """Writes out/<timestamp>/<domain>.json per company plus the MANIFEST (mode, Fiber, times, counts, costs)."""
     saved_at = datetime.now()
     run_dir = OUT_DIR / saved_at.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -222,6 +224,7 @@ def save_results(results, *, mode, started_at):
         (run_dir / f"{result['domain']}.json").write_text(json.dumps(result, indent=2))
     manifest = {
         "mode": mode,
+        "fiber": fiber,
         "started_at": started_at.isoformat(timespec="seconds"),
         "saved_at": saved_at.isoformat(timespec="seconds"),
         "companies": len(results),
@@ -260,19 +263,19 @@ def cmd_run(args):
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
     if score and not jev.configured():
         print("TYPESAFE_API_KEY is not set: Claude scores every open role (no Jev screen).")
-    if profile["search"]["role_source"] == "fiber":
+    if args.fiber:
         print("Open roles also come from Fiber's jobs database: one Exa agent run per verified company, "
               "about $0.09 to $0.40 each on top of the usual research.")
 
     started_at = datetime.now()
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         try:
-            results = list(pool.map(lambda c: process_company(*c, profile, score=score), companies))
+            results = list(pool.map(lambda c: process_company(*c, profile, score=score, fiber=args.fiber), companies))
         except KeyboardInterrupt:
             exa_client.stop_agent_runs()  # Ctrl-C does not reach the workers: their agent runs would be billed on
             raise
     mode = "research_only" if args.research_only else "deliver" if deliver else "dry_run"
-    run_dir = save_results(results, mode=mode, started_at=started_at)
+    run_dir = save_results(results, mode=mode, fiber=args.fiber, started_at=started_at)
     print(f"Saved raw results to {run_dir}/")
 
     if args.research_only:
@@ -775,6 +778,8 @@ def main():
     run.add_argument("--companies", default="companies.csv")
     run.add_argument("--dry-run", action="store_true", help="print the digest instead of sending to Telegram")
     run.add_argument("--research-only", action="store_true", help="Exa research only; skip Claude and Telegram")
+    run.add_argument("--fiber", action="store_true",
+                     help="also take open roles from Fiber's jobs database: one paid Exa agent run per verified company")
     run.set_defaults(func=cmd_run)
 
     discover = sub.add_parser("discover", help="suggest companies as name,domain,why CSV rows")

@@ -68,6 +68,24 @@ def test_ingest_keeps_latest_score_per_company_and_is_idempotent(tmp_path, conn)
     assert [h["error"] for h in beta["newer"]] == ["ValueError: boom"]
 
 
+def test_a_run_counts_as_fiber_when_its_manifest_says_so_or_it_paid_for_an_agent_run(tmp_path, conn):
+    """The Runs page averages runs with and without Fiber apart; runs saved before the flag still sort right."""
+    def run(run_id, **manifest):
+        write_run(tmp_path, run_id, [result("Acme", "acme.com")], manifest={"mode": "dry_run", **manifest})
+
+    run("20261101-090000", fiber=True, exa={"requests": 2, "dollars": 0.2})
+    run("20261102-090000", fiber=False, exa={"requests": 1, "dollars": 0.01})
+    run("20261103-090000", exa={"by_label": {"agent:low": {"requests": 1, "dollars": 0.2}, "auto": {"requests": 1, "dollars": 0.01}}})
+    run("20261104-090000", exa={"by_label": {"auto": {"requests": 1, "dollars": 0.01}}})
+    write_run(tmp_path, "20261105-090000", [result("Acme", "acme.com")])  # no manifest at all
+
+    ingest.ingest(conn, tmp_path)
+
+    assert dict(conn.execute("SELECT id, fiber FROM runs").fetchall()) == {
+        "20261101-090000": 1, "20261102-090000": 0, "20261103-090000": 1, "20261104-090000": 0, "20261105-090000": 0,
+    }
+
+
 def test_refresh_reingests_only_when_a_source_changes(tmp_path, conn):
     two_runs(tmp_path)
     assert ingest.refresh(conn, tmp_path) is True

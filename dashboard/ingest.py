@@ -132,11 +132,13 @@ def _ingest_run(conn, run_dir):
     exa = manifest.get("exa") or {}
     claude = manifest.get("claude") or {}
     conn.execute(
-        "INSERT INTO runs VALUES (:id, :mode, :started_at, :saved_at, :companies, :errors,"
+        "INSERT INTO runs VALUES (:id, :mode, :fiber, :started_at, :saved_at, :companies, :errors,"
         " :exa_requests, :exa_dollars, :model, :tokens_in, :tokens_out)",
         {
             "id": run_dir.name,
             "mode": manifest.get("mode"),
+            # runs saved before the flag: Fiber was on if the run paid for an agent run (only Fiber starts one)
+            "fiber": bool(manifest.get("fiber", any(label.startswith("agent:") for label in exa.get("by_label") or {}))),
             "started_at": manifest.get("started_at"),
             "saved_at": manifest.get("saved_at") or _run_time(run_dir),
             "companies": len(results),
