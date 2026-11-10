@@ -10,12 +10,12 @@ Python 3.11+ CLI tools: an Exa search client (`clients/exa_client.py`), a job-hu
 |---|---|
 | `hunt.py` | CLI entry point: `discover`, `run`, `send`, `watch`, `outlook-login`, `mail`, `news`, `interview-prep`, `interview-review`, `gmail-login`, `chat` |
 | `clients/` | The external services the features share |
-| `clients/exa_client.py` | The only place that talks to Exa: retries, cost logging, cost tally |
+| `clients/exa_client.py` | The only place that talks to Exa: search, contents and agent runs (`agent_answer`, with Exa Connect partners such as Fiber); retries, cost logging, cost tally |
 | `clients/jev.py` | The only place that talks to TypeSafe's Jev decision model: retries, usage tally, cost per token; optional (`TYPESAFE_API_KEY`) |
 | `clients/ashby.py` | Ashby public job-board API (link checks and watch list) |
 | `clients/telegram.py` | Telegram delivery (`send`) and `getUpdates` long polling for the chat bot (`updates`) |
 | `pipeline/` | The job hunt: research, scoring, watch list, news digest, saved runs |
-| `pipeline/research.py` | Per-company Exa research, posting link checks, posting text fetch |
+| `pipeline/research.py` | Per-company Exa research, open roles (the main search, Fiber's jobs database when `[search].role_source = "fiber"`, the ATS fallback), posting link checks, posting text fetch |
 | `pipeline/scoring.py` | Jev role screen (`screen_roles`, thresholds `SCREEN_YES`, `SCREEN_NO`, `BELOW_SENIOR_MIN`) and Claude fit scoring: `SYSTEM_PROMPT` rubric plus the `Fit` pydantic model; `candidate()` is what Claude is told about the owner |
 | `pipeline/watch.py` | Watch list: new matching postings from Ashby boards |
 | `pipeline/news.py` | News digest: Exa news search per `[news].topics` entry, Jev relevance screen (`screen`), Claude picks (`Digest`), `news_state.json` |
@@ -31,7 +31,8 @@ Python 3.11+ CLI tools: an Exa search client (`clients/exa_client.py`), a job-hu
 | `interview/interviews.py` | Interview files (`interviews/<id>/`), transcript parsing and talk metrics; shared by `hunt.py` and the dashboard, no paid clients |
 | `interview/coaching.py` | Claude interview prep (`Prep`) and transcript review (`Review`, scores keyed by `interviews.SCORES`) |
 | `prospects/` | `python -m prospects`: lead enrichment, scoring and routing for the owner's own product |
-| `prospects/__main__.py` | CLI entry point: `run` (research, assess, rate, save, rebuild the warehouse) and `load` (rebuild and print the ranking) |
+| `prospects/__main__.py` | CLI entry point: `discover` (new prospects from Fiber), `run` (research, assess, rate, save, rebuild the warehouse) and `load` (rebuild and print the ranking) |
+| `prospects/discover.py` | New prospects from Fiber's company database through one Exa agent run (`find`); the `prospects_discovered.csv` history (`save`, `known_domains`) |
 | `prospects/config.py` | `prospects.toml` loader and validation: product, ideal customer, pricing, routing tiers |
 | `prospects/enrich.py` | Per-prospect Exa research: one search restricted to the prospect's own domain (`site_schema`), one over the open web for funding, size and news (`money_schema`) |
 | `prospects/assess.py` | Claude assessment (`Assessment`): fit score, the figures the research states (every revenue and pricing-basis figure, as `Figure`), value signals and the brief |
@@ -52,13 +53,13 @@ CI runs the same suite on Python 3.11 and 3.13 for every pull request and push t
 
 Do not run these without asking: they spend money or send real messages.
 
-- `python -m clients.exa_client`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude and, when `TYPESAFE_API_KEY` is set, Jev.
+- `python -m clients.exa_client`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude and, when `TYPESAFE_API_KEY` is set, Jev. With `[search].role_source = "fiber"` in the profile, `run` also starts one Exa agent run with Fiber per verified company ($0.09 to $0.40 each in the first trial).
 - `hunt.py run` without `--dry-run`, `hunt.py send`, `hunt.py watch` without `--dry-run`: send to Telegram. `watch` also updates `watch_state.json`.
 - `hunt.py interview-prep` and `hunt.py interview-review`: paid Claude calls that send the owner's CV or a whole interview transcript to Anthropic.
 - `hunt.py mail` (any mode): reads the owner's mailbox and sends matching emails to Jev (when `TYPESAFE_API_KEY` is set) and Claude; without `--dry-run` it also sends to Telegram and updates `mail_state.json`. `hunt.py outlook-login` signs in to the owner's Microsoft account; `hunt.py gmail-login` to their Google account.
 - `hunt.py chat`: polls the owner's Telegram bot (two pollers on one token interrupt each other) and answers with paid Claude calls that read the owner's mail and can create drafts in it.
 - `hunt.py news` (any mode): paid Exa, Jev and Claude calls; without `--dry-run` it sends to Telegram and updates `news_state.json`.
-- `python -m prospects run` (any mode): paid Exa calls, two searches per row of `prospects.csv`; without `--research-only` also a paid Claude call per prospect, which sends the product and pricing basis from `prospects.toml` to Anthropic. `python -m prospects load` is free.
+- `python -m prospects run` (any mode): paid Exa calls, two searches per row of `prospects.csv`; without `--research-only` also a paid Claude call per prospect, which sends the product and pricing basis from `prospects.toml` to Anthropic. `python -m prospects discover`: one paid Exa agent run with Fiber, uncapped (about $0.75 in the first runs). `python -m prospects load` is free.
 - `.claude/skills/verify/scripts/ci.py`, and the Verify workflow (adding the `verify` label to a pull request, or starting it from the Actions tab): a paid Claude session of up to `--max-requests` model requests.
 - Deploying to Railway, or changing its service variables (a change redeploys and interrupts a running job).
 
@@ -76,13 +77,13 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 
 `.env`, `profile.toml`, `cv.md`, `companies.csv`, `discovered.csv`, `watch_state.json`, `watch.log`, `out/`, `hunt.db`, `jobs/`, `interviews/`, `outlook_token.json`, `gmail_token.json`, `mail/`, `mail_state.json` and `news_state.json` hold the owner's secrets and personal data (interview transcripts also hold interviewers' words; `mail/` holds email subjects and senders; `outlook_token.json` and `gmail_token.json` give read access to the owner's mail and let drafts be created in it). They are git-ignored and kept out of the Docker image (`.dockerignore`); never commit them, and do not read `.env`, `outlook_token.json` or `gmail_token.json`. The ignore entries are globs (`hunt.db*`, `*_state.json*`, `outlook_token.json*`, `gmail_token.json*`) so that SQLite's WAL sidecars and the `.tmp` files the state writers replace also stay out. On Railway the same files live on the `/data` volume and the keys are service variables. `hunt.db` holds the owner's statuses, notes and side projects, which exist nowhere else: never delete it, locally or on the volume. The dashboard keeps it in WAL mode, so `hunt.db-wal` and `hunt.db-shm` next to it hold the latest changes until a checkpoint: copy or back it up only while the dashboard is stopped, or the copy misses them. When a config or CSV format changes, update the matching template (`.env.example`, `profile.example.toml`, `cv.example.md`, `companies.example.csv`) and the root README's Configure section.
 
-`prospects.toml`, `prospects.csv`, `prospect_runs/` and `prospects.duckdb` hold the owner's pricing, lead list and prospect research. They are git-ignored and kept out of the Docker image the same way (`prospects.duckdb*` is a glob so the scratch folder a rebuild works in stays out too). `prospects.duckdb` is derived and can be deleted; `prospect_runs/` cannot be recreated without paying for the research again. Their templates are `prospects.example.toml` and `prospects.example.csv`.
+`prospects.toml`, `prospects.csv`, `prospects_discovered.csv`, `prospect_runs/` and `prospects.duckdb` hold the owner's pricing, lead list and prospect research. They are git-ignored and kept out of the Docker image the same way (`prospects.duckdb*` is a glob so the scratch folder a rebuild works in stays out too). `prospects.duckdb` is derived and can be deleted; `prospect_runs/` and `prospects_discovered.csv` cannot be recreated without paying for the research again. Their templates are `prospects.example.toml` and `prospects.example.csv`.
 
 ## Conventions
 
-- All Exa requests go through the `exa_client` module functions so retries and cost tracking apply. Never construct `Exa` elsewhere.
+- All Exa requests go through the `exa_client` module functions so retries and cost tracking apply. Never construct `Exa` elsewhere. Agent runs (`exa_client.agent_answer`) cost 10 to 100 times a search once a Connect partner is attached and have no cap: use one only for what the search API cannot do (a partner database), keep it behind a command or a profile setting the owner chooses, and never send a create again unless Exa refused it outright (429): after a timeout, a dropped connection or a 5xx the run may have started. A command that waits for agent runs in worker threads calls `exa_client.stop_agent_runs()` on `KeyboardInterrupt`, as `hunt.cmd_run` does: Ctrl-C does not reach the workers.
 - All TypeSafe requests go through `jev.ask` so retries and the usage tally apply. Jev is a screen in front of Claude: it only drops items it is confident about, anything uncertain or any Jev failure goes on to Claude, and a missing `TYPESAFE_API_KEY` means no screen. Keep thresholds as named constants and keep the scoring screen's hard rules in step with `scoring.SYSTEM_PROMPT`.
-- Other HTTP goes through `requests` with an explicit timeout (15 s; Telegram uses 30 s). The Exa SDK gets its timeout from `exa_client` (`TIMEOUT_SECONDS`). Tests intercept `requests` only, so another HTTP library would bypass the mocks.
+- Other HTTP goes through `requests` with an explicit timeout (15 s; Telegram uses 30 s). The Exa SDK passes its own timeout (600 s); `exa_client` replaces it with `TIMEOUT_SECONDS` on every request. Tests intercept `requests` only, so another HTTP library would bypass the mocks.
 - Exa structured output (`search_structured`) allows nesting depth 2 and at most 10 properties in total, array item properties included. `research.RESEARCH_SCHEMA` and `enrich.money_schema` are at 10: adding a field means removing one.
 - `scoring.SYSTEM_PROMPT` and the `Fit` model must agree. Verdict names also appear in `hunt.VERDICTS`, the digest code, `dashboard/queries.py` (`VERDICTS`, `NEW_VERDICTS`), `dashboard/app.py` (`VERDICT_LABELS`) and the verdict colours in `dashboard/static/app.css`; change them together.
 - A change to what `hunt.py` saves (result JSON, `_run.json`, `watch_state.json`, `discovered.csv`, `mail/` files) must keep `dashboard/ingest.py` reading both the new and the already-saved format, since `out/` and `mail/` keep old files.
@@ -103,7 +104,7 @@ Agents work in separate linked folders (git worktrees), each on its own branch. 
 ## Tests
 
 - Tests need no keys and make no network calls. The autouse `http` fixture in `tests/conftest.py` fails any test that makes an unmocked request.
-- Mock Exa at the HTTP level with the `exa` fixture (`tests/exa_mock.py`, Exa wire format), so the real SDK builds and parses requests. Do not patch `exa_client` functions.
+- Mock Exa at the HTTP level with the `exa` fixture (`tests/exa_mock.py`, Exa wire format), so the real SDK builds and parses requests. Do not patch `exa_client` functions. Agent runs are mocked the same way (`exa.on_agent(agent_run(...))`: the create answers "queued", the status check answers the run).
 - Mock Ashby, posting pages, Telegram, Microsoft sign-in and Graph through `responses`; mock TypeSafe with the `jev_api` fixture (`tests/jev_mock.py`, its wire format); use the `claude` fixture (`FakeClaude`) instead of the Anthropic client (`fake_claude` for output models other than `Fit`). Microsoft Graph and the Gmail API are mocked through `responses` too; the chat agent runs on a scripted pydantic-ai `FunctionModel` (`tests/test_chat.py::scripted`), never on a real model; browser sign-ins are driven by `tests/browser_login.py`, which plays the redirect against the loopback server with `urllib` (outside the `responses` mock).
 - New behavior gets a test in the matching `tests/test_<module>.py` (dashboard: `tests/test_dashboard_<module>.py`, with pipeline files built by `tests/dashboard_data.py` and requests made through FastAPI's `TestClient`; prospects: sample config, Exa replies and saved runs from `tests/prospect_data.py`, and `tests/test_prospects.py` for the CLI).
 

@@ -57,6 +57,7 @@ page = contents(["https://exa.ai"])
 | `search(query, *, type="auto", num_results=10, contents=None, max_age_hours=None, **kwargs)` | Raw search results. `contents` defaults to highlights. |
 | `search_structured(query, output_schema, *, type="auto", system_prompt=None, contents=None, max_age_hours=None, **kwargs)` | Synthesized, grounded JSON output. `contents` defaults to highlights. |
 | `grounded_answer(query, output_schema, *, system_prompt=None, **kwargs)` | `search_structured()` unwrapped: `(content, grounding)`, with the grounding merged into one `{confidence, urls}` entry per top-level field (lowest confidence, every cited URL). Raises `RuntimeError` when Exa returns no structured output. |
+| `agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), exclude=None, effort="low")` | An [Exa Agent](https://exa.ai/docs/agent/quickstart) run, waited for: `(structured, grounding)` in the shape of `grounded_answer()`. `data_sources` attaches [Exa Connect](https://exa.ai/docs/agent/connect/overview) partners such as `"fiber"`; `exclude` lists records it must not return. See [Agent runs](#agent-runs). |
 | `instant_search` / `fast_search` / `deep_lite_search` / `deep_search` / `deep_reasoning_search` `(query, **kwargs)` | `search()` with `type` preset (see below). |
 | `contents(urls, *, max_age_hours=None, highlights=True, **kwargs)` | Page contents for given URLs: highlights only by default (full text only if `text` is passed). `highlights=False` with `text={...}` fetches full text only. |
 
@@ -76,9 +77,9 @@ page = contents(["https://exa.ai"])
 
 Every request made through the module functions goes through one internal path that:
 
-- **Retries** transient failures with exponential backoff (jittered, capped): HTTP 408/429/500/502/503/504 and `requests` connection/timeout errors. Other errors (400s, invalid options) raise immediately. Tune via module constants `MAX_ATTEMPTS` (default 4 total tries), `BACKOFF_BASE_SECONDS` (1.0), `BACKOFF_MAX_SECONDS` (30.0) and `RETRYABLE_STATUS`. Every request has a timeout (`TIMEOUT_SECONDS`: 15 s to connect, 120 s to read, since deep searches can take tens of seconds); a request that times out is retried like any other transient failure.
+- **Retries** transient failures with exponential backoff (jittered, capped): HTTP 408/429/500/502/503/504 and `requests` connection/timeout errors. Other errors (400s, invalid options) raise immediately. Tune via module constants `MAX_ATTEMPTS` (default 4 total tries), `BACKOFF_BASE_SECONDS` (1.0), `BACKOFF_MAX_SECONDS` (30.0) and `RETRYABLE_STATUS`. Every request has a timeout (`TIMEOUT_SECONDS`: 15 s to connect, 120 s to read, since deep searches can take tens of seconds), whatever timeout the SDK passes itself (one value for both, 600 s by default); a request that times out is retried like any other transient failure.
 - **Logs cost** at INFO on the `exa_client` logger, one line per request (`search:fast cost=$0.0070 search_time=450ms`), and retries at WARNING. Enable with `logging.basicConfig(level=logging.INFO)`.
-- **Tallies cost** per label (`search:<type>`, `search_structured:<type>`, `contents`), using the `costDollars` Exa reports.
+- **Tallies cost** per label (`search:<type>`, `search_structured:<type>`, `contents`, `agent:<effort>`), using the `costDollars` Exa reports.
 
 ```python
 from clients.exa_client import cost_summary, reset_costs
@@ -88,7 +89,17 @@ cost_summary()
 reset_costs()
 ```
 
-Notes: the tally is in-process only (not persisted) and counts successful requests; responses without cost data count as requests but add $0. The timeout means a hung connection fails and is retried instead of blocking the process (and, in the pipeline, holding `.hunt.lock`) forever.
+Notes: the tally is in-process only (not persisted) and counts successful requests, plus every agent run that was created, however it ended; responses without cost data count as requests but add $0. The timeout means a hung connection fails and is retried instead of blocking the process (and, in the pipeline, holding `.hunt.lock`) forever.
+
+### Agent runs
+
+`agent_answer` starts an Exa Agent run and polls it until it ends (every `AGENT_POLL_SECONDS`, 2 s; a run still going after `AGENT_WAIT_SECONDS`, 10 minutes, is cancelled and raises). The agent plans its own searches, so unlike `search` you cannot restrict it to a domain; use it for what the search API cannot do, which here is querying a partner database.
+
+- **Cost.** `effort` sets the run's own price: `minimal` $0.012, `low` $0.025 (the default), `medium` $0.10; `agent_answer` takes only these three, since `auto` and `ultra` are priced by the run. Partner calls are billed on top and are not capped. Fiber charges $0.02 a credit: a search is 2 credits plus 1 per result it returns, a company lookup about 2 per candidate. The agent decides how many calls to make: in the first real runs one run with Fiber cost between $0.09 and $0.75. The run's whole cost, partners included, goes into the tally.
+- **Retries.** A create is sent again only when Exa turns it down for rate or concurrency (429). After a timeout, a dropped connection or a 5xx the run may have started, and a second one would be billed too: `agent_answer` raises `RuntimeError` saying a run may have started, and nothing is tallied because Exa reported no cost. A request Exa rejects (400, 401, 403) raises as it is. Status checks are retried like any other request.
+- **Failures.** A run that fails, is cancelled or returns no structured output raises `RuntimeError`; whatever it cost until then is still tallied. One odd answer to a status check (a 404 just after the create, say) does not stop a paid run: only after `AGENT_FAILED_CHECKS` (5) failed checks in a row is the run given up. It is then cancelled if Exa still answers (or read once more, in case it ended), and the error says whether it was stopped or may still be running and billed.
+- **Ctrl-C.** In the thread that waits, Ctrl-C cancels the run and is raised again. It never reaches worker threads, so a program that waits there calls `stop_agent_runs()` when it is interrupted (`hunt.py run` does): every waiting run is cancelled within one poll and no new one starts. A process that is killed (the dashboard's job cancel) can do neither, and its runs go on to their end at Exa.
+- **Grounding.** Field paths come back as `structured.<field>`; the prefix is dropped so the result reads like `grounded_answer()`'s. Grounding is optional in Exa's replies: a run without any returns `{}`, and a field without a confidence, or with one other than low, medium or high, has `None`.
 
 ## Jev screening
 

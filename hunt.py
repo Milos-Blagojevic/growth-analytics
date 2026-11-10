@@ -47,6 +47,8 @@ def load_profile(path):
     for key in ("roles", "seniority", "work_mode"):
         if not search.get(key):
             sys.exit(f"{path}: [search].{key} is required")
+    if search.setdefault("role_source", research.ROLE_SOURCES[0]) not in research.ROLE_SOURCES:
+        sys.exit(f"{path}: [search].role_source must be one of: {', '.join(research.ROLE_SOURCES)}")
     candidate = profile.setdefault("candidate", {})
     candidate.setdefault("experience", "")
     candidate.setdefault("notes", "")
@@ -258,10 +260,17 @@ def cmd_run(args):
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
     if score and not jev.configured():
         print("TYPESAFE_API_KEY is not set: Claude scores every open role (no Jev screen).")
+    if profile["search"]["role_source"] == "fiber":
+        print("Open roles also come from Fiber's jobs database: one Exa agent run per verified company, "
+              "about $0.09 to $0.40 each on top of the usual research.")
 
     started_at = datetime.now()
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        results = list(pool.map(lambda c: process_company(*c, profile, score=score), companies))
+        try:
+            results = list(pool.map(lambda c: process_company(*c, profile, score=score), companies))
+        except KeyboardInterrupt:
+            exa_client.stop_agent_runs()  # Ctrl-C does not reach the workers: their agent runs would be billed on
+            raise
     mode = "research_only" if args.research_only else "deliver" if deliver else "dry_run"
     run_dir = save_results(results, mode=mode, started_at=started_at)
     print(f"Saved raw results to {run_dir}/")

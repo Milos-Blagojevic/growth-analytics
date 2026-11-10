@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 import hunt
 from clients import jev
 from dashboard_data import INTERVIEW_TURNS, PREP, review_fields, wispr, write_interview
-from exa_mock import contents_response, error, result, structured_response
+from exa_mock import AGENT_URL, agent_run, contents_response, error, result, structured_response
 from pipeline import runs, scoring
 
 PROFILE_TOML = """
@@ -150,6 +151,56 @@ def test_research_only_saves_results_and_reports_failures(exa, http, workdir, mo
     assert manifest["exa"]["requests"] == 2
     assert manifest["claude"] is None and manifest["jev"] is None
     assert "Exa: 2 requests" in capsys.readouterr().out  # Acme search + posting text; failures are not tallied
+
+
+def test_run_takes_open_roles_from_fiber_when_the_profile_asks_for_it(exa, http, workdir, capsys):
+    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "fiber"'))
+    (workdir / "companies.csv").write_text("Acme,acme.com\n")
+    role = {"title": "Data Engineer, Product", "url": "https://jobs.ashbyhq.com/acme/3333", "location": "Remote",
+            "remote_or_relocation": "Remote (EU)"}  # fmt: skip
+    exa.on_search(structured_response(company("Acme", "acme.com", [])))
+    exa.on_agent(agent_run({"open_roles": [role]}, cost=0.205, partners={"fiber": 0.18}))
+    exa.on_contents(contents_response())
+    http.get("https://api.ashbyhq.com/posting-api/job-board/acme", json={"jobs": [{"id": "3333", "title": "x"}]})
+
+    assert hunt.cmd_run(run_args(research_only=True)) == 0
+
+    results = saved_results(workdir)
+    assert results["acme.com.json"]["research"]["role_source"] == "fiber"
+    # the agent run and Fiber's charge are part of the run's Exa cost, which the dashboard's estimates average
+    assert results["_run.json"]["exa"]["by_label"]["agent:low"] == {"requests": 1, "dollars": pytest.approx(0.205)}
+    out = capsys.readouterr().out
+    assert "Open roles also come from Fiber's jobs database" in out
+    assert "roles: 1 (source: fiber)\n  - Data Engineer, Product | Remote | Remote (EU) | https://jobs.ashbyhq.com/acme/3333" in out
+
+
+def test_ctrl_c_during_a_run_cancels_the_agent_runs_its_workers_wait_for(exa, http, workdir):
+    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "fiber"'))
+
+    def search(body):
+        if "Beta" in body["query"]:
+            return structured_response(company("Beta", "beta.io", []))
+        waited_until = time.monotonic() + 10
+        while not exa.requests(AGENT_URL) and time.monotonic() < waited_until:  # Beta's worker has its agent run
+            time.sleep(0.001)
+        return KeyboardInterrupt()  # what Ctrl-C raises in the main thread, which waits for Acme first
+
+    exa.on_search(search)
+    exa.on_agent(agent_run(status="running"))  # it would run, billed, until Exa's own limit
+
+    with pytest.raises(KeyboardInterrupt):
+        hunt.cmd_run(run_args(research_only=True))
+
+    assert f"{AGENT_URL}/agent_run_1/cancel" in [call.request.url for call in http.calls]
+    assert not (workdir / "out").exists()
+
+
+def test_role_source_is_exa_unless_the_profile_names_another_known_one(workdir):
+    assert hunt.load_profile("profile.toml")["search"]["role_source"] == "exa"
+
+    (workdir / "profile.toml").write_text(PROFILE_TOML.replace("[search]", '[search]\nrole_source = "linkedin"'))
+    with pytest.raises(SystemExit, match=r"profile.toml: \[search\].role_source must be one of: exa, fiber"):
+        hunt.load_profile("profile.toml")
 
 
 def test_run_scores_and_sends_digest_to_telegram(exa, http, workdir, monkeypatch, claude, capsys):

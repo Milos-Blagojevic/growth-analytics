@@ -6,11 +6,13 @@ production. Use the `exa` fixture (conftest.py) to register handlers.
 """
 
 import json
+import re
 
 import responses
 
 SEARCH_URL = "https://api.exa.ai/search"
 CONTENTS_URL = "https://api.exa.ai/contents"
+AGENT_URL = "https://api.exa.ai/agent/runs"
 
 
 def result(url, *, title="", highlights=None, text=None):
@@ -58,6 +60,33 @@ def contents_response(results=(), statuses=(), *, cost=0.001):
     }
 
 
+def agent_run(structured=None, grounding=(), *, status="completed", cost=0.205, partners=None, error=None):
+    """An agent run as GET /agent/runs/<id> returns it once it has ended (or status="running": it never ends).
+
+    grounding: rows as grounded(...) builds them; the API names the fields "structured.<field>".
+    cost: the run's total in dollars, of which `partners` ({"fiber": dollars}) is the Exa Connect share.
+    """
+    return {
+        "id": "agent_run_test",
+        "object": "agent_run",
+        "status": status,
+        "stopReason": {"completed": "schema_satisfied", "failed": "error"}.get(status),
+        "createdAt": "2026-11-10T10:00:00.000Z",
+        "completedAt": None if status == "running" else "2026-11-10T10:00:40.000Z",
+        "request": None,
+        "error": {"type": "SERVER_ERROR", "code": "SERVER_ERROR", "message": error} if error else None,
+        "output": {
+            "text": "",
+            "structured": structured,
+            "grounding": [{**row, "field": f"structured.{row['field']}"} for row in grounding],
+        } if status == "completed" else None,
+        "usage": {"agentComputeUnits": 0.1, "searches": 3, "emails": 0, "phoneNumbers": 0,
+                  "dataSources": {name: 1 for name in partners or {}}},
+        "costDollars": {"total": cost, "agentCompute": 0.01, "search": 0.015, "emails": 0, "phoneNumbers": 0,
+                        "dataSources": partners or {}},
+    }  # fmt: skip
+
+
 def error(status, message="mocked Exa error"):
     """An HTTP error reply; the SDK turns it into ValueError("Request failed with status code N: ...")."""
     return status, {"error": message}
@@ -83,11 +112,54 @@ class ExaMock:
     def on_contents(self, handler):
         self._route(CONTENTS_URL, handler)
 
+    def on_agent(self, handler, *, checks=(), cancels=()):
+        """Routes agent runs. The handler's reply to a create request is the run as it ends (agent_run(...)): the
+        create itself answers "queued" and every status check answers that reply. A reply with status "running"
+        never ends until the run is cancelled. An error(...) tuple or an exception answers the create itself.
+
+        checks, cancels: what the first status checks and the first cancel requests get instead, one each: an
+        error(...) tuple, an exception, or a run payload (to answer "running" between failures)."""
+        runs = {}
+        failing = {"checks": list(checks), "cancels": list(cancels)}
+
+        def failed(kind):
+            if not failing[kind]:
+                return None
+            reply = failing[kind].pop(0)
+            if isinstance(reply, BaseException):  # KeyboardInterrupt included
+                raise reply
+            if isinstance(reply, dict):
+                return 200, {}, json.dumps(reply)
+            return reply[0], {}, json.dumps(reply[1])
+
+        def queued(run):
+            run_id = f"agent_run_{len(runs) + 1}"
+            runs[run_id] = {**run, "id": run_id}
+            return {"id": run_id, "object": "agent_run", "status": "queued"}
+
+        def status(request):
+            return failed("checks") or (200, {}, json.dumps(runs[request.url.rsplit("/", 1)[-1]]))
+
+        def cancel(request):
+            refused = failed("cancels")
+            if refused:
+                return refused
+            run_id = request.url.split("/")[-2]
+            runs[run_id] = {**runs[run_id], "status": "cancelled", "stopReason": "cancelled", "output": None}
+            return 200, {}, json.dumps(runs[run_id])
+
+        self._route(AGENT_URL, handler, wrap=queued)
+        one_run = re.escape(AGENT_URL) + "/[^/]+"
+        self._http.add_callback(responses.GET, re.compile(one_run + "$"), callback=status, content_type="application/json")
+        self._http.add_callback(
+            responses.POST, re.compile(one_run + "/cancel$"), callback=cancel, content_type="application/json"
+        )
+
     def requests(self, url=SEARCH_URL):
         """Decoded JSON bodies of the requests sent to `url`, in order."""
         return [json.loads(call.request.body) for call in self._http.calls if call.request.url == url]
 
-    def _route(self, url, handler):
+    def _route(self, url, handler, wrap=None):
         queue = list(handler) if isinstance(handler, list) else None
 
         def callback(request):
@@ -99,9 +171,9 @@ class ExaMock:
                 reply = handler(json.loads(request.body))
             else:
                 reply = handler
-            if isinstance(reply, Exception):
+            if isinstance(reply, BaseException):  # KeyboardInterrupt included
                 raise reply
-            status, payload = reply if isinstance(reply, tuple) else (200, reply)
+            status, payload = reply if isinstance(reply, tuple) else (200, wrap(reply) if wrap else reply)
             return status, {}, json.dumps(payload)
 
         self._http.add_callback(responses.POST, url, callback=callback, content_type="application/json")

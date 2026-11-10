@@ -23,5 +23,6 @@ outlook_token.json*
 gmail_token.json*
 prospects.toml
 prospects.csv
+prospects_discovered.csv
 prospect_runs/
 prospects.duckdb*

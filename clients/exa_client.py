@@ -1,10 +1,9 @@
-"""Exa search client for growth-analytics.
+"""Exa client for growth-analytics: search, contents and agent runs.
 
 Defaults follow the project setup: type="auto", highlights for content.
 Docs: https://docs.exa.ai/reference/search-api-guide-for-coding-agents
 """
 
-import functools
 import logging
 import os
 import random
@@ -22,17 +21,27 @@ load_dotenv()
 TIMEOUT_SECONDS = (15, 120)  # (connect, read) for every Exa request; deep searches can take tens of seconds
 
 
-class _BoundedRequests:
-    """Stand-in for the `requests` module inside the Exa SDK: same verbs, always with a timeout.
+def _bounded(verb):
+    """`verb` with this module's timeout, whatever timeout the caller passes."""
 
-    The SDK calls bare `requests.get/post/patch/delete` (no timeout, so a stalled connection hangs the
-    pipeline and the retry on `requests.Timeout` never fires). Everything else resolves to the real module.
+    def call(*args, **kwargs):
+        return verb(*args, **{**kwargs, "timeout": TIMEOUT_SECONDS})
+
+    return staticmethod(call)
+
+
+class _BoundedRequests:
+    """Stand-in for the `requests` module inside the Exa SDK: same verbs, always with TIMEOUT_SECONDS.
+
+    The SDK passes one timeout for connecting and reading (600 s unless set), so an unreachable host would hang
+    the pipeline for ten minutes per attempt before the retry on `requests.Timeout` fires. Everything else
+    resolves to the real module.
     """
 
-    get = staticmethod(functools.partial(requests.get, timeout=TIMEOUT_SECONDS))
-    post = staticmethod(functools.partial(requests.post, timeout=TIMEOUT_SECONDS))
-    patch = staticmethod(functools.partial(requests.patch, timeout=TIMEOUT_SECONDS))
-    delete = staticmethod(functools.partial(requests.delete, timeout=TIMEOUT_SECONDS))
+    get = _bounded(requests.get)
+    post = _bounded(requests.post)
+    patch = _bounded(requests.patch)
+    delete = _bounded(requests.delete)
 
     def __getattr__(self, name):
         return getattr(requests, name)
@@ -68,13 +77,16 @@ _costs_lock = threading.Lock()
 _costs = {}  # label -> {"requests": int, "dollars": float}
 
 
+def _http_status(exc):
+    """The status code of an HTTP error the SDK raised, None for anything else."""
+    match = _STATUS_RE.match(str(exc)) if isinstance(exc, ValueError) else None
+    return int(match.group(1)) if match else None
+
+
 def _is_retryable(exc):
     if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
         return True
-    if isinstance(exc, ValueError):
-        match = _STATUS_RE.match(str(exc))
-        return bool(match) and int(match.group(1)) in RETRYABLE_STATUS
-    return False
+    return _http_status(exc) in RETRYABLE_STATUS
 
 
 def _record_cost(label, response):
@@ -90,20 +102,24 @@ def _record_cost(label, response):
     logger.info("%s cost=%s search_time=%s", label, cost_text, time_text)
 
 
-def _call(label, method, *args, **kwargs):
-    """Call a client method with retry on transient failures; log and tally its cost."""
-    fn = getattr(get_client(), method)
+def _with_retries(label, fn, *, retryable=_is_retryable):
+    """fn() with retry on the failures `retryable` accepts (by default the transient ones)."""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            response = fn(*args, **kwargs)
-            break
+            return fn()
         except Exception as exc:
-            if attempt == MAX_ATTEMPTS or not _is_retryable(exc):
+            if attempt == MAX_ATTEMPTS or not retryable(exc):
                 raise
             delay = min(BACKOFF_MAX_SECONDS, BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
             delay *= random.uniform(0.5, 1.0)
             logger.warning("%s failed (attempt %d/%d): %s; retrying in %.1fs", label, attempt, MAX_ATTEMPTS, exc, delay)
             time.sleep(delay)
+
+
+def _call(label, method, *args, **kwargs):
+    """Call a client method with retry on transient failures; log and tally its cost."""
+    fn = getattr(get_client(), method)
+    response = _with_retries(label, lambda: fn(*args, **kwargs))
     _record_cost(label, response)
     return response
 
@@ -181,18 +197,24 @@ def search_structured(
 _CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
-def _compact_grounding(rows):
+def _compact_grounding(rows, *, prefix=""):
     """Merge per-subfield grounding (e.g. open_roles[3].url) into one entry per top-level field.
 
-    Keeps the lowest confidence and the union of cited URLs.
+    Keeps the lowest confidence Exa gives (None when it gives none, or one that is not low, medium or high) and
+    the union of cited URLs. `prefix` is dropped from the field paths first: agent runs name them
+    "structured.<field>". Grounding is optional in Exa's replies: none at all is an empty result.
     """
     merged = {}
-    for row in rows:
-        key = row.field.split("[")[0].split(".")[0]
-        entry = merged.setdefault(key, {"confidence": row.confidence, "urls": []})
-        if _CONFIDENCE_ORDER[row.confidence] < _CONFIDENCE_ORDER[entry["confidence"]]:
-            entry["confidence"] = row.confidence
-        for citation in row.citations:
+    for row in rows or ():
+        confidence = row.confidence.lower() if isinstance(row.confidence, str) else None
+        if confidence not in _CONFIDENCE_ORDER:
+            confidence = None
+        key = row.field.removeprefix(prefix).split("[")[0].split(".")[0]
+        entry = merged.setdefault(key, {"confidence": confidence, "urls": []})
+        known = entry["confidence"]
+        if confidence and (not known or _CONFIDENCE_ORDER[confidence] < _CONFIDENCE_ORDER[known]):
+            entry["confidence"] = confidence
+        for citation in row.citations or ():
             if citation.url not in entry["urls"]:
                 entry["urls"].append(citation.url)
     return merged
@@ -208,6 +230,117 @@ def grounded_answer(query, output_schema, *, system_prompt=None, **kwargs):
     if output is None or not isinstance(output.content, dict):
         raise RuntimeError(f"Exa returned no structured output for query: {query[:80]}")
     return output.content, _compact_grounding(output.grounding)
+
+
+# Agent runs ------------------------------------------------------------------------------
+# An agent run plans its own searches and, with Exa Connect data sources, queries partner databases
+# (https://exa.ai/docs/agent/connect/overview). It is asynchronous: created, then polled until it ends.
+
+AGENT_POLL_SECONDS = 2.0  # between status checks of a run
+AGENT_WAIT_SECONDS = 600  # a run still going after this is cancelled and counts as failed
+AGENT_FAILED_CHECKS = 5  # status checks in a row that may fail, each after its own retries, before the run is given up
+AGENT_EFFORTS = ("minimal", "low", "medium")  # the fixed-price ones; "auto" and "ultra" are priced by the run
+_AGENT_ENDED = frozenset({"completed", "failed", "cancelled"})
+_stop = threading.Event()  # set by stop_agent_runs()
+
+
+def stop_agent_runs():
+    """Makes every agent_answer that is waiting cancel its run and raise KeyboardInterrupt, and every later one
+    raise before it starts a run.
+
+    For Ctrl-C in a program that calls agent_answer from worker threads: KeyboardInterrupt reaches the main thread
+    only, and each run left alone would go on, billed, to its end while the program waits for it.
+    """
+    _stop.set()
+
+
+def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), exclude=None, effort="low"):
+    """Exa Agent run, waited for: (structured, grounding), shaped like grounded_answer().
+
+    data_sources: Exa Connect provider ids, e.g. ["fiber"]; the agent queries them alongside web search.
+    exclude: records the agent should not return, e.g. [{"domain": "acme.com"}].
+    effort: "minimal", "low" or "medium" have a fixed run price ($0.012, $0.025, $0.10). Partner calls are billed
+    on top with no cap (Fiber: $0.02 a credit, a search is 2 credits plus 1 per result), so one run can cost
+    from a few cents to a dollar. The whole cost is tallied under "agent:<effort>" in cost_summary().
+
+    A create is sent again only when Exa turns it down for rate or concurrency (429). After any other failure
+    that is not a plain refusal (a timeout, a dropped connection, a 5xx) the run may have started, and a second
+    one would be billed too: that raises RuntimeError saying so.
+
+    Raises RuntimeError when the run fails, is cancelled, is still going after AGENT_WAIT_SECONDS (it is then
+    cancelled), cannot be followed (it is cancelled if Exa still answers) or returns no structured output. What
+    Exa last reported as its cost is tallied in every one of those cases. Ctrl-C in the calling thread, or
+    stop_agent_runs() from another, cancels the run and raises KeyboardInterrupt.
+    """
+    if effort not in AGENT_EFFORTS:
+        raise ValueError(f"effort must be one of {', '.join(AGENT_EFFORTS)}, not {effort!r}")
+    if _stop.is_set():
+        raise RuntimeError("Exa agent run not started: the program is stopping")
+    runs = get_client().agent.runs
+    label = f"agent:{effort}"
+    try:
+        run = _with_retries(
+            label,
+            lambda: runs.create(
+                query=query,
+                system_prompt=system_prompt,
+                output_schema=output_schema,
+                effort=effort,
+                data_sources=[{"provider": provider} for provider in data_sources] or None,
+                input={"exclusion": list(exclude)} if exclude else None,
+            ),
+            retryable=lambda exc: _http_status(exc) == 429,
+        )
+    except Exception as exc:
+        status = _http_status(exc)
+        if status is not None and 400 <= status < 500 and status != 408:
+            raise  # Exa turned the request down: nothing started
+        raise RuntimeError(
+            f"Exa agent run may have started and be billed: the request to create it failed ({type(exc).__name__}: {exc})"
+        ) from exc
+
+    deadline = time.monotonic() + AGENT_WAIT_SECONDS
+    overdue, lost, failed_checks = False, None, 0
+    try:
+        while run.status not in _AGENT_ENDED:
+            if time.monotonic() > deadline:
+                overdue = True
+                run = _with_retries(label, lambda: runs.cancel(run.id))
+                break
+            if _stop.wait(AGENT_POLL_SECONDS):  # the pause between checks, cut short by stop_agent_runs()
+                raise KeyboardInterrupt
+            try:
+                run = _with_retries(label, lambda: runs.get(run.id))
+                failed_checks = 0
+            except Exception:  # one odd answer (a 404 just after the create, say) must not stop a paid run
+                failed_checks += 1
+                if failed_checks >= AGENT_FAILED_CHECKS:
+                    raise
+    except BaseException as exc:  # Exa no longer answers for the run, or Ctrl-C: left going, it is billed to the end
+        lost = exc
+        for last_try in (runs.cancel, runs.get):  # stop it if that still works, else read where it stands
+            try:
+                run = last_try(run.id)
+                break
+            except Exception:
+                continue
+        if not isinstance(exc, Exception):
+            _record_cost(label, run)
+            raise
+    _record_cost(label, run)  # a run that failed or was cancelled can still have been billed
+    if run.status != "completed":
+        if lost is not None:
+            ended = "stopped" if run.status in _AGENT_ENDED else "it may still be running and billed"
+            reason = f"could not be followed ({type(lost).__name__}: {lost}); {ended}"
+        elif overdue:
+            reason = f"not finished after {AGENT_WAIT_SECONDS}s"
+        else:
+            reason = (run.error.message if run.error else None) or "no reason given"
+        raise RuntimeError(f"Exa agent run {run.id} {run.status}: {reason}") from lost
+    output = run.output
+    if output is None or not isinstance(output.structured, dict):
+        raise RuntimeError(f"Exa agent returned no structured output for query: {query[:80]}")
+    return output.structured, _compact_grounding(output.grounding, prefix="structured.")
 
 
 # Search-type wrappers. All forward to search(); latencies are approximate (Exa docs).

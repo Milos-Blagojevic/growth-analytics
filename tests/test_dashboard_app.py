@@ -97,6 +97,20 @@ def test_company_page_shows_research_warnings_and_old_results_without_them_still
     assert "ATS fallback search failed: ValueError: &lt;boom&gt;" in page
 
 
+def test_company_page_shows_a_fiber_result_and_no_chip_for_a_missing_confidence(client, root):
+    assert 'class="conf conf-high"' in client.get("/c/acme.com").text
+
+    run_id, _ = stamp(1)
+    saved = result("Acme", "acme.com", fit=fit(80, "apply", "AE", "https://acme.com/3"), roles=[("AE", "https://acme.com/3", "live")])
+    saved["research"]["role_source"] = "fiber+main"
+    saved["research"]["grounding"]["open_roles"]["confidence"] = None  # Fiber's sources can come without one
+    write_run(root, run_id, [saved])
+
+    page = client.get("/c/acme.com").text
+    assert "found by fiber+main search" in page
+    assert "open roles</dt>" in page and 'class="conf' not in page
+
+
 def test_inbox_window(client):
     week = client.get("/inbox", params={"days": 7}).text
     assert "Growth Analyst" in week and "Data Lead" not in week
