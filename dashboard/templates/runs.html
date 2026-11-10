@@ -21,6 +21,7 @@
       </label>
       {% endfor %}
     </div>
+    <label class="check"><input type="checkbox" name="fiber" value="1"> Also ask Fiber's jobs database for open roles (one paid Exa agent run per verified company)</label>
     <button class="btn primary" type="submit" {{ 'disabled' if not companies }}>Review and start…</button>
   </form>
 
@@ -140,7 +141,7 @@
       {% for r in saved %}
       <tr>
         <td class="nowrap">{{ r.saved_at[:16] | replace('T', ' ') }}</td>
-        <td class="muted">{{ r.mode | mode if r.mode else '—' }}</td>
+        <td class="muted">{{ r.mode | mode if r.mode else '—' }}{{ ' · Fiber' if r.fiber }}</td>
         <td>{{ r.companies }}</td>
         <td class="verdicts">
           {% for v in ('apply', 'consider', 'stretch', 'check_careers', 'skip') %}{% if r[v] %}<span class="badge sm v-{{ v }}" title="{{ v | label }}">{{ r[v] }} {{ v | label }}</span>{% endif %}{% endfor %}

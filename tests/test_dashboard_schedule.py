@@ -16,10 +16,14 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
     entries = schedule.parse("# weekly discovery\n0 7 * * 1 discover \"b2b saas\" --limit 20; 30 7 * * * run\n\n0 */6 * * * watch --dry-run")
     assert [e.form for e in entries] == [
         {"kind": "discover", "focus": "b2b saas", "limit": "20"},
-        {"kind": "run", "mode": "deliver"},
+        {"kind": "run", "mode": "deliver", "fiber": ""},
         {"kind": "watch", "dry_run": "1"},
     ]
-    assert schedule.parse("0 8 * * * run --dry-run")[0].form == {"kind": "run", "mode": "dry_run"}
+    assert schedule.parse("0 8 * * * run --dry-run")[0].form == {"kind": "run", "mode": "dry_run", "fiber": ""}
+    assert [e.form for e in schedule.parse("0 8 * * * run --fiber; 0 9 * * * run --research-only --fiber")] == [
+        {"kind": "run", "mode": "deliver", "fiber": "1"},
+        {"kind": "run", "mode": "research_only", "fiber": "1"},
+    ]
     assert [e.form for e in schedule.parse("0 8-20/2 * * * mail; 0 8 * * 1 news --dry-run")] == [
         {"kind": "mail", "dry_run": ""},
         {"kind": "news", "dry_run": "1"},
@@ -32,6 +36,8 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
         ("0 7 * * * mail --days 30", "unsupported command"),
         ("0 7 * * * send", "unsupported command"),
         ("0 7 * * * run --dry-run --research-only", "unsupported command"),
+        ("0 7 * * * run --fiber --fiber", "unsupported command"),
+        ("0 7 * * * run --fiber=1", "unsupported command"),
         ("0 7 * * * discover --limit 99", "--limit must be a number from 1 to 50"),
         ("0 7 * * * discover --verbose", "unsupported command"),
         ("0 24 * * * run", "hour '24'"),

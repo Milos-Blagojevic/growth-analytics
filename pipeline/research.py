@@ -121,7 +121,6 @@ ATS_SYSTEM_PROMPT = (
     "belongs to the company at the given domain. Never guess; return an empty list if nothing matches."
 )
 
-ROLE_SOURCES = ("exa", "fiber")  # [search].role_source in profile.toml
 MAX_ROLES = 8  # open roles kept per company, as the search schemas ask for
 
 # Open roles from Fiber's jobs database, asked through an Exa agent run (which has no 10-property limit).
@@ -394,13 +393,13 @@ def find_roles_on_fiber(name, domain, profile):
     return list(roles.values()), grounding.get("open_roles")
 
 
-def research_company(name, domain, profile, *, search_type="auto"):
+def research_company(name, domain, profile, *, fiber=False, search_type="auto"):
     """Research one company.
 
     Returns {"name", "domain", "content": <schema dict>, "grounding": {field: {confidence, urls}},
     "role_source": "main" | "fiber" | "fiber+main" | "ats_fallback" | "none", "dead_roles": [{"title", "url"}],
     "warnings": [str]}.
-    Every posting URL is checked and dead ones are dropped. With [search].role_source = "fiber", a verified
+    Every posting URL is checked and dead ones are dropped. With fiber (hunt.py run --fiber), a verified
     company's open postings are also asked from Fiber's jobs database: live links first, Fiber's before the main
     search's that it does not list, then unverified ones, MAX_ROLES in all. If no live role remains for a
     verified company, a second search restricted to ATS domains looks for postings (also checked). When the
@@ -417,7 +416,7 @@ def research_company(name, domain, profile, *, search_type="auto"):
     role_source = "main" if roles else "none"
 
     warnings = []
-    if profile["search"].get("role_source") == "fiber" and content["identity_verified"]:
+    if fiber and content["identity_verified"]:
         try:
             listed, listed_grounding = find_roles_on_fiber(name, domain, profile)
         except Exception as exc:  # a second source: the main research is still worth saving

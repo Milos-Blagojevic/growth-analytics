@@ -15,7 +15,7 @@ Python 3.11+ CLI tools: an Exa search client (`clients/exa_client.py`), a job-hu
 | `clients/ashby.py` | Ashby public job-board API (link checks and watch list) |
 | `clients/telegram.py` | Telegram delivery (`send`) and `getUpdates` long polling for the chat bot (`updates`) |
 | `pipeline/` | The job hunt: research, scoring, watch list, news digest, saved runs |
-| `pipeline/research.py` | Per-company Exa research, open roles (the main search, Fiber's jobs database when `[search].role_source = "fiber"`, the ATS fallback), posting link checks, posting text fetch |
+| `pipeline/research.py` | Per-company Exa research, open roles (the main search, Fiber's jobs database with `hunt.py run --fiber`, the ATS fallback), posting link checks, posting text fetch |
 | `pipeline/scoring.py` | Jev role screen (`screen_roles`, thresholds `SCREEN_YES`, `SCREEN_NO`, `BELOW_SENIOR_MIN`) and Claude fit scoring: `SYSTEM_PROMPT` rubric plus the `Fit` pydantic model; `candidate()` is what Claude is told about the owner |
 | `pipeline/watch.py` | Watch list: new matching postings from Ashby boards |
 | `pipeline/news.py` | News digest: Exa news search per `[news].topics` entry, Jev relevance screen (`screen`), Claude picks (`Digest`), `news_state.json` |
@@ -53,7 +53,7 @@ CI runs the same suite on Python 3.11 and 3.13 for every pull request and push t
 
 Do not run these without asking: they spend money or send real messages.
 
-- `python -m clients.exa_client`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude and, when `TYPESAFE_API_KEY` is set, Jev. With `[search].role_source = "fiber"` in the profile, `run` also starts one Exa agent run with Fiber per verified company ($0.09 to $0.40 each in the first trial).
+- `python -m clients.exa_client`, `hunt.py discover`, `hunt.py run` (any mode): paid Exa calls; `run` without `--research-only` also pays for Claude and, when `TYPESAFE_API_KEY` is set, Jev. `run --fiber` (the dashboard's **With Fiber**, or `run --fiber` in `HUNT_SCHEDULE`) also starts one Exa agent run with Fiber per verified company ($0.09 to $0.40 each in the first trial).
 - `hunt.py run` without `--dry-run`, `hunt.py send`, `hunt.py watch` without `--dry-run`: send to Telegram. `watch` also updates `watch_state.json`.
 - `hunt.py interview-prep` and `hunt.py interview-review`: paid Claude calls that send the owner's CV or a whole interview transcript to Anthropic.
 - `hunt.py mail` (any mode): reads the owner's mailbox and sends matching emails to Jev (when `TYPESAFE_API_KEY` is set) and Claude; without `--dry-run` it also sends to Telegram and updates `mail_state.json`. `hunt.py outlook-login` signs in to the owner's Microsoft account; `hunt.py gmail-login` to their Google account.

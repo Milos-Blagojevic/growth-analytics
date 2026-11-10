@@ -12,11 +12,6 @@ seniority = ["senior", "lead"]
 work_mode = "Prefer fully remote roles. Roles that are on-site or hybrid are acceptable only if the company offers relocation support."
 # Companies never to suggest in discovery, e.g. your current employer.
 exclude_domains = []
-# Where open roles come from. "exa" (the default): the research search, then a search of job-board sites.
-# "fiber": also ask Fiber's jobs database for each verified company, through an Exa agent run. In a first trial
-# it found postings the search missed, with links that were all live, but it costs about $0.09 to $0.40 a
-# company on top (see pipeline/README.md, Role search).
-# role_source = "fiber"
 
 [candidate]
 # Where you are based; used to judge whether "remote" roles are open to you.
