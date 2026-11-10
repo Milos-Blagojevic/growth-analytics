@@ -2,7 +2,7 @@ import pytest
 import requests
 
 from pipeline import research
-from exa_mock import CONTENTS_URL, contents_response, error, grounded, result, search_response, structured_response
+from exa_mock import CONTENTS_URL, contents_response, error, grounded, result, structured_response
 
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{}"
 
@@ -149,18 +149,6 @@ def test_no_ats_fallback_for_unverified_identity(exa, profile):
     assert out["role_source"] == "none"
     assert out["content"]["open_roles"] == []
     assert len(exa.requests()) == 1
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [search_response(), structured_response("plain text instead of JSON")],
-    ids=["no-output", "text-output"],
-)
-def test_missing_structured_output_raises(exa, profile, payload):
-    exa.on_search(payload)
-
-    with pytest.raises(RuntimeError, match="no structured output"):
-        research.research_company("Acme", "acme.com", profile)
 
 
 @pytest.mark.parametrize(

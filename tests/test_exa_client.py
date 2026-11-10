@@ -50,6 +50,36 @@ def test_search_structured_parses_output_and_grounding(exa):
     ]
 
 
+def test_grounded_answer_merges_grounding_into_one_entry_per_top_level_field(exa):
+    exa.on_search(structured_response(
+        {"summary": "PLG", "roles": [{"url": "https://a.com/1"}, {"url": "https://a.com/2"}]},
+        [grounded("summary", "https://s.com"),
+         grounded("roles[0].url", "https://a.com/1", "https://a.com"),
+         grounded("roles[1].url", "https://a.com/2", "https://a.com", confidence="low")],
+    ))  # fmt: skip
+
+    content, grounding = exa_client.grounded_answer("q", {"type": "object", "properties": {}}, system_prompt="be strict")
+
+    assert content == {"summary": "PLG", "roles": [{"url": "https://a.com/1"}, {"url": "https://a.com/2"}]}
+    assert grounding == {
+        "summary": {"confidence": "high", "urls": ["https://s.com"]},
+        "roles": {"confidence": "low", "urls": ["https://a.com/1", "https://a.com", "https://a.com/2"]},  # lowest, union
+    }
+    assert exa.requests()[0]["systemPrompt"] == "be strict"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [search_response(), structured_response("plain text instead of JSON")],
+    ids=["no-output", "text-output"],
+)
+def test_grounded_answer_raises_without_structured_output(exa, payload):
+    exa.on_search(payload)
+
+    with pytest.raises(RuntimeError, match="no structured output"):
+        exa_client.grounded_answer("q", {"type": "object", "properties": {}})
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [

@@ -10,6 +10,7 @@ The test suite, flat in this folder. It needs no keys and makes no network calls
 | `exa_mock.py` | The Exa API mock |
 | `jev_mock.py` | The TypeSafe (Jev) API mock |
 | `dashboard_data.py` | Writes pipeline files to a temporary directory for dashboard tests |
+| `prospect_data.py` | Sample `prospects.toml`, Exa replies, research and saved runs for the prospects tests |
 
 ## Run the tests
 

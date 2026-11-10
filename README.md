@@ -1,6 +1,6 @@
 # Everything Growth
 
-Growth analytics tooling: a thin client over the [Exa](https://exa.ai) search API (raw retrieval, schema-grounded structured answers, content fetching) and a job-hunt pipeline built on it.
+Growth analytics tooling: a thin client over the [Exa](https://exa.ai) search API (raw retrieval, schema-grounded structured answers, content fetching), a job-hunt pipeline built on it, and a prospect pipeline for your own product (lead enrichment, value estimates and routing, kept in DuckDB; see [prospects/README.md](prospects/README.md)).
 
 Researches companies with Exa, scores how well they and their open roles fit your profile with Claude, and sends a short notification to Telegram. A dashboard shows the full results. Runs locally, or on Railway with scheduled commands and a login so you can use it from your phone (see [Deploy to Railway](dashboard/README.md#deploy-to-railway)).
 
@@ -13,6 +13,7 @@ Researches companies with Exa, scores how well they and their open roles fit you
 | `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, watch list, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
 | `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
+| `prospects/` | Sales prospects for your own product: Exa research, Claude assessment, value range and routing rules, DuckDB warehouse | [prospects/README.md](prospects/README.md) |
 | `dashboard/` | The dashboard app and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
 | `tests/` | The test suite and Verify in CI | [tests/README.md](tests/README.md) |
 | `docs/` | Specs for coding agents and parked ideas | [docs/parked-ideas.md](docs/parked-ideas.md) |
@@ -40,6 +41,7 @@ python -m clients.exa_client
 2. `cp profile.example.toml profile.toml`. `[search].roles`, `seniority` and `work_mode` are required (a command exits with `[search].<key> is required` otherwise). Under `[candidate]`, set `location` and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). `notes` (preferences or deal-breakers) and `weak_spots` are also sent to the scorer (see Weak spots in [Run](pipeline/README.md#run)); optionally fill `gaps` (see Stretch in [Run](pipeline/README.md#run)).
 3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies). Domains are normalised as in `discover` and the dashboard: `https://`, `http://`, `www.` and any path after the host are stripped. A row whose domain still contains a `/` or has no `.` stops the run before any paid call, with the row named. A domain listed twice (case-insensitive) is researched once, with a warning. A file saved by Excel as "CSV UTF-8" (with a byte-order mark) is read as is.
 4. Optional: `[news].topics` in `profile.toml` for the news digest, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)).
+5. Optional, for the prospect pipeline: `cp prospects.example.toml prospects.toml` (your product, ideal customer, pricing and routing tiers) and `cp prospects.example.csv prospects.csv` (`name,domain` rows, read like `companies.csv`). See [Prospects](prospects/README.md#configure).
 
 ## Commands
 
@@ -58,6 +60,8 @@ python -m clients.exa_client
 | `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py gmail-login` | Signs in to Gmail once | No | No | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
 | `python hunt.py chat` | Telegram chat bot over your mail | Claude | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
+| `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
+| `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
 | `python -m dashboard` | Dashboard: results, tracking, starting jobs | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard) |
 | `python -m pytest` | Test suite, no keys and no network | No | No | [Tests](tests/README.md#run-the-tests) |
 
@@ -65,7 +69,7 @@ python -m clients.exa_client
 
 | File | Purpose |
 |---|---|
-| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic]` for the chat bot, and `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard) |
+| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic]` for the chat bot, `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard, and `duckdb` for the prospect warehouse) |
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`, `PyYAML` for the Verify workflow test) |
 | `pytest.ini` | pytest settings: test paths and options |
 | `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
@@ -81,6 +85,8 @@ python -m clients.exa_client
 | `profile.example.toml` | Template for `profile.toml` (git-ignored) |
 | `cv.example.md` | Template for `cv.md` (git-ignored) |
 | `companies.example.csv` | Template for `companies.csv` (git-ignored) |
+| `prospects.example.toml` | Template for `prospects.toml` (git-ignored) |
+| `prospects.example.csv` | Template for `prospects.csv` (git-ignored) |
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |
@@ -92,4 +98,6 @@ python -m clients.exa_client
 | `news_state.json` | Articles the news digest has already considered (git-ignored) |
 | `jobs/` | Logs and company lists of jobs started from the dashboard (git-ignored) |
 | `interviews/` | Your interviews: details, transcripts, prep briefs and reviews (git-ignored) |
+| `prospect_runs/` | Raw per-run JSON of the prospect pipeline: research, assessment and costs (git-ignored) |
+| `prospects.duckdb` | The prospect warehouse, rebuilt from `prospect_runs/` on every `run` and `load` (git-ignored; safe to delete) |
 | `.hunt.lock` | Lock file that lets one `hunt.py` command run at a time (git-ignored) |

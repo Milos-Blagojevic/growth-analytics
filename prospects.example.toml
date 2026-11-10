@@ -1,0 +1,49 @@
+# Copy to prospects.toml (git-ignored) and edit. `python -m prospects` reads it.
+
+[product]
+# What you sell and what it does for the customer, in 1-3 sentences. Sent to Claude.
+description = ""
+
+[icp]
+# The kind of company the product is for. Free text; Claude scores each prospect's fit (0-100) against it.
+description = ""
+# What to look for on a prospect's own site as evidence that it needs the product, for example
+# "whether it sells subscriptions, on which platforms, and which billing tools it names". Sent to Exa.
+look_for = ""
+# Hard no-gos, one short phrase each. A prospect that clearly matches one is dropped whatever its score.
+disqualifiers = []
+
+[pricing]
+# What your fee is charged on, as a yearly dollar amount at the customer, for example
+# "subscription revenue billed through the product". Sent to Exa and Claude, which look for a published figure.
+basis = ""
+# The share of the basis you keep: 0.01 is 1%.
+take_rate = 0.01
+# When only the prospect's total revenue is published: the share of it that would be your basis (1.0 is all of it).
+basis_share_of_revenue = 1.0
+# When no revenue figure is published, revenue is taken as headcount times this range (dollars per employee a
+# year, low and high). It is a rough assumption: set your own, or delete the line to never estimate from headcount.
+revenue_per_employee = [50000, 200000]
+
+[routing]
+# A prospect whose fit score is below this is dropped.
+min_fit = 50
+# Where a prospect goes when its value cannot be estimated (no published figure and no headcount).
+unknown_value = "research manually"
+
+# Tiers by yearly value to you in dollars, highest first. A prospect gets the first tier whose min_value its
+# estimate reaches (the midpoint, when the estimate is a range); below the last tier it is dropped.
+[[routing.tiers]]
+name = "A"
+min_value = 20000
+route = "founder outreach"
+
+[[routing.tiers]]
+name = "B"
+min_value = 5000
+route = "sales sequence"
+
+[[routing.tiers]]
+name = "C"
+min_value = 0
+route = "self-serve nurture"

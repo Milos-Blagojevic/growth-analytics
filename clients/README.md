@@ -56,6 +56,7 @@ page = contents(["https://exa.ai"])
 | `get_client()` | Returns an `Exa` client. Raises `RuntimeError` if `EXA_API_KEY` is unset. |
 | `search(query, *, type="auto", num_results=10, contents=None, max_age_hours=None, **kwargs)` | Raw search results. `contents` defaults to highlights. |
 | `search_structured(query, output_schema, *, type="auto", system_prompt=None, contents=None, max_age_hours=None, **kwargs)` | Synthesized, grounded JSON output. `contents` defaults to highlights. |
+| `grounded_answer(query, output_schema, *, system_prompt=None, **kwargs)` | `search_structured()` unwrapped: `(content, grounding)`, with the grounding merged into one `{confidence, urls}` entry per top-level field (lowest confidence, every cited URL). Raises `RuntimeError` when Exa returns no structured output. |
 | `instant_search` / `fast_search` / `deep_lite_search` / `deep_search` / `deep_reasoning_search` `(query, **kwargs)` | `search()` with `type` preset (see below). |
 | `contents(urls, *, max_age_hours=None, highlights=True, **kwargs)` | Page contents for given URLs: highlights only by default (full text only if `text` is passed). `highlights=False` with `text={...}` fetches full text only. |
 

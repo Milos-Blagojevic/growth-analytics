@@ -21,3 +21,7 @@ mail_state.json*
 news_state.json*
 outlook_token.json*
 gmail_token.json*
+prospects.toml
+prospects.csv
+prospect_runs/
+prospects.duckdb*
