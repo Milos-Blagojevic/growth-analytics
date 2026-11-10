@@ -1,15 +1,16 @@
 # Prospects: lead enrichment, scoring and routing
 
-For each company in `prospects.csv`: Exa reads the company's own site and searches the open web for its funding, size and news; Claude scores how well it fits your ideal customer, copies the figures the research states and writes a short brief; fixed rules turn those figures into a yearly value range, a tier and a route. Every run is saved as JSON and loaded into `prospects.duckdb`.
+`discover` finds companies that match your ideal customer in Fiber's B2B company database. Then, for each company in `prospects.csv`: Exa reads the company's own site and searches the open web for its funding, size and news; Claude scores how well it fits your ideal customer, copies the figures the research states and writes a short brief; fixed rules turn those figures into a yearly value range, a tier and a route. Every run is saved as JSON and loaded into `prospects.duckdb`.
 
-This is a prototype for a product priced as a share of the customer's revenue or volume. Not built yet: a sync to a CRM such as Attio, a dashboard page, a Jev screen in front of Claude and discovery of new prospects. Nothing here is fitted to closed deals, so the value is a range to rank by, not a forecast.
+This is a prototype for a product priced as a share of the customer's revenue or volume. Not built yet: a sync to a CRM such as Attio, a dashboard page and a Jev screen in front of Claude. Nothing here is fitted to closed deals, so the value is a range to rank by, not a forecast.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `__main__.py` | `python -m prospects`: the `run` and `load` commands |
+| `__main__.py` | `python -m prospects`: the `discover`, `run` and `load` commands |
 | `config.py` | Reads and validates `prospects.toml` |
+| `discover.py` | New prospects from Fiber's company database, through an Exa agent run; the `prospects_discovered.csv` history |
 | `enrich.py` | Per-prospect Exa research (the prospect's own site, then the open web) |
 | `assess.py` | Claude assessment: fit score, published figures, value signals, brief (structured output) |
 | `value.py` | The value range, tier and route: arithmetic and rules, no model call |
@@ -23,9 +24,9 @@ This is a prototype for a product priced as a share of the customer's revenue or
    | Key | What it is | Goes to |
    |---|---|---|
    | `[product].description` | What you sell | Claude |
-   | `[icp].description` | The kind of company the product is for; the fit score is judged against it | Claude |
+   | `[icp].description` | The kind of company the product is for; the fit score is judged against it, and `discover` searches for it | Claude, Exa (`discover`) |
    | `[icp].look_for` | What to look for on a prospect's site as evidence of need | Exa |
-   | `[icp].disqualifiers` | Hard no-gos; a prospect that clearly matches one is dropped (optional) | Claude |
+   | `[icp].disqualifiers` | Hard no-gos; a prospect that clearly matches one is dropped, and `discover` is told to leave such companies out (optional) | Claude, Exa (`discover`) |
    | `[pricing].basis` | What your fee is charged on, as a yearly dollar amount at the customer | Exa, Claude |
    | `[pricing].take_rate` | The share of the basis you keep (`0.01` is 1%) | nobody |
    | `[pricing].basis_share_of_revenue` | The share of a prospect's total revenue that would be your basis (default `1.0`) | nobody |
@@ -34,7 +35,24 @@ This is a prototype for a product priced as a share of the customer's revenue or
    | `[routing].unknown_value` | Route for a prospect whose value cannot be estimated (default `research manually`) | nobody |
    | `[[routing.tiers]]` | `name`, `min_value` (dollars a year to you) and `route`, listed from the highest `min_value` to the lowest; the names `out` and `unknown` are taken (see [Routing](#routing)) | nobody |
 
-3. `cp prospects.example.csv prospects.csv` and list `name,domain` rows. The file is read like `companies.csv` (see [Configure](../README.md#configure)): domains are normalised, a repeated domain is researched once, columns after the domain are ignored.
+3. `cp prospects.example.csv prospects.csv` and list `name,domain` rows, or let [`discover`](#discover) find them. The file is read like `companies.csv` (see [Configure](../README.md#configure)): domains are normalised, a repeated domain is researched once, columns after the domain are ignored.
+
+## Discover
+
+```bash
+python -m prospects discover                                    # up to 10 companies that match [icp]
+python -m prospects discover "fintech, 10 to 100 employees" --limit 25
+```
+
+One [Exa Agent](https://exa.ai/docs/agent/quickstart) run with [Fiber.ai](https://exa.ai/docs/agent/connect/fiber) attached searches Fiber's company database for `[icp].description`, narrowed by the optional focus, and is told to leave out your disqualifiers and every company you already have. It prints one row per new company: `name,domain,why,employees,funding_stage`, where the employee count and funding stage are the database's (taken from the company's LinkedIn page) and `why` is the agent's one sentence.
+
+- **Where they go.** New companies are appended to `prospects_discovered.csv` (git-ignored), with the focus and the time. Companies already in that file or in `prospects.csv` are sent to the agent as exclusions (the first 500 domains) and all of them are filtered out again here, so each run only returns new ones. A row is kept only when its domain is a plain host name; a name loses a leading `#` (a prospects file reads such a row as a comment), and text a spreadsheet would run as a formula gets a leading apostrophe. The history is checked for being writable before the run. After it the rows are saved, then printed, and they are printed even when saving fails.
+- **Researching them.** The printed rows are `prospects.csv` rows: paste in the ones you want. Or research everything found so far with `python -m prospects run --prospects prospects_discovered.csv`.
+- **Cost.** The run itself is $0.025. Fiber bills $0.02 a credit, and a search costs 2 credits plus 1 per result it returns, so the bill follows how many candidates the agent pulls, not how many you asked for: the first two real runs cost $0.745 each, for 4 and for 9 companies. There is no cap, so `--limit` stops at 50. The command prints what Exa charged.
+- **What to check.** The match is Fiber's and the agent's reading of your one-paragraph ideal customer; `run` is what researches and scores each company.
+- **Fiber's headcount is saved, not used.** `run` takes headcount from the web research. In a trial on nine discovered companies (11 to 89 employees) the web had a headcount for eight, and Fiber's number fell inside the web's range for seven of them; the web's range was wide for three (11 to 64 against Fiber's 11). So a separate paid Fiber lookup per prospect is not worth it for headcount alone. Using the number `discover` already paid for, when the web has none or a wide range, is an open follow-up.
+
+Options: `--history FILE` (default `prospects_discovered.csv`), `--prospects FILE` (default `prospects.csv`; its companies are not returned again).
 
 ## Run
 
@@ -129,7 +147,8 @@ Two Exa structured searches and one Claude call per prospect. `run` prints what 
 
 ## Known limits
 
-- Exa is a search engine, not a company database. A small company's site may be barely indexed, so its fields come back "unknown"; the prospect then scores low or lands in `research manually`. Private companies rarely publish revenue, so most estimates will use the headcount method.
+- Exa is a search engine, not a company database. A small company's site may be barely indexed, so its fields come back "unknown"; the prospect then scores low or lands in `research manually`.
+- For small private companies the "published" revenue is almost always an outside estimate. In the trial on nine companies of 11 to 89 employees, seven were valued on a revenue figure and every one came from a third party (GetLatka, LinkedIn, Tracxn); for one company two such figures were $14M and $1.15M. Only one prospect fell back to headcount. Check `figures` (`stated_by`, `evidence`) before trusting a small prospect's value; trusting only company-stated revenue and falling back to headcount otherwise is an open follow-up.
 - Claude converts other currencies and monthly figures to yearly dollars at a rough rate, and the period of a figure and who stated it are its reading of the research. The original wording is kept in `figures.evidence` to check against.
 - When your pricing basis is close to revenue itself (subscription revenue at a software company, say), Claude may list the same figures under both or under either one; under the basis the estimate runs without `basis_share_of_revenue`.
 - Two runs on the same prospect differ. Exa returns other sources and other figures, and the scoring model accepts no temperature (see Score noise in [Run](../pipeline/README.md#run)). On two runs half an hour apart, with a loose placeholder profile, one company's fit moved from 30 to 52 (from dropped to the top tier) and another's value from $8.65M to $6M, because the second run found a newer, lower third-party estimate. The rule for figures is fixed, but it weighs every third party the same. Read fit and value as bands, and look at `figures` before acting on a prospect near a threshold.

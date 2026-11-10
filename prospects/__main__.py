@@ -1,15 +1,18 @@
 """Lead enrichment, scoring and routing: research prospects with Exa, assess them with Claude, rate and route them
 with the rules in prospects.toml, and keep every run in prospects.duckdb.
 
+  python -m prospects discover             # find companies that match [icp] in Fiber's database (paid: Exa agent)
   python -m prospects run                  # research + assess every company in prospects.csv (paid: Exa, Claude)
   python -m prospects run --limit 3        # only the first 3 rows
   python -m prospects run --research-only  # Exa only: no Claude
   python -m prospects load                 # rebuild prospects.duckdb with the current prospects.toml (free)
 
-Files (in the current directory): prospects.toml, prospects.csv, prospect_runs/<timestamp>/, prospects.duckdb.
+Files (in the current directory): prospects.toml, prospects.csv, prospects_discovered.csv,
+prospect_runs/<timestamp>/, prospects.duckdb.
 """
 
 import argparse
+import csv
 import json
 import logging
 import os
@@ -23,7 +26,7 @@ import duckdb
 import hunt
 from clients import exa_client
 from pipeline import runs, scoring
-from prospects import assess, config, enrich, value, warehouse
+from prospects import assess, config, discover, enrich, value, warehouse
 
 logger = logging.getLogger("prospects")
 WORKERS = 4
@@ -218,6 +221,46 @@ def cmd_load(args):
     return 0
 
 
+def cmd_discover(args):
+    if not 1 <= args.limit <= discover.MAX_LIMIT:
+        sys.exit(f"--limit must be from 1 to {discover.MAX_LIMIT}")
+    settings = load_config(args.config)
+    try:
+        known = discover.known_domains(args.prospects, args.history)
+    except (OSError, ValueError, csv.Error) as exc:  # no permission, not UTF-8, a field beyond csv's limit
+        sys.exit(f"{args.prospects} or {args.history} cannot be read: {exc}")
+    if not exa_client.configured():  # fail before spending anything
+        sys.exit("EXA_API_KEY is not set. Add it to .env.")
+    try:  # before paying for companies that could then not be kept
+        discover.check_writable(args.history)
+    except OSError as exc:
+        sys.exit(f"{args.history} cannot be written: {exc}")
+
+    try:
+        found = discover.find(settings, limit=args.limit, focus=args.focus, known=known)
+    except Exception as exc:  # the run failed or was refused; say what it cost all the same
+        sys.exit(f"Discovery failed: {type(exc).__name__}: {exc} | Exa: ${exa_client.cost_summary()['dollars']:.4f}")
+    spent = f"Exa: ${exa_client.cost_summary()['dollars']:.4f}"
+    not_saved = None
+    try:  # saved before printing and printed whatever happens to the file: either failing must not lose a paid run
+        if found:
+            discover.save(args.history, found, args.focus)
+    except OSError as exc:
+        not_saved = exc
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    for company in found:
+        writer.writerow([company[field] for field in discover.FIELDS[:5]])
+    sys.stdout.flush()
+    if not_saved:
+        sys.exit(f"{args.history} could not be written ({not_saved}): the rows printed above were not saved | {spent}")
+    logger.info(
+        "%d new compan%s%s | %d known domain%s not listed again | %s",
+        len(found), "y" if len(found) == 1 else "ies", f" saved to {args.history}" if found else "",
+        len(known), "" if len(known) == 1 else "s", spent,
+    )  # fmt: skip
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="python -m prospects", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -233,6 +276,13 @@ def main():
 
     load = sub.add_parser("load", help="rebuild prospects.duckdb from the saved runs and print the ranking")
     load.set_defaults(func=cmd_load)
+
+    found = sub.add_parser("discover", help="find new companies that match [icp] in Fiber's company database")
+    found.add_argument("focus", nargs="?", default="", help="optional narrowing, e.g. 'fintech, 10 to 100 employees'")
+    found.add_argument("--limit", type=int, default=10, help=f"companies to ask for, up to {discover.MAX_LIMIT}")
+    found.add_argument("--history", default=discover.HISTORY, help="CSV of every company found so far")
+    found.add_argument("--prospects", default="prospects.csv", help="companies listed here are not returned again")
+    found.set_defaults(func=cmd_discover)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

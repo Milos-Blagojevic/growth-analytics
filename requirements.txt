@@ -1,4 +1,4 @@
-exa-py==2.14.0
+exa-py==2.28.0
 python-dotenv==1.0.1
 anthropic==1.12.1
 pydantic==2.13.5

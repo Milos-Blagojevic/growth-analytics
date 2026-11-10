@@ -6,11 +6,11 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from exa_mock import error, structured_response
+from exa_mock import AGENT_URL, agent_run, error, structured_response
 from pipeline import scoring
 from prospect_data import CONFIG_TOML, SITE, assessment, exa_replies, figure, freeze_today, money_reply, research
 from prospects import __main__ as cli
-from prospects import warehouse
+from prospects import discover, warehouse
 
 
 @pytest.fixture
@@ -282,3 +282,95 @@ def test_an_invalid_config_stops_run_and_load_with_the_key_named(http, workdir, 
         assert "prospects.toml: [pricing].take_rate must be a number above 0" in run_cli(monkeypatch, command)
     assert len(http.calls) == 0
     assert not Path("prospects.duckdb").exists()
+
+
+# discover ---------------------------------------------------------------------------------------
+
+
+def found(name, domain):
+    return {"name": name, "domain": domain, "why": f"{name} sells subscriptions.", "employees": 40, "funding_stage": "seed"}
+
+
+def test_discover_prints_and_saves_new_companies_and_leaves_them_out_next_time(exa, workdir, monkeypatch, capsys, caplog):
+    caplog.set_level("INFO")
+    exa.on_agent(agent_run({"companies": [found("Acme", "acme.com"), found("Gamma", "gamma.dev")]}, cost=0.745))
+
+    assert run_cli(monkeypatch, "discover", "10 to 100 employees", "--limit", "5") == 0
+
+    # Acme is in prospects.csv already; the printed row pastes into prospects.csv
+    assert capsys.readouterr().out == "Gamma,gamma.dev,Gamma sells subscriptions.,40,seed\n"
+    assert "1 new company saved to prospects_discovered.csv | 2 known domains not listed again | Exa: $0.7450" in caplog.text
+    saved = (workdir / "prospects_discovered.csv").read_text().splitlines()
+    assert saved[1].startswith("Gamma,gamma.dev,Gamma sells subscriptions.,40,seed,10 to 100 employees,20") and len(saved) == 2
+
+    assert run_cli(monkeypatch, "discover") == 0  # the database returns the same two again
+
+    first, second = exa.requests(AGENT_URL)
+    assert "Narrow it to: 10 to 100 employees." in first["query"] and "Narrow it to" not in second["query"]
+    assert first["input"] == {"exclusion": [{"domain": "acme.com"}, {"domain": "beta.io"}]}
+    assert {"domain": "gamma.dev"} in second["input"]["exclusion"]
+    assert capsys.readouterr().out == ""
+    assert (workdir / "prospects_discovered.csv").read_text().splitlines() == saved
+    assert "0 new companies | 3 known domains not listed again" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "message"),
+    [
+        (["discover"], {"EXA_API_KEY": None}, "EXA_API_KEY is not set"),
+        (["discover", "--limit", "0"], {}, "--limit must be from 1 to 50"),
+        (["discover", "--limit", "51"], {}, "--limit must be from 1 to 50"),
+        (["--config", "missing.toml", "discover"], {}, "missing.toml not found"),
+        (["discover", "--history", "no_such_folder/found.csv"], {}, "no_such_folder/found.csv cannot be written"),
+    ],
+    ids=["no-exa-key", "limit-zero", "limit-too-high", "no-config", "history-not-writable"],
+)
+def test_discover_stops_before_any_paid_call(http, workdir, monkeypatch, argv, env, message):
+    for key in env:
+        monkeypatch.delenv(key)
+
+    assert message in run_cli(monkeypatch, *argv)
+    assert len(http.calls) == 0
+    assert not Path("prospects_discovered.csv").exists()
+
+
+def test_discover_says_what_a_failed_run_cost(exa, workdir, monkeypatch):
+    exa.on_agent(agent_run(status="failed", error="Run timed out", cost=0.31))
+
+    message = run_cli(monkeypatch, "discover")
+
+    assert message.startswith("Discovery failed: RuntimeError: Exa agent run agent_run_1 failed: Run timed out")
+    assert message.endswith("| Exa: $0.3100")
+    assert not Path("prospects_discovered.csv").exists()
+
+
+def test_discover_prints_what_it_paid_for_even_when_the_history_cannot_be_written(exa, workdir, monkeypatch, capsys):
+    exa.on_agent(agent_run({"companies": [found("Gamma", "gamma.dev")]}, cost=0.745))
+
+    def full_disk(*args):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(discover, "save", full_disk)
+
+    message = run_cli(monkeypatch, "discover")
+
+    assert "No space left on device): the rows printed above were not saved | Exa: $0.7450" in message
+    assert capsys.readouterr().out == "Gamma,gamma.dev,Gamma sells subscriptions.,40,seed\n"
+
+
+def test_discover_saves_what_it_paid_for_even_when_printing_fails(exa, workdir, monkeypatch):
+    exa.on_agent(agent_run({"companies": [found("Gamma", "gamma.dev")]}))
+
+    class ClosedPipe:
+        def write(self, text):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr("sys.argv", ["prospects", "discover"])
+    monkeypatch.setattr("sys.stdout", ClosedPipe())
+
+    with pytest.raises(BrokenPipeError):
+        cli.main()
+    assert "gamma.dev" in (workdir / "prospects_discovered.csv").read_text()

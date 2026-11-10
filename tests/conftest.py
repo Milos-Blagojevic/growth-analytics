@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +38,8 @@ def _isolate(monkeypatch):
                 "TYPESAFE_API_KEY", "JEV_MODEL", "CHAT_BOT"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(exa_client, "BACKOFF_BASE_SECONDS", 0)
+    monkeypatch.setattr(exa_client, "AGENT_POLL_SECONDS", 0)
+    monkeypatch.setattr(exa_client, "_stop", threading.Event())
     monkeypatch.setattr(jev, "BACKOFF_BASE_SECONDS", 0)
     exa_client.reset_costs()
     jev.reset()

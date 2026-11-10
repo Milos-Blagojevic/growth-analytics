@@ -40,7 +40,7 @@ python -m clients.exa_client
 1. Add keys to `.env`: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (see `.env.example` for how to get the Telegram values), and optionally `TYPESAFE_API_KEY` (see [Jev screening](clients/README.md#jev-screening)).
 2. `cp profile.example.toml profile.toml`. `[search].roles`, `seniority` and `work_mode` are required (a command exits with `[search].<key> is required` otherwise). Under `[candidate]`, set `location` and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). `notes` (preferences or deal-breakers) and `weak_spots` are also sent to the scorer (see Weak spots in [Run](pipeline/README.md#run)); optionally fill `gaps` (see Stretch in [Run](pipeline/README.md#run)).
 3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies). Domains are normalised as in `discover` and the dashboard: `https://`, `http://`, `www.` and any path after the host are stripped. A row whose domain still contains a `/` or has no `.` stops the run before any paid call, with the row named. A domain listed twice (case-insensitive) is researched once, with a warning. A file saved by Excel as "CSV UTF-8" (with a byte-order mark) is read as is.
-4. Optional: `[news].topics` in `profile.toml` for the news digest, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)).
+4. Optional: `[news].topics` in `profile.toml` for the news digest, `[search].role_source = "fiber"` to also take open roles from Fiber's jobs database (see Role search in [Run](pipeline/README.md#run); it costs more per company), and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)).
 5. Optional, for the prospect pipeline: `cp prospects.example.toml prospects.toml` (your product, ideal customer, pricing and routing tiers) and `cp prospects.example.csv prospects.csv` (`name,domain` rows, read like `companies.csv`). See [Prospects](prospects/README.md#configure).
 
 ## Commands
@@ -60,6 +60,7 @@ python -m clients.exa_client
 | `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py gmail-login` | Signs in to Gmail once | No | No | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
 | `python hunt.py chat` | Telegram chat bot over your mail | Claude | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
+| `python -m prospects discover` | Finds companies that match your ideal customer in Fiber's company database | Exa agent run and Fiber (about $0.75 a run so far; no cap) | No | [Prospects](prospects/README.md#discover) |
 | `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
 | `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
 | `python -m dashboard` | Dashboard: results, tracking, starting jobs | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard) |
@@ -87,6 +88,7 @@ python -m clients.exa_client
 | `companies.example.csv` | Template for `companies.csv` (git-ignored) |
 | `prospects.example.toml` | Template for `prospects.toml` (git-ignored) |
 | `prospects.example.csv` | Template for `prospects.csv` (git-ignored) |
+| `prospects_discovered.csv` | Every company `python -m prospects discover` has found, with Fiber's employee count and funding stage (git-ignored) |
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |

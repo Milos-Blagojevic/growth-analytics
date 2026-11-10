@@ -135,7 +135,7 @@
     <div class="eyebrow">Evidence</div>
     <dl class="evidence">
       {% for field, g in r.grounding.items() %}
-      <dt>{{ field | replace('_', ' ') }} <span class="conf conf-{{ g.confidence }}">{{ g.confidence }}</span></dt>
+      <dt>{{ field | replace('_', ' ') }}{% if g.confidence %} <span class="conf conf-{{ g.confidence }}">{{ g.confidence }}</span>{% endif %}</dt>
       <dd>{% for u in g.urls %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u | host }}</a>{% endfor %}</dd>
       {% endfor %}
     </dl>

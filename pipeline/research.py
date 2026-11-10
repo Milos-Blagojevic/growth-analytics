@@ -1,6 +1,7 @@
 """Company research via Exa: identity, growth signals and matching open roles."""
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from urllib.parse import unquote, urlparse
@@ -118,6 +119,44 @@ ATS_SYSTEM_PROMPT = (
     "You find currently open job postings for one company on applicant-tracking-system job boards. "
     "Many companies share similar names, so set company_verified to true only if the posting clearly "
     "belongs to the company at the given domain. Never guess; return an empty list if nothing matches."
+)
+
+ROLE_SOURCES = ("exa", "fiber")  # [search].role_source in profile.toml
+MAX_ROLES = 8  # open roles kept per company, as the search schemas ask for
+
+# Open roles from Fiber's jobs database, asked through an Exa agent run (which has no 10-property limit).
+FIBER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "open_roles": {
+            "type": "array",
+            "maxItems": MAX_ROLES,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "url": {"type": "string", "description": "Direct URL of the posting"},
+                    "location": {"type": "string"},
+                    "remote_or_relocation": {
+                        "type": "string",
+                        "description": (
+                            "What the posting says: remote (and for which regions or countries), hybrid, "
+                            "on-site, relocation support, or unknown"
+                        ),
+                    },
+                },
+                "required": ["title", "url", "location", "remote_or_relocation"],
+            },
+        }
+    },
+    "required": ["open_roles"],
+}
+
+FIBER_SYSTEM_PROMPT = (
+    "You list one company's open job postings from a jobs database. List only postings that belong to the "
+    "company at the given domain and are open now. Give each posting's URL on the company's own careers site or "
+    "its applicant-tracking system, never an aggregator's copy. Do not leave a posting out for its seniority or "
+    "its location: that is judged later. Never guess; return an empty list if nothing matches."
 )
 
 
@@ -259,15 +298,113 @@ def find_roles_on_ats(name, domain, profile):
     return roles, grounding.get("open_roles")
 
 
+def _posting_url(url):
+    """The posting behind an Ashby link, in the one form the link check knows: no application-form suffix
+    (.../<id>/application, whatever follows it), port or upper-case host. Any other URL as it is."""
+    url = url.strip()
+    parsed = urlparse(url)
+    if parsed.hostname != ashby.HOST:
+        return url
+    return f"https://{ashby.HOST}{parsed.path.rstrip('/').removesuffix('/application')}"
+
+
+_UUID_RE = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+
+
+def _posting_key(url):
+    """What two links to one posting share (compared within one company's postings only).
+
+    Host and path count without letter case, "www.", a trailing slash or Ashby's application-form suffix: the
+    main search returns jobs.ashbyhq.com/Notion/<id>/application for jobs.ashbyhq.com/notion/<id>. The query and
+    the fragment count as they are, apart from utm_ parameters: some career sites name the posting there
+    (/careers/job?gh_jid=123), and merging two of those would drop a real role.
+
+    A job board's posting id (a UUID) is the key by itself when the link ends in it and says nothing more, or
+    carries it as ?ashby_jid=: a careers page that embeds the board links the posting that way
+    (linear.app/careers/<id> for jobs.ashbyhq.com/linear/<id>).
+    """
+    parsed = urlparse(_posting_url(url))
+    host = (parsed.hostname or "").removeprefix("www.")
+    path = parsed.path.rstrip("/").lower()
+    parts = sorted(part for part in parsed.query.split("&") if part and not part.lower().startswith("utm_"))
+    posting_ids = [part.partition("=")[2].lower() for part in parts if part.lower().startswith("ashby_jid=")]
+    if not parts and not parsed.fragment:
+        posting_ids.append(path.rpartition("/")[2])
+    if posting_ids and _UUID_RE.fullmatch(posting_ids[0]):
+        return posting_ids[0]
+    return f"{host}{path}?{'&'.join(parts)}#{parsed.fragment}"
+
+
+_HOST_RE = re.compile(r"[a-z0-9.-]+")
+
+
+def _posts_own_jobs(url, domain):
+    """True for an http(s) link on the company's own site or on one of the job-board hosts in ATS_DOMAINS, where a
+    company posts its jobs itself. Any other host is an aggregator: its page answers 200 for a job that has
+    closed, or that the company never posted, so the link check cannot catch it."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").rstrip(".").removeprefix("www.")
+    if parsed.scheme not in ("http", "https") or "@" in parsed.netloc or "\\" in url or not _HOST_RE.fullmatch(host):
+        return False  # not a web link, or one written to read like another host (evil.io\.acme.com, evil.io\@acme.com)
+    if host == domain or host.endswith(f".{domain}"):
+        return True
+    return any(host.endswith(ats[1:]) if ats.startswith("*.") else host == ats for ats in ATS_DOMAINS)
+
+
+def find_roles_on_fiber(name, domain, profile):
+    """Open postings from Fiber's jobs database, asked through an Exa agent run: (roles, grounding).
+
+    It asks for the target roles at any seniority: asked for senior roles only, the agent leaves out postings
+    whose title does not say so, and seniority is the screen's and the scorer's call anyway. Only postings on the
+    company's own site or a job board it posts on are kept (see _posts_own_jobs). One agent run plus Fiber's own
+    charge per search, $0.09 to $0.40 a company in the first runs.
+    """
+    search = profile["search"]
+    query = (
+        f"Using a B2B jobs database, list the job postings currently open at {name} ({domain}) whose work is any "
+        f"of: {', '.join(search['roles'])}. Include every matching posting whatever its seniority or location; "
+        f"when more than {MAX_ROLES} match, prefer {' or '.join(search['seniority'])} level. For each return the "
+        "title, the direct URL of the posting, the location and what the posting says about remote work or "
+        f"relocation.{_location_clause(profile)}"
+    )
+    content, grounding = exa_client.agent_answer(
+        query, FIBER_SCHEMA, system_prompt=FIBER_SYSTEM_PROMPT, data_sources=["fiber"]
+    )
+    roles, elsewhere = {}, set()
+    for role in content.get("open_roles") or []:
+        if not isinstance(role, dict) or not all(isinstance(role.get(k), str) and role[k].strip() for k in ("title", "url")):
+            continue  # nothing to check or to show
+        try:
+            own = _posts_own_jobs(role["url"].strip(), domain)  # judged as given, before an Ashby link is rewritten
+            url = _posting_url(role["url"])
+            key = _posting_key(url)
+        except ValueError:  # not a URL at all
+            continue
+        if not own:
+            elsewhere.add(urlparse(url).netloc or url)
+            continue
+        roles.setdefault(key, {
+            "title": role["title"].strip(),
+            "url": url,
+            "location": str(role.get("location") or "unknown"),
+            "remote_or_relocation": str(role.get("remote_or_relocation") or "unknown"),
+        })  # fmt: skip
+    if elsewhere:
+        logger.info("%s: left out Fiber postings on other sites (%s)", name, ", ".join(sorted(elsewhere)))
+    return list(roles.values()), grounding.get("open_roles")
+
+
 def research_company(name, domain, profile, *, search_type="auto"):
     """Research one company.
 
     Returns {"name", "domain", "content": <schema dict>, "grounding": {field: {confidence, urls}},
-    "role_source": "main" | "ats_fallback" | "none", "dead_roles": [{"title", "url"}],
+    "role_source": "main" | "fiber" | "fiber+main" | "ats_fallback" | "none", "dead_roles": [{"title", "url"}],
     "warnings": [str]}.
-    Every posting URL is checked and dead ones are dropped. If no live role remains for a verified
-    company, a second search restricted to ATS domains looks for postings (also checked); when that
-    search fails the main research is kept and the failure is listed in "warnings".
+    Every posting URL is checked and dead ones are dropped. With [search].role_source = "fiber", a verified
+    company's open postings are also asked from Fiber's jobs database: live links first, Fiber's before the main
+    search's that it does not list, then unverified ones, MAX_ROLES in all. If no live role remains for a
+    verified company, a second search restricted to ATS domains looks for postings (also checked). When the
+    Fiber search or the ATS search fails, the main research is kept and the failure is listed in "warnings".
     """
     query = (
         f"{name} ({domain}): what the company does, recent funding and growth signals, and its data/analytics "
@@ -280,6 +417,49 @@ def research_company(name, domain, profile, *, search_type="auto"):
     role_source = "main" if roles else "none"
 
     warnings = []
+    if profile["search"].get("role_source") == "fiber" and content["identity_verified"]:
+        try:
+            listed, listed_grounding = find_roles_on_fiber(name, domain, profile)
+        except Exception as exc:  # a second source: the main research is still worth saving
+            logger.warning("%s: Fiber job search failed (%s); keeping the main search's roles", name, exc)
+            warnings.append(f"Fiber job search failed: {type(exc).__name__}: {exc}")
+            listed, listed_grounding = [], None
+        from_fiber, dead = verify_roles(listed)
+        dead_roles += [d for d in dead if d not in dead_roles]
+        if from_fiber:
+            mains = {}  # the main search's copy of each posting: its live one when it lists a posting twice
+            for role in roles:
+                key = _posting_key(role["url"])
+                if key not in mains or (role["link_status"] == "live" and mains[key]["link_status"] != "live"):
+                    mains[key] = role
+            # A posting both list keeps the main search's link, unless only Fiber's is live: that link is the one
+            # earlier runs saved, and the dashboard keeps the owner's status and note by link.
+            theirs = {}
+            for role in from_fiber:
+                key = _posting_key(role["url"])
+                same = mains.get(key)
+                theirs[key] = same if same and (same["link_status"] == "live" or role["link_status"] != "live") else role
+            only_main = [role for role in roles if _posting_key(role["url"]) not in theirs]
+            # Checked links first: an unverified one must not push a live one past the cap.
+            kept = sorted([*theirs.values(), *only_main], key=lambda role: role["link_status"] != "live")[:MAX_ROLES]
+            fibers = sum(_posting_key(role["url"]) in theirs for role in kept)
+            if fibers:
+                main_links = any(role is copy for role in kept for copy in roles)
+                roles = content["open_roles"] = kept
+                role_source = "fiber+main" if fibers < len(kept) else "fiber"
+                # Cite what the kept links came from, Fiber's sources first, at the lower of the two confidences.
+                cited = [g for g in (listed_grounding, grounding.get("open_roles") if main_links else None) if g]
+                if cited:
+                    levels = ("low", "medium", "high")
+                    known = [g["confidence"] for g in cited if g["confidence"] in levels]
+                    urls = list(dict.fromkeys(url for g in cited for url in g["urls"]))
+                    grounding["open_roles"] = {"confidence": min(known, key=levels.index) if known else None, "urls": urls}
+                else:
+                    grounding.pop("open_roles", None)
+                # a posting that is open under one link is not a dead one for its other link
+                kept_keys = {_posting_key(role["url"]) for role in kept}
+                dead_roles = [d for d in dead_roles if _posting_key(d["url"]) not in kept_keys]
+
     if not roles and content["identity_verified"]:
         logger.info("%s: no live roles in main search; trying ATS fallback", name)
         try:
