@@ -1,0 +1,4 @@
+# Copy to prospects.csv (git-ignored). One prospect per line: name,domain
+# Lines starting with # are ignored; columns after the domain are ignored too.
+Ramp,ramp.com
+Notion,notion.so

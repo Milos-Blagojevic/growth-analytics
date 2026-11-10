@@ -178,6 +178,38 @@ def search_structured(
     )
 
 
+_CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def _compact_grounding(rows):
+    """Merge per-subfield grounding (e.g. open_roles[3].url) into one entry per top-level field.
+
+    Keeps the lowest confidence and the union of cited URLs.
+    """
+    merged = {}
+    for row in rows:
+        key = row.field.split("[")[0].split(".")[0]
+        entry = merged.setdefault(key, {"confidence": row.confidence, "urls": []})
+        if _CONFIDENCE_ORDER[row.confidence] < _CONFIDENCE_ORDER[entry["confidence"]]:
+            entry["confidence"] = row.confidence
+        for citation in row.citations:
+            if citation.url not in entry["urls"]:
+                entry["urls"].append(citation.url)
+    return merged
+
+
+def grounded_answer(query, output_schema, *, system_prompt=None, **kwargs):
+    """search_structured() unwrapped: (content, grounding).
+
+    content is the schema-shaped dict; grounding is {top-level field: {"confidence", "urls"}}.
+    Raises RuntimeError when Exa returns no structured output.
+    """
+    output = search_structured(query, output_schema, system_prompt=system_prompt, **kwargs).output
+    if output is None or not isinstance(output.content, dict):
+        raise RuntimeError(f"Exa returned no structured output for query: {query[:80]}")
+    return output.content, _compact_grounding(output.grounding)
+
+
 # Search-type wrappers. All forward to search(); latencies are approximate (Exa docs).
 
 

@@ -120,25 +120,6 @@ ATS_SYSTEM_PROMPT = (
     "belongs to the company at the given domain. Never guess; return an empty list if nothing matches."
 )
 
-_CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
-
-
-def _compact_grounding(rows):
-    """Merge per-subfield grounding (e.g. open_roles[3].url) into one entry per top-level field.
-
-    Keeps the lowest confidence and the union of cited URLs.
-    """
-    merged = {}
-    for row in rows:
-        key = row.field.split("[")[0].split(".")[0]
-        entry = merged.setdefault(key, {"confidence": row.confidence, "urls": []})
-        if _CONFIDENCE_ORDER[row.confidence] < _CONFIDENCE_ORDER[entry["confidence"]]:
-            entry["confidence"] = row.confidence
-        for citation in row.citations:
-            if citation.url not in entry["urls"]:
-                entry["urls"].append(citation.url)
-    return merged
-
 
 def _roles_clause(profile):
     search = profile["search"]
@@ -154,14 +135,6 @@ def _location_clause(profile):
         " In remote_or_relocation, quote what the posting says about allowed regions and relocation;"
         " do not judge the candidate's eligibility."
     )
-
-
-def _structured(query, schema, system_prompt, **kwargs):
-    response = exa_client.search_structured(query, schema, system_prompt=system_prompt, **kwargs)
-    output = response.output
-    if output is None or not isinstance(output.content, dict):
-        raise RuntimeError(f"Exa returned no structured output for query: {query[:80]}")
-    return output
 
 
 @lru_cache(maxsize=None)
@@ -275,13 +248,15 @@ def find_roles_on_ats(name, domain, profile):
         f"Open job postings at {name} ({domain}) for any of: {_roles_clause(profile)}. "
         f"{profile['search']['work_mode']}{_location_clause(profile)}"
     )
-    output = _structured(query, ATS_SCHEMA, ATS_SYSTEM_PROMPT, include_domains=ATS_DOMAINS)
+    content, grounding = exa_client.grounded_answer(
+        query, ATS_SCHEMA, system_prompt=ATS_SYSTEM_PROMPT, include_domains=ATS_DOMAINS
+    )
     roles = [
         {k: v for k, v in role.items() if k != "company_verified"}
-        for role in output.content["open_roles"]
+        for role in content["open_roles"]
         if role.get("company_verified")
     ]
-    return roles, _compact_grounding(output.grounding).get("open_roles")
+    return roles, grounding.get("open_roles")
 
 
 def research_company(name, domain, profile, *, search_type="auto"):
@@ -299,9 +274,7 @@ def research_company(name, domain, profile, *, search_type="auto"):
         f"team. Also currently open job postings for any of: {_roles_clause(profile)}. "
         f"{profile['search']['work_mode']}{_location_clause(profile)}"
     )
-    output = _structured(query, RESEARCH_SCHEMA, SYSTEM_PROMPT, type=search_type)
-    content = output.content
-    grounding = _compact_grounding(output.grounding)
+    content, grounding = exa_client.grounded_answer(query, RESEARCH_SCHEMA, system_prompt=SYSTEM_PROMPT, type=search_type)
     roles, dead_roles = verify_roles(content["open_roles"])
     content["open_roles"] = roles
     role_source = "main" if roles else "none"
