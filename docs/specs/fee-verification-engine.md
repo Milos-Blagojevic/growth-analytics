@@ -1,6 +1,6 @@
 # Spec: payment fee verification engine on synthetic data
 
-Status: ready to implement. Three decisions need the owner first (section 17); none of them blocks phases 1–5.
+Status: phases 1–9 built in the private repository `Milos-Blagojevic/payments-fee-audit` as stacked pull requests #1–#10 (2026-10-14; phase 9's recorded extraction cost USD 0.22). Phase 10 (going public, Pages, dashboard link) waits for the owner. The owner's decisions are recorded in section 17.
 Owner: Milos Blagojevic. Implementer: a coding agent working from this document alone.
 
 ## 1. Motivation
@@ -69,7 +69,7 @@ Publish a public, reproducible project that, for a fictional payments company an
 | Contracts | YAML files, one per contract version, with clause ids, effective dates and amendments; loaded into tables by a Python step |
 | Data | Fully synthetic and seeded, generated in CI; no real or scraped data, no API calls in the default build |
 | Period | 2026-01-01 to 2026-06-30 by default (configurable) |
-| Location | A new public GitHub repository under the owner's account (proposed name `payments-fee-audit`; confirm with the owner before creating it) |
+| Location | A new GitHub repository `payments-fee-audit` under the owner's account, private until the first shareable state (end of phase 6), then public |
 
 ## 4. Non-goals
 
@@ -474,34 +474,43 @@ Tone: plain and precise. Every number comes from the pipeline.
 
 GitHub Actions on push and pull request: install pinned dependencies, then `make all`, pytest, dbt tests, the differential check and the evaluation targets. Any failure fails the build. On `main`, publish dbt docs (and the report site, if chosen) to GitHub Pages, after the owner approves publishing. No secrets are needed.
 
-## 17. Open decisions for the owner
+## 17. Owner decisions
 
-### 17.1 Repository name and publishing
+### 17.1 Repository name and publishing (decided)
 
-Proposed: `payments-fee-audit`. Ask before creating the repository and before the first publish to GitHub Pages.
+`payments-fee-audit`, created private; work goes through one pull request per phase. Ask the owner before making it public (planned at the end of phase 6) and before the first publish to GitHub Pages.
 
-### 17.2 Report layer
+### 17.2 Report layer (decided: Evidence.dev)
 
-The default is generated markdown and CSV in `reports/` plus dbt docs, which is enough for the first shareable state. If a richer site is wanted, use the same tool the owner picks for his attribution project, so his portfolio is consistent. The candidates are:
+Generated markdown and CSV in `reports/` plus dbt docs remain the base outputs. On top of them, an **Evidence.dev** site (SQL-first pages on the DuckDB file; adds Node, with pinned npm versions) presents the marts, the evaluation and the dispute queue. It lives in `site/`, is built by `make site` (not part of `make all`, so the Python build needs no Node) and is checked in CI. The other candidates were Quarto and Observable Framework.
 
-- **Evidence.dev:** SQL-first pages on the DuckDB file; looks like a BI tool; adds Node.
-- **Quarto:** narrative report with Python charts; best for methods text.
-- **Observable Framework:** the most polished interactive visuals, with the most JavaScript to maintain.
+The report layer may read only marts, the `evaluation` schema and `reports/` exports.
 
-**The implementer must not choose.** The report layer may read only marts, the `evaluation` schema and `reports/` exports.
+### 17.3 Phase 9: LLM contract extraction (decided: build, Claude Opus, $5 budget)
 
-### 17.3 Optional phase: LLM contract extraction
-
-- **What it would add:**
+- **What it adds:**
   - The generator also writes each contract as prose (`contracts/text/*.md`), with realistic legal wording, cross-references and one amendment letter.
-  - An extraction step uses an LLM to turn the text into contract YAML.
+  - An extraction step uses the latest Claude Opus model (Anthropic API) to turn the text into contract YAML.
   - An evaluation scores the extracted terms field by field against the ground-truth YAML.
   - A **human approval gate** applies: extracted terms carry `approved: false`, and the engine refuses unapproved terms.
-- **Why it matters:** it shows AI-native work with guardrails and an evaluation harness, which the role lists explicitly.
-- **Costs:**
-  - an API key, and a small model bill (a handful of contracts, re-run on change),
-  - a non-deterministic step, so it stays out of `make all` and CI uses recorded outputs.
-- Ask the owner whether to build it, which model provider to use, and the budget.
+- **Why it matters:** it shows AI-native work with guardrails and an evaluation harness.
+- **Costs and limits:**
+  - `ANTHROPIC_API_KEY` from the new repository's own environment; total spend for development and recording at most $5,
+  - a non-deterministic step, so it stays out of `make all`, and CI scores recorded outputs.
+
+### 17.4 Implementation decisions (resolved during phase 1–2)
+
+The binding detail lives in the repository's `docs/data-contract.md`. Departures from this spec:
+
+- **Kestrel fees are all billed in EUR:** Faster Payments €0.30 instead of £0.25; SWIFT 0.10% of the EUR equivalent at the execution-hour mid, minimum €8 and cap €40 instead of $8/$40. Keeps every provider fee in one currency, so M02 needs no FX.
+- **All card payments are in EUR** (new assumption A11), so tiers and card fees need no conversion; FX applies to payouts only.
+- **Kestrel amendment (v2, 2026-04-01) adds a Polish Elixir rail** (€0.30). It is the "rail launched mid-period" that L01 needs; client agreements get a matching version 2.
+- **Tier bounds are integer minor units** (`up_to_minor`), exclusive upper bounds.
+- **Refund markup credit** is minus the *expected* markup of the original payment, so an overcharge on the original is counted once, on the original.
+- **FX check is a cap:** the expected FX row is the largest EUR debit the cap allows; only a debit above it is a finding. D12 is detected from the rate timestamp on the Kestrel statement.
+- **Brightpay volume discount** is billed at 1.40% per transaction and settled as a monthly adjustment credit for EEA consumer volume above €1.5M.
+- **N08 added:** Brightpay sometimes rounds ties half-up instead of half-even. These become `rounding` findings, never overcharges, so the `rounding` category is exercised.
+- **Repository-level shape:** raw tables are all `VARCHAR` as in the source files (parsing only in staging and the reference engine); the ledger is exported in daily files that lag one day.
 
 ## 18. Phases and acceptance criteria
 
