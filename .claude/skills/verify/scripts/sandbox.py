@@ -53,14 +53,19 @@ def seed(root, code):
     shutil.copy(code / "profile.example.toml", root / "profile.toml")
     shutil.copy(code / "companies.example.csv", root / "companies.csv")
     roles = [("Analytics Engineer", "https://jobs.ashbyhq.com/acme/1", "live")]
+    # A role seen only on a third-party site. Set on the result, not through the builder: an older tree's has no such option.
+    lead = data.result("Gamma", "gamma.dev", fit=data.fit(58, "check_careers", "Head of Data Science"))
+    lead["research"]["third_party_roles"] = [{"title": "Head of Data Science", "url": "https://hirify.me/jobs/1347972",
+                                              "location": "Remote", "remote_or_relocation": "Remote (EU)"}]
     # One run in the old format (no _run.json) and one in the current one: both stay in out/ on the volume.
     data.write_run(root, "20260901-090000", [data.result("Acme", "acme.com", fit=data.fit(70, "consider"))])
     data.write_run(root, "20261001-090000", [
         data.result("Acme", "acme.com", fit=data.fit(84, "apply", *roles[0][:2]), roles=roles),
         data.result("Beta <b>&</b> Co", "beta.io", fit=data.fit(55, "stretch")),
+        lead,
         data.result("Broken", "broken.dev", error="Exa timed out"),
     ], manifest={"mode": "full", "started_at": "2026-10-01T08:55:00", "saved_at": "2026-10-01T09:00:00",
-                 "companies": 3, "errors": 1, "exa": {"requests": 9, "dollars": 0.12},
+                 "companies": 4, "errors": 1, "exa": {"requests": 9, "dollars": 0.12},
                  "claude": {"model": "claude-sonnet-4-5", "input_tokens": 9000, "output_tokens": 1200}})
     data.write_interview(root, transcript=data.wispr(*data.INTERVIEW_TURNS), me="2",
                          prep=data.PREP, review=data.review_fields())

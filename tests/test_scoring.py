@@ -36,6 +36,41 @@ def test_unparsable_output_raises(profile, claude):
         scoring.score_company(research([LIVE]), profile, client=claude(None))
 
 
+LISTING = {"title": "Head of Data Science", "url": "https://hirify.me/jobs/1347972", "location": "Remote",
+           "remote_or_relocation": "Remote (Europe)"}
+
+
+@pytest.mark.parametrize(
+    ("roles", "model_verdict", "best_url", "expected"),
+    [
+        ([LIVE], "apply", LISTING["url"], ("check_careers", "")),  # Claude takes the listing for a posting
+        ([LIVE], "stretch", "http://www.hirify.me/jobs/1347972/?utm_source=x", ("check_careers", "")),
+        ([LIVE], "apply", "https://www.linkedin.com/company/acme/jobs", ("check_careers", "")),  # a page it was cited
+        ([LIVE], "consider", "https://jobs.ashbyhq.com/othercompany/1", ("check_careers", "")),
+        ([], "skip", LISTING["url"], ("skip", "")),
+        ([], "check_careers", "", ("check_careers", "")),
+        ([LIVE], "apply", LIVE["url"], ("apply", LIVE["url"])),  # a listing next to a real posting changes nothing
+        ([LIVE], "apply", "https://JOBS.ashbyhq.com/acme/1/application?utm_source=x", ("apply", "https://JOBS.ashbyhq.com/acme/1/application?utm_source=x")),
+        ([UNVERIFIED], "apply", "https://www.acme.com/careers/", ("consider", "https://www.acme.com/careers/")),
+    ],
+    ids=[
+        "listing-as-best-role", "listing-under-another-spelling", "source-page-as-best-role", "another-companys-posting",
+        "listing-url-on-a-skip", "listing-as-a-lead", "posting-as-best-role", "posting-under-another-spelling",
+        "unverified-posting-under-another-spelling",
+    ],
+)
+def test_the_role_to_apply_to_is_one_of_the_open_roles_never_a_third_party_listing(profile, claude, roles, model_verdict,
+                                                                                  best_url, expected):
+    fake = claude(verdict=model_verdict, best_role_title=LISTING["title"], best_role_url=best_url)
+
+    fit, _ = scoring.score_company({**research(roles), "third_party_roles": [LISTING]}, profile, client=fake)
+
+    assert (fit.verdict, fit.best_role_url) == expected
+    assert fit.best_role_title == LISTING["title"]  # what to look for on the careers page
+    sent = fake.calls[0]["messages"][0]["content"]
+    assert '"third_party_roles"' in sent and LISTING["url"] in sent  # Claude is shown the listing, as a lead
+
+
 NEUTRAL = {"target_role": 0.9, "region_excludes_candidate": 0.05, "onsite_or_hybrid_only": 0.1,
            "office_in_candidate_country": 0.1, "relocation": 0.2}
 SENIOR = [0.0, 0.05, 0.8, 0.15]
@@ -106,6 +141,29 @@ def test_a_screened_out_skip_keeps_at_most_three_concerns(profile):
 
     assert fit.concerns == ["A: below senior level", "B: below senior level",
                             "2 more open roles also failed the screen (see screen in out/)"]
+
+
+@pytest.mark.parametrize(
+    ("model_verdict", "best_url", "expected"),
+    [
+        ("check_careers", "", "check_careers"),
+        ("apply", "https://acme.com/jobs/Office-Manager", "check_careers"),  # Claude overrules the screen: not to apply
+        ("skip", "", "skip"),
+    ],
+    ids=["listing-as-a-lead", "the-dropped-role-as-best-role", "nothing-fits"],
+)
+def test_a_third_party_listing_sends_a_company_whose_roles_all_fail_to_claude_with_those_roles(profile, claude, jev_api,
+                                                                                               model_verdict, best_url, expected):
+    jev_api.on(answer_by_title)
+    acme = {**research([role("Office Manager")]), "third_party_roles": [LISTING]}
+    fake = claude(score=40, verdict=model_verdict, best_role_title=LISTING["title"], best_role_url=best_url)
+
+    fit, usage = scoring.score_company(acme, profile, screen=scoring.screen_roles(acme, profile), client=fake)
+
+    assert (fit.score, fit.verdict, fit.best_role_url) == (40, expected, "")
+    sent = fake.calls[0]["messages"][0]["content"]
+    assert "Office Manager" in sent and LISTING["title"] in sent  # the role Jev dropped stays in view
+    assert usage == {"input_tokens": 1200, "output_tokens": 300}
 
 
 def test_without_a_location_jev_is_not_asked_about_it(profile, jev_api):

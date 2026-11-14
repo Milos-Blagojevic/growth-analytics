@@ -14,6 +14,7 @@
     <span class="tags">
       {% if c.status and c.status != 'new' %}<span class="tag status s-{{ c.status }}">{{ c.status | status }}</span>{% endif %}
       {% if c.notes %}<span class="tag" title="{{ c.notes }}">notes</span>{% endif %}
+      {% if c.third_party_roles %}<span class="tag" title="Seen only on a third-party site: look for it on the company's careers page">third-party listing</span>{% endif %}
       {% if c.scope_note %}<span class="tag">scope</span>{% endif %}
       {% if c.gap_note %}<span class="tag">gap</span>{% endif %}
       {% if c.proof_ideas %}<span class="tag">{{ c.proof_ideas | length }} project idea{{ 's' if c.proof_ideas | length > 1 }}</span>{% endif %}

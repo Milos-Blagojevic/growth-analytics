@@ -107,6 +107,22 @@
   </section>
   {% endif %}
 
+  {% if r.third_party_roles %}
+  <section>
+    <div class="eyebrow">Seen only on third-party sites</div>
+    <p class="muted small">Not found on {{ r.name }}'s own site or job board. These pages may ask for an account or payment, or show a job that has closed: look for the role on the company's careers page.</p>
+    <ul class="roles">
+      {% for role in r.third_party_roles %}
+      <li>
+        <a href="{{ role.url }}" target="_blank" rel="noopener">{{ role.title }}</a>
+        <span class="muted small">{{ role.url | host }}</span>
+        <div class="muted small">{{ role.location }}{% if role.remote_or_relocation %} · {{ role.remote_or_relocation }}{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   {% if r.dead_roles %}
   <section>
     <div class="eyebrow">Dead links dropped</div>

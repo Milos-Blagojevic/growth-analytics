@@ -134,8 +134,15 @@ def format_company(result):
         lines.append(f"Gap: {fit['gap_note']}")
     lines += [f"Build: {idea}" for idea in fit.get("proof_ideas", [])]
     lines.append(f"Next: {fit['next_step']}")
+    lines += _listing_lines(result)
     lines += _warning_lines(result)
     return "\n".join(lines)
+
+
+def _listing_lines(result):
+    """A line per posting the research saw only on a third-party site (a lead, not a posting), or nothing."""
+    listings = (result.get("research") or {}).get("third_party_roles") or []
+    return [f"third-party listing: {listing['title']} | {listing['url']}" for listing in listings]
 
 
 def _warning_lines(result):
@@ -288,7 +295,7 @@ def cmd_run(args):
             print(f"  roles: {len(c['open_roles'])} (source: {r['research']['role_source']})")
             for role in c["open_roles"]:
                 print(f"  - {role['title']} | {role['location']} | {role['remote_or_relocation']} | {role['url']}")
-            for line in _warning_lines(r):
+            for line in _listing_lines(r) + _warning_lines(r):
                 print(f"  {line}")
     elif deliver:
         messages = telegram.pack_blocks(build_notification(results))

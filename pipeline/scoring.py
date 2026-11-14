@@ -9,6 +9,7 @@ import anthropic
 from pydantic import BaseModel
 
 from clients import jev
+from pipeline import research as postings  # "research" is one company's result throughout this module
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 
@@ -63,6 +64,14 @@ the gap in the score (typically 10-20 points lower). For roles outside the liste
 and leave gap_note empty and proof_ideas an empty list.
 - Posting links: link_status "unverified" means the page could not be confirmed open; the verdict for such \
 a role is at most "consider", and next_step must say to confirm the posting is still live.
+- Third-party listings: `third_party_roles` holds roles the research saw only on third-party sites (job \
+aggregators, recruiters' boards) and could not find on the company's own site or job board. Such a page may ask \
+for an account or payment before it shows where to apply, and may show a job that has closed, so a listing is a \
+lead and never a posting: never give "apply", "consider" or "stretch" for one, and never use its URL as \
+best_role_url. Judge the open roles first. Only when no open role is relevant and a listing is (a target role at \
+senior level or above whose stated region does not exclude the candidate's location), the verdict is \
+"check_careers" whatever the score: score only the company, set best_role_title to the listing's title, leave \
+best_role_url empty, and say in next_step to look for that role on the company's careers page.
 - Experience and stack fit: compare the posting's responsibilities and required tools with the candidate's \
 CV; the `description` field of a role holds the posting text when available, so prefer it over summaries. A \
 strong match on both is the strongest positive signal and can justify scores in the high 80s or 90s. A missing \
@@ -86,7 +95,8 @@ When open roles exist but none are relevant, score below 50 (skip). When the res
 all, the company may still deserve a manual look: score only the company (signals, data-team maturity, \
 overlap with the candidate's background) and use verdict "check_careers" if that score is >= 50, otherwise \
 "skip"; never "apply", "consider" or "stretch" without a posting. In that case say in next_step what to look \
-for on the careers page.
+for on the careers page. A relevant third-party listing (see above) makes the "skip" of either case \
+"check_careers", unless identity_verified is false.
 Be concise: each reason or concern is one short sentence; give at most 3 reasons and at most 3 concerns."""
 
 
@@ -188,19 +198,28 @@ def score_company(research, profile, *, screen=None, model=None, client=None):
     """Returns (Fit, usage) where usage is {"input_tokens", "output_tokens"}.
 
     With a `screen` (screen_roles), Claude sees only the roles that passed it, and a company whose roles all failed
-    gets a skip with score 0 without a Claude call.
+    gets a skip with score 0 without a Claude call, unless the research left third-party listings
+    (`third_party_roles`): then Claude judges those, with the failed roles in view. The best role has to be one of
+    the open roles that passed: any other link (a third-party listing, a source page, a role the screen dropped) is
+    taken off it, and an apply, consider or stretch for it becomes "check_careers".
     """
+    listings = research.get("third_party_roles") or []  # runs researched before the field have none
+    choosable = research["content"]["open_roles"]  # what the best role can be
     if screen and screen["roles"]:
-        if not any(r["passed"] for r in screen["roles"]):
+        choosable = [role for role, r in zip(choosable, screen["roles"], strict=True) if r["passed"]]
+        if choosable:
+            research = {**research, "content": {**research["content"], "open_roles": choosable}}
+        elif not listings:
             return _screened_out(screen), {"input_tokens": 0, "output_tokens": 0}
-        passed = [role for role, r in zip(research["content"]["open_roles"], screen["roles"], strict=True) if r["passed"]]
-        research = {**research, "content": {**research["content"], "open_roles": passed}}
     client = client or _client()
+    evidence = {"research": research["content"], "grounding": research["grounding"]}
+    if listings:
+        evidence["third_party_roles"] = listings
     user_content = (
         "Candidate:\n"
         + json.dumps(candidate(profile), indent=2)
         + "\n\nCompany research (with source grounding):\n"
-        + json.dumps({"research": research["content"], "grounding": research["grounding"]}, indent=2)
+        + json.dumps(evidence, indent=2)
     )
     response = client.messages.parse(
         model=model or os.environ.get("SCORING_MODEL", DEFAULT_MODEL),
@@ -212,11 +231,14 @@ def score_company(research, profile, *, screen=None, model=None, client=None):
     fit = response.parsed_output
     if fit is None:
         raise RuntimeError(f"Claude returned no parsable output for {research['name']} (stop_reason={response.stop_reason})")
-    if not research["content"]["open_roles"] and fit.verdict in ("apply", "consider", "stretch"):
+    best = next((role for role in choosable if postings.is_listed(fit.best_role_url, [role])), None)
+    if fit.best_role_url and not best:
+        fit.best_role_url = ""  # not one of the postings: a page to look from, not to apply through
+        if fit.verdict in ("apply", "consider", "stretch"):
+            fit.verdict = "check_careers"
+    if not choosable and fit.verdict in ("apply", "consider", "stretch"):
         fit.verdict = "check_careers"  # never recommend applying without a posting
-    if fit.verdict == "apply":
-        best = next((r for r in research["content"]["open_roles"] if r["url"] == fit.best_role_url), None)
-        if best and best.get("link_status") == "unverified":
-            fit.verdict = "consider"  # a posting that could not be confirmed open is never an "apply"
+    if fit.verdict == "apply" and best and best.get("link_status") == "unverified":
+        fit.verdict = "consider"  # a posting that could not be confirmed open is never an "apply"
     usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
     return fit, usage

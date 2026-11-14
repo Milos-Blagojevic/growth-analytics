@@ -111,6 +111,23 @@ def test_company_page_shows_a_fiber_result_and_no_chip_for_a_missing_confidence(
     assert "open roles</dt>" in page and 'class="conf' not in page
 
 
+def test_third_party_listings_show_on_the_card_and_in_the_details_and_old_results_load_without_them(client, root):
+    assert "Seen only on third-party sites" not in client.get("/c/acme.com").text  # the fixture's results predate the key
+    assert "third-party listing" not in client.get("/").text
+
+    run_id, _ = stamp(1)
+    listing = ("Head of Data <b>Science</b>", "https://www.hirify.me/jobs/1347972-head-data-science")
+    write_run(root, run_id, [result("Acme", "acme.com", fit=fit(61, "check_careers", "Head of Data Science"),
+                                    third_party=[listing])])
+
+    board = client.get("/", params={"verdict": "check_careers"}).text
+    assert "Acme" in board and "Head of Data Science" in board and "third-party listing</span>" in board
+    page = client.get("/c/acme.com").text
+    assert "Seen only on third-party sites" in page
+    assert (f'<a href="{listing[1]}" target="_blank" rel="noopener">Head of Data &lt;b&gt;Science&lt;/b&gt;</a>\n'
+            '        <span class="muted small">hirify.me</span>') in page
+
+
 def test_inbox_window(client):
     week = client.get("/inbox", params={"days": 7}).text
     assert "Growth Analyst" in week and "Data Lead" not in week

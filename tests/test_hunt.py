@@ -232,6 +232,44 @@ def test_run_scores_and_sends_digest_to_telegram(exa, http, workdir, monkeypatch
     assert "Sent 1 Telegram message(s)" in capsys.readouterr().out
 
 
+def test_a_role_listed_only_on_a_third_party_site_becomes_check_careers_with_the_listing_named(exa, http, workdir,
+                                                                                               monkeypatch, claude, capsys):
+    (workdir / "companies.csv").write_text("Acme,acme.com\n")
+    listing = {"title": "Head of Data Science", "url": "https://hirify.me/jobs/1347972-head-data-science",
+               "location": "Remote", "remote_or_relocation": "Remote (Europe)"}
+    main = structured_response(company("Acme", "acme.com", [listing]))
+    exa.on_search(lambda body: structured_response({"open_roles": []}) if "includeDomains" in body else main)
+    http.get(listing["url"], status=200, body="<h1>Head of Data Science</h1><a href='/login'>Log in to apply</a>")
+    # Claude takes the listing for a posting to apply to
+    fake = claude(score=78, verdict="apply", best_role_title=listing["title"], best_role_url=listing["url"])
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+    assert hunt.cmd_run(run_args(dry_run=True)) == 0
+
+    saved = saved_results(workdir)["acme.com.json"]
+    assert saved["research"]["content"]["open_roles"] == []
+    assert saved["research"]["third_party_roles"] == [listing]
+    assert (saved["fit"]["verdict"], saved["fit"]["best_role_url"]) == ("check_careers", "")
+    out = capsys.readouterr().out
+    assert "0 apply, 0 consider, 0 stretch, 1 check careers, 0 skip" in out
+    assert "[78] CHECK CAREERS: Acme (acme.com)\nRole: Head of Data Science\nLocation:" in out  # no link to apply through
+    assert f"Next: Apply.\nthird-party listing: Head of Data Science | {listing['url']}" in out
+
+
+def test_research_only_lists_third_party_listings_under_the_roles(exa, http, workdir, capsys):
+    (workdir / "companies.csv").write_text("Acme,acme.com\n")
+    listing = {"title": "Head of Data Science", "url": "https://hirify.me/jobs/1347972-head-data-science",
+               "location": "Remote", "remote_or_relocation": "Remote (Europe)"}
+    main = structured_response(company("Acme", "acme.com", [listing]))
+    exa.on_search(lambda body: structured_response({"open_roles": []}) if "includeDomains" in body else main)
+    http.get(listing["url"], status=200)
+
+    assert hunt.cmd_run(run_args(research_only=True)) == 0
+
+    assert f"roles: 0 (source: none)\n  third-party listing: Head of Data Science | {listing['url']}" in capsys.readouterr().out
+
+
 def test_run_skips_claude_for_a_company_jev_screens_out_and_records_jev_cost(exa, http, workdir, monkeypatch, claude,
                                                                             jev_api, capsys):
     research_exa(exa, http)
