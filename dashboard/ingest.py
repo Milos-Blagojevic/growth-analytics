@@ -62,7 +62,7 @@ def ingest(conn, root, sig=None):
     root = Path(root)
     problems = []
     with conn:
-        for table in db.DERIVED_TABLES:  # user tables (tracking, side_projects, jobs, mail_decisions) are never touched
+        for table in db.DERIVED_TABLES:  # user tables (db.py lists them) are never touched
             conn.execute(f"DELETE FROM {table}")
         for run_dir in runs.run_dirs(root / OUT_DIR):
             try:

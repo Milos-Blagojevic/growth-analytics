@@ -24,10 +24,13 @@
                 hx-vals='{{ {"update": s.id, "action": "apply", "kind": i.kind, "ref": i.ref} | tojson }}'>Mark {{ s.status | status | lower }}</button>
       </div>
       {% else %}
-      <p class="muted small">None of your tracked applications matches this company. If it is one of yours, set its status yourself.</p>
+      <p class="muted small">None of your tracked applications matches this company. If it is one of yours, add it to the pipeline, or set its status on the Board when the company is there.</p>
       {% endfor %}
       <div class="suggestion-foot">
-        <span></span>
+        {% if s.targets %}<span></span>{% else %}
+        <button class="btn sm" type="button" hx-post="/mail/decide"
+                hx-vals='{{ {"update": s.id, "action": "add"} | tojson }}'>Add to pipeline as {{ s.status | status | lower }}</button>
+        {% endif %}
         <button class="btn ghost sm" type="button" hx-post="/mail/decide" hx-vals='{{ {"update": s.id, "action": "dismiss"} | tojson }}'>Dismiss</button>
       </div>
     </article>

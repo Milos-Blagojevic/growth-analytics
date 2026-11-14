@@ -3,9 +3,9 @@
 Two kinds of tables:
 - Derived (DERIVED_TABLES): copies of the pipeline files (out/, discovered.csv, watch_state.json, companies.csv,
   interviews/, mail/), rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
-- User (tracking, side_projects, jobs, mail_decisions): the owner's statuses, notes, side projects,
-  dashboard-started jobs and answers to email suggestions. They cannot be rebuilt, so they are never dropped;
-  change them only by appending to USER_MIGRATIONS.
+- User (tracking, side_projects, jobs, mail_decisions, mail_applications): the owner's statuses, notes, side
+  projects, dashboard-started jobs, answers to email suggestions and the applications added from them. They cannot
+  be rebuilt, so they are never dropped; change them only by appending to USER_MIGRATIONS.
 """
 
 import sqlite3
@@ -80,6 +80,18 @@ USER_MIGRATIONS = [
     UPDATE mail_decisions SET ref = substr(ref, 8) WHERE kind = 'company' AND ref LIKE 'http://%';
     UPDATE mail_decisions SET ref = substr(ref, 5) WHERE kind = 'company' AND ref LIKE 'www.%';
     UPDATE mail_decisions SET ref = substr(ref, 1, instr(ref, '/') - 1) WHERE kind = 'company' AND instr(ref, '/') > 0;
+    """,
+    # Applications added to Pipeline from an email update that matched nothing tracked (email_updates.decide, "add"):
+    # each has a tracking row of kind 'email' with ref = update_id, which its mail_decisions row names too. What the
+    # card shows is copied here: mail_updates is rebuilt from the mail/ files, and hunt.db can outlive them.
+    """
+    CREATE TABLE mail_applications (
+        update_id TEXT PRIMARY KEY,   -- mail_updates.id of the email the application was added from
+        company TEXT NOT NULL,        -- as the email names it; "" if it does not
+        role TEXT NOT NULL,           -- "" if the email names none
+        sender TEXT NOT NULL,         -- "Name <address>": shown when the email names no company
+        web_link TEXT                 -- the email in Outlook
+    );
     """,
 ]
 

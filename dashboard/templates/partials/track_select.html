@@ -1,5 +1,6 @@
 <select class="status-select s-{{ track.status }}" name="status" aria-label="Status"
         hx-post="/track" hx-vals='{{ {"kind": track.kind, "ref": track.ref, "variant": "select"} | tojson }}' hx-swap="outerHTML"
         {% if reload %}hx-on::after-request="if (event.detail.successful) location.reload()"{% endif %}>
-  {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if s == track.status }}>{{ s | status }}</option>{% endfor %}
+  {# An application added from email has no Board card to go back to: as New it would be gone for good. #}
+  {% for s in statuses if not (s == 'new' and track.kind == 'email') %}<option value="{{ s }}" {{ 'selected' if s == track.status }}>{{ s | status }}</option>{% endfor %}
 </select>
