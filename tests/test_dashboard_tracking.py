@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -58,6 +59,20 @@ def test_status_follows_the_card_and_feeds_the_pipeline(root, app_client):
     assert "Analytics Engineer" in pipeline and "Gamma" in pipeline
 
 
+def test_changing_a_status_on_pipeline_reloads_the_page(root, app_client):
+    track(app_client, "posting", ACME_URL, status="applied")
+    columns = app_client.get("/pipeline").text.split('class="kanban"')[1]
+    sent = json.loads(re.search(r"hx-vals='(.+?)'", columns).group(1))  # what the card's menu posts with the status
+
+    response = app_client.post("/track", data=sent | {"status": "offer"})
+
+    # The card belongs in another column now: htmx reloads the page on this answer.
+    assert (response.status_code, response.headers.get("HX-Refresh")) == (204, "true")
+    conn = db.connect(root)
+    assert [i["title"] for i in tracking.pipeline(conn)["offer"]] == ["Analytics Engineer"]
+    conn.close()
+
+
 def test_dismissed_cards_leave_the_board_unless_asked_for(app_client):
     track(app_client, "posting", "https://beta.io/jobs/1", status="dismissed")
 
@@ -87,6 +102,7 @@ def test_watch_postings_can_be_tracked_from_the_inbox(app_client):
 
 def test_invalid_tracking_is_rejected(app_client):
     assert track(app_client, "posting", ACME_URL, status="hired").status_code == 400
+    assert track(app_client, "posting", ACME_URL, status="hired", variant="reload").status_code == 400  # no reload
     assert track(app_client, "job", ACME_URL, status="saved").status_code == 400
 
 

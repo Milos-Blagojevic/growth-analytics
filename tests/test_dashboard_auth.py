@@ -87,14 +87,15 @@ def test_sessions_expire_and_end_when_the_password_changes():
 
 
 def test_malformed_sessions_and_csrf_tokens_are_refused_not_crashed(client):
-    """Anyone can send a cookie or header: a non-ASCII signature or an absurdly long expiry must read as
-    "not logged in" / "bad token", never as a 500."""
+    """Anyone can send a cookie or header: a non-ASCII signature, an absurdly long expiry or an Origin that is no URL
+    must read as "not logged in" / "bad token" / "another site", never as a 500."""
     for cookie in ("1.\xe9", "9" * 5000 + ".x", "\xb2.x", "..", "1"):
         page = client.get("/", headers={b"cookie": f"{auth.COOKIE}={cookie}".encode("latin-1")}, follow_redirects=False)
         assert (page.status_code, page.headers["location"]) == (303, "/login?next=/"), cookie
 
     log_in(client)
     assert client.post("/logout", headers={b"x-csrf-token": "\xe9".encode("latin-1")}).status_code == 403
+    assert client.post("/logout", headers={"Origin": "http://[bad"}).status_code == 403
     assert client.get("/").status_code == 200  # still logged in: the bad token did nothing
 
 
@@ -120,8 +121,7 @@ def test_serving_beyond_loopback_needs_a_password(tmp_path, monkeypatch):
     entry.main()
     app, options = served[0]
     assert options == {"host": "0.0.0.0", "port": 4321}
-    client = make_client(app)
-    client.base_url = "https://hunt-production.up.railway.app"
+    client = make_client(app, "https://hunt-production.up.railway.app")
     response = log_in(client)
     assert "secure" in response.headers["set-cookie"].lower()
     assert client.get("/").status_code == 200

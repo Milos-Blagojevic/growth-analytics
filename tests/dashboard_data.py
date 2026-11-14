@@ -10,10 +10,11 @@ from interview import interviews
 BASE_URL = "http://127.0.0.1:8000"  # the dashboard only accepts loopback Host headers
 
 
-def client(app):
-    """TestClient that sends the app's CSRF token on every request, as the dashboard's pages do."""
-    test_client = TestClient(app, base_url=BASE_URL)
+def client(app, base_url=BASE_URL):
+    """TestClient that sends the app's CSRF token and the dashboard's own Origin on every request, as its pages do."""
+    test_client = TestClient(app, base_url=base_url)
     test_client.headers["X-CSRF-Token"] = app.state.csrf_token
+    test_client.headers["Origin"] = base_url
     return test_client
 
 

@@ -209,4 +209,6 @@ def test_requests_from_other_sites_are_refused(root, app):
     assert c.post("/track", data={"kind": "company", "ref": "acme.com", "status": "saved"},
                   headers={"X-CSRF-Token": ""}).status_code == 403
     assert c.get("/", headers={"Host": "evil.example"}).status_code == 400  # DNS rebinding
-    assert c.post("/runs", data=form, headers={"Origin": BASE_URL}).status_code == 204  # same origin is fine
+    assert c.post("/runs", data=form).status_code == 204  # same origin is fine
+    del c.headers["Origin"]  # a script that holds the token: no page of the dashboard sent this
+    assert c.post("/track", data={"kind": "company", "ref": "acme.com", "status": "saved"}).status_code == 403
