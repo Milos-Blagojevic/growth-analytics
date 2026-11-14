@@ -1,11 +1,12 @@
-"""Your status and notes per posting (keyed by URL) or per company without a posting (keyed by domain)."""
+"""Your status and notes per posting (keyed by URL), per company without a posting (keyed by domain) or per
+application added from an email update (keyed by the email's ID)."""
 
 from datetime import datetime
 
 STATUSES = ("new", "saved", "applied", "interviewing", "offer", "rejected", "dismissed")
 PIPELINE = ("saved", "applied", "interviewing", "offer", "rejected")  # pipeline page columns, in order
 APPLIED = {"applied", "interviewing", "offer", "rejected"}  # statuses that imply an application was sent
-KINDS = ("posting", "company")
+KINDS = ("posting", "company", "email")
 
 
 def key_for(best_role_url, domain):
@@ -59,6 +60,13 @@ def pipeline(conn):
 
 def _describe(conn, kind, ref):
     """Title, company name, domain and URL of a tracked item, from the latest saved data that mentions it."""
+    if kind == "email":  # added from an email update: nothing in the pipeline files describes it
+        row = conn.execute("SELECT * FROM mail_applications WHERE update_id = ?", [ref]).fetchone()
+        if row is None:
+            return {"title": ref, "name": "", "domain": None, "url": None}
+        link = row["web_link"] or ""
+        return {"title": row["role"] or "Role not named in the email", "name": row["company"] or row["sender"],
+                "domain": None, "url": link if link.startswith("https://") else None}
     if kind == "company":
         row = conn.execute(
             "SELECT name, domain FROM results WHERE domain = ? ORDER BY run_id DESC LIMIT 1", [ref]

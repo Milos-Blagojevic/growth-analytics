@@ -312,7 +312,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
 
     @app.post("/mail/decide")
     async def mail_decide(request: Request):
-        """Confirm an email update (set its suggested status on one tracked item) or dismiss it."""
+        """Confirm an email update (set its suggested status on one tracked item, or add it to the pipeline as a new
+        one when nothing tracked matches) or dismiss it."""
         form = await request.form()
         with connection() as conn:
             try:

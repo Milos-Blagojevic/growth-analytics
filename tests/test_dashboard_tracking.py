@@ -79,7 +79,7 @@ def test_back_to_new_without_notes_forgets_the_item(root, app_client):
 def test_watch_postings_can_be_tracked_from_the_inbox(app_client):
     url = "https://jobs.ashbyhq.com/acme/w1"
     response = track(app_client, "posting", url, status="saved", variant="select")
-    assert 'class="status-select s-saved"' in response.text
+    assert 'class="status-select s-saved"' in response.text and '<option value="new"' in response.text
 
     assert 'value="saved" selected' in app_client.get("/inbox", params={"days": 0}).text
     assert "Growth Analyst" in app_client.get("/pipeline").text
@@ -105,12 +105,13 @@ def test_your_data_survives_reingest_and_derived_schema_changes(root, app_client
     assert "dbt package" in app_client.get("/projects").text
 
 
-def test_a_company_status_saved_under_an_old_domain_spelling_follows_the_card(tmp_path):
+def test_a_company_status_saved_under_an_old_domain_spelling_follows_the_card(tmp_path, monkeypatch):
     """Before domains were normalised, a companies.csv row `Gamma,www.Gamma.dev` saved `www.Gamma.dev.json` and the
     check-careers status was keyed by that spelling; the next run saves `gamma.dev.json`. One card, status kept."""
     write_run(tmp_path, "20260108-090000", [result("Gamma", "www.Gamma.dev", fit=fit(60, "check_careers"))])
-    old = db.connect(tmp_path)
-    old.executescript("BEGIN; DELETE FROM user_schema; INSERT INTO user_schema VALUES (2); COMMIT;")  # pre-migration
+    with monkeypatch.context() as before:  # a hunt.db from before the migration
+        before.setattr(db, "USER_MIGRATIONS", db.USER_MIGRATIONS[:2])
+        old = db.connect(tmp_path)
     with old:
         old.execute("INSERT INTO tracking VALUES ('company', 'www.Gamma.dev', 'saved', 'Ask Ana', NULL, '2026-01-08T10:00:00')")
         old.execute("INSERT INTO tracking VALUES ('company', 'https://Delta.io/careers', 'saved', '', NULL, '2026-01-08T10:00:00')")

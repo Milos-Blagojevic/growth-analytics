@@ -13,6 +13,8 @@ REJECTED_ACME = mail_update(1, "rejected", "Acme Inc.", role="Analytics Engineer
 INVITE_BETA = mail_update(2, "interview", "", sender="ana@beta.io")  # no company named: matched by sender domain
 REJECTED_GAMMA = mail_update(3, "rejected", "Gamma")
 REJECTED_ZETA = mail_update(4, "rejected", "Zeta Labs")
+INVITE_ETA = mail_update(5, "interview", "Eta", role="Data Analyst")  # applied to outside the pipeline files
+REJECTED_ETA = mail_update(6, "rejected", "Eta GmbH", role="Data Analyst")
 
 
 @pytest.fixture
@@ -46,6 +48,14 @@ def suggested(root):
         conn.close()
 
 
+def cards(root, status):
+    conn = db.connect(root)
+    try:
+        return [(i["kind"], i["title"], i["name"], i["url"]) for i in tracking.pipeline(conn)[status]]
+    finally:
+        conn.close()
+
+
 def decide(app_client, update, action, **item):
     return app_client.post("/mail/decide", data={"update": update["id"], "action": action, **item})
 
@@ -55,11 +65,11 @@ def test_pipeline_suggests_status_changes_from_email(root, app_client):
 
     assert 'From your email <span class="count">3</span>' in page
     assert suggested(root) == [
-        ("Zeta Labs", "rejected", []),  # nothing tracked matches: shown, with Dismiss only
+        ("Zeta Labs", "rejected", []),  # nothing tracked matches: shown, to add to the pipeline or dismiss
         ("", "interviewing", ["Data Engineer"]),
         ("Acme Inc.", "rejected", ["Analytics Engineer", "Growth Analyst"]),  # the role named in the email first
     ]  # Gamma is rejected already, so its update needs nothing from you
-    assert "None of your tracked applications matches this company" in page
+    assert page.count("Add to pipeline as rejected") == 1 and "Add to pipeline as interviewing" not in page  # Zeta only
 
 
 def test_confirming_sets_the_status_once(root, app_client):
@@ -74,6 +84,51 @@ def test_confirming_sets_the_status_once(root, app_client):
     assert (acme["status"], other["status"]) == ("rejected", "applied")
     assert [s[0] for s in suggested(root)] == ["Zeta Labs", ""]
     assert decide(app_client, REJECTED_ACME, "apply", kind="posting", ref=ACME_WATCH_URL).status_code == 409
+
+
+def test_an_update_that_matches_nothing_tracked_is_added_to_the_pipeline(root, app_client):
+    write_mail(root, "20261017-090000", [INVITE_ETA])
+    assert decide(app_client, REJECTED_ACME, "add").status_code == 400  # Acme is tracked: its status is set instead
+
+    response = decide(app_client, INVITE_ETA, "add")
+
+    assert response.status_code == 204 and response.headers["HX-Refresh"] == "true"
+    assert cards(root, "interviewing") == [("email", "Data Analyst", "Eta", "https://outlook.live.com/5")]
+    menu = app_client.get("/pipeline").text.split('"kind": "email"')[1].split("</select>")[0]
+    assert 'value="interviewing" selected' in menu and 'value="new"' not in menu  # no Board card to go back to as New
+    conn = db.connect(root)
+    answer = conn.execute("SELECT decision, kind, ref, status FROM mail_decisions WHERE update_id = ?",
+                          [INVITE_ETA["id"]]).fetchone()
+    conn.close()
+    assert tuple(answer) == ("applied", "email", INVITE_ETA["id"], "interviewing")
+    app_client.post("/track", data={"kind": "email", "ref": INVITE_ETA["id"], "status": "applied"})
+    assert "Eta" not in [s[0] for s in suggested(root)]  # answered: not suggested again when its card moves back
+    assert decide(app_client, INVITE_ETA, "add").status_code == 409
+
+
+def test_a_later_email_from_the_company_moves_the_added_application(root, app_client):
+    write_mail(root, "20261017-090000", [INVITE_ETA])
+    decide(app_client, INVITE_ETA, "add")
+    write_mail(root, "20261018-090000", [REJECTED_ETA])
+
+    app_client.get("/pipeline")  # reads the new mail file
+    assert ("Eta GmbH", "rejected", ["Data Analyst"]) in suggested(root)
+    assert decide(app_client, REJECTED_ETA, "apply", kind="email", ref=INVITE_ETA["id"]).status_code == 204
+    assert cards(root, "interviewing") == [] and "Eta" in [card[2] for card in cards(root, "rejected")]
+
+
+def test_an_added_application_keeps_its_card_without_the_mail_file(root, app_client):
+    unnamed = mail_update(7, "rejected", "", sender="ana@theta.io")  # the email names no company and no role
+    path = write_mail(root, "20261017-090000", [INVITE_ETA, unnamed])
+    decide(app_client, INVITE_ETA, "add")
+    decide(app_client, unnamed, "add")
+    path.unlink()  # hunt.db copied to a machine without mail/, or the file removed
+
+    page = app_client.get("/pipeline").text
+
+    assert "Data Analyst" in page and [card[2] for card in cards(root, "interviewing")] == ["Eta"]
+    unnamed_card = ("email", "Role not named in the email", "ana@theta.io", "https://outlook.live.com/7")
+    assert unnamed_card in cards(root, "rejected")  # labelled by the sender
 
 
 def test_handled_updates_stay_handled_after_reingest_and_schema_changes(root, app_client):
@@ -107,9 +162,17 @@ def test_company_matching(company, sender, item, same):
 
 
 def test_only_https_outlook_links_are_shown(tmp_path):
-    write_mail(tmp_path, "20261015-090000", [mail_update(1, "rejected", "Zeta") | {"web_link": "javascript:alert(1)"},
-                                             mail_update(2, "rejected", "Eta")])
+    unsafe = mail_update(1, "rejected", "Zeta") | {"web_link": "javascript:alert(1)"}
+    safe = mail_update(2, "rejected", "Eta")
+    write_mail(tmp_path, "20261015-090000", [unsafe, safe])
 
-    page = client(create_app(tmp_path)).get("/pipeline").text
+    app_client = client(create_app(tmp_path))
+    page = app_client.get("/pipeline").text
+
+    assert "javascript:" not in page and 'href="https://outlook.live.com/2"' in page
+
+    for update in (unsafe, safe):  # the cards of added applications link to the email under the same rule
+        assert decide(app_client, update, "add").status_code == 204
+    page = app_client.get("/pipeline").text
 
     assert "javascript:" not in page and 'href="https://outlook.live.com/2"' in page

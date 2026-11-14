@@ -1,8 +1,10 @@
 """Status changes suggested by email updates (`hunt.py mail`, copied into mail_updates), which you confirm or dismiss.
 
 An update is matched to your tracked applications by company: the name Claude read from the email against each
-item's company name and domain, or the sender's domain against the item's domain. Nothing changes until you press
-a button; your answer is kept in mail_decisions, so a handled update is not suggested again.
+item's company name and domain, or the sender's domain against the item's domain. An update that matches none of
+them (an application the pipeline files do not know) can be added to the pipeline as a new item, kept in
+mail_applications. Nothing changes until you press a button; your answer is kept in mail_decisions, so a handled
+update is not suggested again.
 """
 
 import re
@@ -15,7 +17,7 @@ from dashboard import tracking
 MOVES_FROM = {"rejected": ("saved", "applied", "interviewing", "offer"), "interviewing": ("saved", "applied")}
 IGNORED_WORDS = {"inc", "llc", "ltd", "limited", "gmbh", "ag", "bv", "sa", "plc", "corp", "corporation", "co", "the",
                  "hq", "group", "team", "careers", "jobs", "talent"}
-ACTIONS = ("apply", "dismiss")
+ACTIONS = ("apply", "add", "dismiss")
 
 
 def _words(text):
@@ -72,7 +74,8 @@ def suggestions(conn):
 
 
 def decide(conn, update_id, action, kind="", ref=""):
-    """Applies the suggested status to the tracked item (kind, ref), or dismisses the update.
+    """Applies the suggested status to the tracked item (kind, ref), adds the update to the pipeline as a new item
+    with that status ("add", for an update that matches no tracked item), or dismisses the update.
     Raises LookupError for an unknown or handled update, ValueError for an item the update cannot apply to."""
     if action not in ACTIONS:
         raise ValueError(f"unknown action {action!r}")
@@ -85,7 +88,17 @@ def decide(conn, update_id, action, kind="", ref=""):
             conn.execute("INSERT INTO mail_decisions (update_id, decision, decided_at) VALUES (?, 'dismissed', ?)",
                          [update_id, now])
         return
-    if not any(i["kind"] == kind and i["ref"] == ref for i in suggestion["targets"]):
+    if action == "add":
+        if suggestion["targets"]:
+            raise ValueError("This email now matches an application you track. Reload the page.")
+        kind, ref = "email", update_id
+        with conn:  # OR REPLACE: a request that stopped before its decision was saved can be sent again
+            conn.execute(
+                "INSERT OR REPLACE INTO mail_applications (update_id, company, role, sender, web_link)"
+                " VALUES (?, ?, ?, ?, ?)",
+                [update_id, suggestion["company"], suggestion["role"], suggestion["sender"], suggestion["web_link"]],
+            )
+    elif not any(i["kind"] == kind and i["ref"] == ref for i in suggestion["targets"]):
         raise ValueError("This email does not match that application.")
     tracking.update(conn, kind, ref, status=suggestion["status"])
     with conn:

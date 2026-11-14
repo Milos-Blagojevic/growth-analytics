@@ -92,7 +92,7 @@ python -m clients.exa_client
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |
-| `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects, job history and answers to email suggestions (git-ignored; back it up with the dashboard stopped, since its `hunt.db-wal` and `hunt.db-shm` sidecars hold the newest changes until a checkpoint) |
+| `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects, job history, answers to email suggestions and the applications you added from email (git-ignored; back it up with the dashboard stopped, since its `hunt.db-wal` and `hunt.db-shm` sidecars hold the newest changes until a checkpoint) |
 | `outlook_token.json` | Your Outlook sign-in, from `outlook-login` (git-ignored; gives read access to your mail and lets drafts be created) |
 | `gmail_token.json` | Your Gmail sign-in, from `gmail-login` (git-ignored; same access) |
 | `mail/` | Rejections and interview invites `mail` found, one file per check that found some (git-ignored) |
