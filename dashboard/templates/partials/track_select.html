@@ -1,6 +1,8 @@
-<select class="status-select s-{{ track.status }}" name="status" aria-label="Status"
-        hx-post="/track" hx-vals='{{ {"kind": track.kind, "ref": track.ref, "variant": "select"} | tojson }}' hx-swap="outerHTML"
-        {% if reload %}hx-on::after-request="if (event.detail.successful) location.reload()"{% endif %}>
+{# On Pipeline (reload) /track answers with a page reload, so the card moves to its new column; elsewhere with this menu.
+   autocomplete="off": after a reload Firefox would otherwise put back the values the menus showed before it. -#}
+<select class="status-select s-{{ track.status }}" name="status" aria-label="Status" autocomplete="off"
+        hx-post="/track" hx-swap="outerHTML"
+        hx-vals='{{ {"kind": track.kind, "ref": track.ref, "variant": "reload" if reload else "select"} | tojson }}'>
   {# An application added from email has no Board card to go back to: as New it would be gone for good. #}
   {% for s in statuses if not (s == 'new' and track.kind == 'email') %}<option value="{{ s }}" {{ 'selected' if s == track.status }}>{{ s | status }}</option>{% endfor %}
 </select>

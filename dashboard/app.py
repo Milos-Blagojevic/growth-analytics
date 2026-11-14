@@ -83,6 +83,14 @@ def _safe_next(url):
     return url if url.startswith("/") and not url.startswith(("//", "/\\")) else "/"
 
 
+def _same_origin(origin, host):
+    """True when an Origin header names the host and port the request was sent to."""
+    try:
+        return urlparse(origin).netloc == host
+    except ValueError:  # not a URL, such as "http://[x"
+        return False
+
+
 def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
                chat_bot=False):
     """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
@@ -151,8 +159,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         if hostname not in allowed_hosts:
             return PlainTextResponse("Unknown host.", status_code=400)  # also blocks DNS rebinding
         if request.method not in ("GET", "HEAD"):
-            origin = request.headers.get("origin")
-            if origin is not None and urlparse(origin).netloc != host:
+            # Browsers send Origin with every POST, so one without it is not from a page of the dashboard.
+            if not _same_origin(request.headers.get("origin", ""), host):
                 return PlainTextResponse("Cross-origin request refused.", status_code=403)
             if not secrets.compare_digest(request.headers.get("x-csrf-token", "").encode(), csrf_token.encode()):
                 return PlainTextResponse("This page is out of date (the dashboard restarted). Reload it.", status_code=403)
@@ -272,7 +280,10 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 )
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
-            template = "partials/track_select.html" if form.get("variant") == "select" else "partials/track.html"
+            variant = form.get("variant")
+            if variant == "reload":  # Pipeline: the card belongs in another column now
+                return reload()
+            template = "partials/track_select.html" if variant == "select" else "partials/track.html"
             return templates.TemplateResponse(request, template, {"track": item})
 
     @app.get("/inbox", response_class=HTMLResponse)
