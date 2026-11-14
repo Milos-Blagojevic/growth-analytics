@@ -156,7 +156,8 @@ def _ingest_run(conn, run_dir):
         fit = r.get("fit") or {}
         conn.execute(
             "INSERT OR REPLACE INTO results VALUES (:run_id, :domain, :name, :verified, :business_summary, :signals,"
-            " :role_source, :dead_roles, :grounding, :warnings, :score, :verdict, :best_role_title, :best_role_url,"
+            " :role_source, :dead_roles, :third_party_roles, :grounding, :warnings, :score, :verdict,"
+            " :best_role_title, :best_role_url,"
             " :location_assessment, :next_step, :gap_note, :scope_note, :reasons, :concerns, :proof_ideas, :error)",
             {
                 "run_id": run_dir.name,
@@ -167,6 +168,8 @@ def _ingest_run(conn, run_dir):
                 "signals": content.get("signals"),
                 "role_source": research.get("role_source"),
                 "dead_roles": json.dumps(research.get("dead_roles", [])),
+                # runs saved before third-party links were set apart lack the key: there they are among the roles
+                "third_party_roles": json.dumps(research.get("third_party_roles", [])),
                 "grounding": json.dumps(research.get("grounding", {})),
                 "warnings": json.dumps(research.get("warnings", [])),  # runs saved before warnings lack the key
                 "score": fit.get("score"),

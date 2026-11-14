@@ -35,8 +35,9 @@ def fit(score, verdict, role="", url="", **extra):
     }
 
 
-def result(name, domain, *, fit=None, roles=(), error=None, warnings=None):
-    """A saved <domain>.json. `warnings=None` leaves the key out, as runs saved before research warnings did."""
+def result(name, domain, *, fit=None, roles=(), error=None, warnings=None, third_party=None):
+    """A saved <domain>.json. `warnings=None` and `third_party=None` leave the key out, as runs saved before research
+    warnings and before third-party listings did; `third_party` is [(title, url)]."""
     r = {"name": name, "domain": domain}
     if error:
         r["error"] = error
@@ -61,6 +62,10 @@ def result(name, domain, *, fit=None, roles=(), error=None, warnings=None):
     }
     if warnings is not None:
         r["research"]["warnings"] = warnings
+    if third_party is not None:
+        r["research"]["third_party_roles"] = [
+            {"title": t, "url": u, "location": "Remote", "remote_or_relocation": "Remote (EU)"} for t, u in third_party
+        ]
     if fit:
         r["fit"] = fit
     return r

@@ -1,3 +1,5 @@
+import time
+
 import pytest
 import requests
 
@@ -115,7 +117,7 @@ def test_ats_fallback_when_main_search_has_no_live_roles(exa, http, profile):
     out = research.research_company("Acme", "acme.com", profile)
 
     fallback_request = exa.requests()[1]
-    assert fallback_request["includeDomains"] == research.ATS_DOMAINS
+    assert fallback_request["includeDomains"] == ["acme.com", "*.acme.com", *research.ATS_DOMAINS]
     assert fallback_request["outputSchema"] == research.ATS_SCHEMA
     assert out["role_source"] == "ats_fallback"
     assert out["content"]["open_roles"] == [{**found, "link_status": "live", "description": "SQL and dbt."}]
@@ -141,14 +143,145 @@ def test_ats_fallback_failure_keeps_the_main_research(exa, http, profile):
     assert warning.startswith("ATS fallback search failed: ValueError: Request failed with status code 500")
 
 
-def test_no_ats_fallback_for_unverified_identity(exa, profile):
-    exa.on_search(structured_response(company([], verified=False)))
+def test_no_ats_fallback_for_unverified_identity(exa, http, profile):
+    listed_elsewhere = role("Senior Analytics Engineer", "https://remoteboard.io/jobs/acme-77")
+    exa.on_search(structured_response(company([listed_elsewhere], verified=False)))
+    http.get(listed_elsewhere["url"], status=200)
 
     out = research.research_company("Acme", "acme.com", profile)
 
     assert out["role_source"] == "none"
     assert out["content"]["open_roles"] == []
+    assert out["third_party_roles"] == [listed_elsewhere]
     assert len(exa.requests()) == 1
+
+
+# postings on third-party sites: a gateway to the real posting, never an open role -------------------
+
+
+def test_a_posting_on_a_third_party_site_is_looked_for_where_the_company_posts_its_jobs(exa, http, profile):
+    on_ashby = role("Metadata Analyst", "https://jobs.ashbyhq.com/acme/1111")
+    gateway = role("Lead Growth Engineer", "https://rockethunt.ai/en/vacancies/1dc282ff")  # an account to see where to apply
+    part_of_a_word = role("Data Analyst", "https://hirify.me/jobs/2")  # not the Metadata Analyst posting
+    other_level = role("Senior Metadata Analyst", "https://hirify.me/jobs/4")  # nor is this one
+    behind_it = role("Lead growth engineer (Remote, Europe)", "https://job-boards.eu.greenhouse.io/acme/jobs/222")
+    listed = [on_ashby, gateway, part_of_a_word, other_level]
+    main = structured_response(company(listed), [grounded("open_roles[0].url", on_ashby["url"])])
+    fallback = structured_response(
+        {
+            "open_roles": [
+                {**behind_it, "company_verified": True},
+                {**on_ashby, "url": on_ashby["url"] + "/application", "company_verified": True},  # listed already
+                {**role("Data Engineer", "https://hirify.me/jobs/3"), "company_verified": True},  # never fetched
+            ]
+        },
+        [grounded("open_roles[0].url", behind_it["url"], confidence="medium")],
+    )
+    exa.on_search(lambda body: fallback if "includeDomains" in body else main)
+    exa.on_contents(contents_response())
+    ashby_board(http, "acme", "1111")
+    for page in (gateway, part_of_a_word, other_level, behind_it):
+        http.get(page["url"], status=200)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert [(r["url"], r["link_status"]) for r in out["content"]["open_roles"]] == [
+        (on_ashby["url"], "live"),
+        (behind_it["url"], "live"),
+    ]
+    # found: a posting's title holds the listing's, word for word
+    assert out["third_party_roles"] == [part_of_a_word, other_level]
+    assert out["role_source"] == "main+ats_fallback"
+    assert out["dead_roles"] == []
+    assert out["grounding"]["open_roles"] == {"confidence": "medium", "urls": [on_ashby["url"], behind_it["url"]]}
+    assert "look for each of them: Lead Growth Engineer; Data Analyst; Senior Metadata Analyst." in exa.requests()[1]["query"]
+
+
+def test_a_third_party_posting_not_found_at_the_company_is_a_lead_and_never_an_open_role(exa, http, profile):
+    gateway = role("Head of Data Science", "https://hirify.me/jobs/1347972-head-data-science")
+    expired = role("Senior Data Analytics Engineer", "https://www.eurojobs.com/jobs/30987655/senior-data-analytics-engineer")
+    gone = role("Data Engineer", "https://remoteboard.io/jobs/77")
+    main = structured_response(company([gateway, expired, gone, gateway]))
+    exa.on_search(lambda body: structured_response({"open_roles": []}) if "includeDomains" in body else main)
+    http.get(gateway["url"], status=200, body="<h1>Head of Data Science</h1><button>Log in to apply</button>")
+    http.get(expired["url"], status=200, body="<title>This job is no longer available | Eurojobs</title>")
+    http.get(gone["url"], status=404)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["content"]["open_roles"] == []
+    assert out["role_source"] == "none"
+    assert out["third_party_roles"] == [gateway]
+    assert out["dead_roles"] == [{"title": r["title"], "url": r["url"]} for r in (expired, gone)]
+    assert "look for each of them: Head of Data Science." in exa.requests()[1]["query"]
+    assert exa.requests(CONTENTS_URL) == []  # no paid fetch settles a lead: it is never offered as a posting
+
+
+def test_the_fallbacks_live_postings_come_before_an_unverified_role_and_the_cap_holds(exa, http, profile):
+    careers_page = role("Growth Analyst", "https://acme.com/careers")  # no posting to confirm: unverified
+    gateway = role("Lead Growth Engineer " + "x" * 200, "https://rockethunt.ai/en/vacancies/1dc282ff")
+    found = [role(f"Analytics Engineer {n}", f"https://jobs.ashbyhq.com/acme/{n}") for n in range(research.MAX_ROLES)]
+    main = structured_response(company([careers_page, gateway]))
+    fallback = structured_response({"open_roles": [{**posting, "company_verified": True} for posting in found]})
+    exa.on_search(lambda body: fallback if "includeDomains" in body else main)
+    exa.on_contents(contents_response())
+    ashby_board(http, "acme", *(str(n) for n in range(research.MAX_ROLES)))
+    http.get(gateway["url"], status=200)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert [(r["url"], r["link_status"]) for r in out["content"]["open_roles"]] == [(r["url"], "live") for r in found]
+    assert out["role_source"] == "ats_fallback"  # none of the main search's roles is left
+    assert out["third_party_roles"] == [gateway]
+    query = exa.requests()[1]["query"]  # a listing's title is the web's text: only its start is quoted
+    assert query.endswith(f"look for each of them: {gateway['title'][: research.SEEN_TITLE_CHARS]}.")
+
+
+def test_a_careers_site_under_the_companys_name_on_another_domain_is_its_own(exa, http, profile):
+    sibling = role("Lead Analytics Engineer", "https://www.acme-jobs.com/jobs/8252905-lead-analytics-engineer")
+    other_suffix = role("Senior Data Engineer", "https://careers.acme.eu/jobs/8223624-senior-data-engineer")
+    regional_board = role("Data Engineer", "https://acme.jobs.personio.com/job/2737184")
+    name_as_a_subdomain = role("Growth Engineer", "https://acme.freehost.org/remote-jobs/growth-engineer")
+    name_with_another_word = role("Analytics Lead", "https://acme-talent-partners.com/jobs/analytics-lead")
+    listed = [sibling, other_suffix, regional_board, name_as_a_subdomain, name_with_another_word]
+    exa.on_search(lambda body: structured_response({"open_roles": []} if "includeDomains" in body else company(listed)))
+    exa.on_contents(contents_response())
+    for posting in listed:
+        http.get(posting["url"], status=200)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert [r["url"] for r in out["content"]["open_roles"]] == [r["url"] for r in (sibling, other_suffix, regional_board)]
+    assert out["third_party_roles"] == [name_as_a_subdomain, name_with_another_word]
+
+
+def test_a_link_written_to_read_like_the_companys_is_neither_a_role_nor_a_lead(exa, profile):
+    # never fetched either: the http fixture fails the test on a request nothing mocks
+    lookalikes = [role("Data Engineer", "https://acme.com@evil.io/jobs/1"), role("Analyst", "https://evil.io\\.acme.com/jobs/2")]
+    no_link = role("Growth Engineer", "N/A")
+    fallback = structured_response({"open_roles": [{**role("BI Lead", "https://acme.com@hirify.me/jobs/3"), "company_verified": True}]})
+    exa.on_search(lambda body: fallback if "includeDomains" in body else structured_response(company([*lookalikes, no_link])))
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert (out["content"]["open_roles"], out["third_party_roles"], out["dead_roles"]) == ([], [], [])
+    assert out["role_source"] == "none"
+
+
+def test_a_posting_open_under_one_link_is_not_dead_for_its_other_link(exa, http, profile):
+    live = role("Data Engineer", "https://acme.com/jobs/7")
+    same_posting = role("Data Engineer", "https://www.acme.com/jobs/7/")
+    closed = role("Analyst", "https://acme.com/jobs/8")
+    exa.on_search(structured_response(company([same_posting, live, closed])))
+    exa.on_contents(contents_response())
+    http.get(live["url"], status=200)
+    http.get(same_posting["url"], status=404)
+    http.get(closed["url"], status=404)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert [r["url"] for r in out["content"]["open_roles"]] == [live["url"]]
+    assert out["dead_roles"] == [{"title": "Analyst", "url": closed["url"]}]
 
 
 # open roles from Fiber's jobs database: hunt.py run --fiber -----------------------------------------
@@ -216,10 +349,25 @@ def test_fiber_postings_are_kept_only_on_the_companys_own_site_or_a_job_board(ex
         "https://Careers.ACME.com:443/jobs/3",
         "https://boards.greenhouse.io/acme/jobs/4",
         "https://acme.recruitee.com/o/5",
+        "https://job-boards.eu.greenhouse.io/acme/jobs/6",
+        "https://acme-jobs.com/jobs/7",  # a careers site registered under the company's name
+        "https://careers.acme.co.uk/jobs/8",
+        "https://boards.eu.greenhouse.io/acme/jobs/9",
+        "https://jobs.eu.lever.co/acme/10",
+        "https://jobs.workable.com/view/hZsm/remote-data-engineer-11",
+        "https://acme.jobs.personio.com/job/12",
+        "https://acme.pinpointhq.com/postings/13",
+        "https://my_team.recruitee.com/o/14",
     ]
     left_out = [
         "https://agraph.ai/jobs/j_acme_1",  # an aggregator's copy
         "https://notacme.com/jobs/2",
+        "https://acmejobs.com/jobs/2",  # the name alone, or with a careers word after a hyphen
+        "https://acme-labs.com/jobs/2",
+        "https://remote-acme.io/jobs/2",
+        "https://acme.someboard.io/jobs/2",  # ... as the name the site is registered under, not a subdomain of another's
+        "https://someone.acme.site/jobs/2",  # nor a page anyone can put up on a platform of that name
+        "https://acme.co.evil.io/jobs/2",
         "https://acme.com.evil.io/jobs/3",
         "https://evil.io\\.acme.com/jobs/4",
         "https://recruitee.com.evil.io/o/5",
@@ -424,13 +572,126 @@ def test_fiber_is_not_asked_about_a_company_whose_identity_is_not_verified(exa, 
             "https://acme.com/jobs/1",
             "unknown",
         ),
+        (
+            lambda http: (
+                http.get(
+                    "https://rockethunt.ai/en/vacancies/1dc2",
+                    status=307,
+                    headers={"Location": "https://rockethunt.ai/.within.website/?redir=https%3A%2F%2Frockethunt.ai%2Fen%2Fvacancies%2F1dc2"},
+                ),
+                http.get("https://rockethunt.ai/.within.website/", status=200, body="<title>Checking your browser</title>"),
+            ),
+            "https://rockethunt.ai/en/vacancies/1dc2",
+            "unknown",
+        ),
     ],
-    ids=["ashby-board-missing", "ashby-api-error", "ashby-board-root", "redirect-keeps-id", "server-error", "network-error"],
+    ids=[
+        "ashby-board-missing", "ashby-api-error", "ashby-board-root", "redirect-keeps-id", "server-error", "network-error",
+        "sent-to-a-bot-check",
+    ],
 )
 def test_check_posting(http, setup, url, expected):
     setup(http)
 
     assert research.check_posting(url) == expected
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<h1>Data Engineer</h1><h2>This position is no longer active</h2><p>Either the position was filled, or the ad has expired.</p>",
+        "<title>Data Analyst (Growth): this job is closed | Jobboard</title><h1>Data Analyst</h1>",
+        '<div class="job"><p><strong>We&#39;re sorry, this position has been <b>filled</b>.&nbsp;</strong><br>See our other vacancies.</p></div>',
+        "<p>Ooops... The position you were looking for is no longer available, please look at the job list.</p>",
+        "<h2>Acme Group is no longer taking applications for this job</h2>",
+        # what is hidden ends with its element, and a class that only clips is not one that hides
+        '<div hidden><div>Cookie settings</div><br></div><div class="overflow-hidden"><span>Job listing has expired</span></div>',
+        # a hidden form field has no end tag: it hides nothing after it
+        '<form><input type="hidden" name="token" value="x"></form><h2>This position is no longer active</h2>',
+    ],
+    ids=[
+        "notice", "in-the-title", "after-sorry-across-markup", "then-a-comma", "no-longer-taking-applications",
+        "after-a-hidden-element", "after-a-hidden-form-field",
+    ],
+)
+def test_a_page_that_answers_200_and_says_its_posting_has_closed_is_dead(http, page):
+    http.get("https://careers.acme.com/jobs/8-data-engineer", status=200, body=page)
+
+    assert research.check_posting("https://careers.acme.com/jobs/8-data-engineer") == "dead"
+
+
+NOTICE = "<p>This job is no longer available</p>"
+NOT_SHOWN = {
+    "hidden-attribute": f'<div class="notice" hidden>{NOTICE}</div>',
+    "inline-style": f'<div style="display: none">{NOTICE}</div>',
+    "utility-class": f'<div class="alert d-none">{NOTICE}</div>',
+    "shown-by-a-script": f'<div x-show="closed" x-cloak>{NOTICE}</div><p v-if="job.closed">This job has expired</p>',
+    "aria-hidden": f'<div class="modal" aria-hidden="true">{NOTICE}</div>',
+    "dialog": f"<dialog>{NOTICE}</dialog>",
+    "template-and-noscript": f"<template>{NOTICE}</template><noscript>{NOTICE}</noscript>",
+    "form-control": "<select><option>Job expired</option></select>",
+    "tag-with-a-bracket-in-a-value": f'<div class="[&>p]:m-0 hidden">{NOTICE}</div>',
+    "inside-a-nested-element": f"<div hidden><div>Other postings</div>{NOTICE}</div>",
+    "comment-script-and-style": (
+        f"<!-- {NOTICE} --><script>const closed = '<p>This job has expired</p>'</script>"
+        '<style>.gone::after { content: "Job expired" }</style>'
+    ),
+    "script-never-closed": "<script>// <p>This job has expired</p>",
+    "said-of-something-else": (
+        "<p>We review applications until <span>the position has been filled</span>.</p>"
+        "<p>Apply before<br>this role is closed.</p>"
+        "<p>Note: the position has been filled in other offices but remains open in Belgrade.</p>"
+        "<p>This role is no longer available as a fully remote position, but hybrid in Berlin.</p>"
+        "<p>We are no longer accepting applications from agencies.</p><li>Analyst - job expired</li>"
+    ),
+}
+
+
+@pytest.mark.parametrize("markup", NOT_SHOWN.values(), ids=NOT_SHOWN.keys())
+def test_a_closed_notice_the_page_does_not_show_or_says_of_something_else_leaves_the_posting_live(http, markup):
+    page = f"<h1>Data Engineer</h1><p>Apply now</p>{markup}"
+    http.get("https://careers.acme.com/jobs/8-data-engineer", status=200, body=page)
+
+    assert research.check_posting("https://careers.acme.com/jobs/8-data-engineer") == "live"
+
+
+HOSTILE = {
+    "sentence-marks": "<p>" + "." * 30_000 + "x</p>",
+    "comments-never-closed": "<!--" * 25_000,
+    "angle-brackets": "<" * 100_000,
+    "tags-never-closed": "<a" * 50_000,
+    "quotes-never-closed": '<a href="' * 11_000,
+    "scripts-never-closed": "<script " * 12_500,
+    "closing-tags-without-opening": "<div>" * 10_000 + "</span>" * 7_000,
+    "the-wording-over-and-over": "<p>" + "this job is no longer " * 4_500,
+}
+
+
+@pytest.mark.parametrize("markup", HOSTILE.values(), ids=HOSTILE.keys())
+def test_a_posting_page_is_read_in_one_pass_whatever_its_markup(http, markup):
+    # the page comes from any site; a parser or a pattern that rescans takes from seconds to minutes for these
+    http.get("https://careers.acme.com/jobs/8-data-engineer", status=200, body=markup)
+
+    started = time.perf_counter()
+    assert research.check_posting("https://careers.acme.com/jobs/8-data-engineer") == "live"
+    assert time.perf_counter() - started < 1
+
+
+@pytest.mark.parametrize(
+    ("domain", "url"),
+    [
+        ("x.com", "https://x.io/jobs/1"),
+        ("acme.github.io", "https://evil.github.io/jobs/1"),
+        ("data.io", "https://big-data.com/jobs/1"),
+    ],
+    ids=["a-name-too-short-to-tell-apart", "a-company-site-under-anothers-name", "the-name-as-one-word-of-anothers"],
+)
+def test_a_site_is_not_the_companys_own_for_sharing_a_short_or_borrowed_name(exa, profile, domain, url):
+    exa.on_agent(agent_run({"open_roles": [role("Data Engineer", url)]}))
+
+    roles, _ = research.find_roles_on_fiber("Acme", domain, profile)
+
+    assert roles == []
 
 
 def test_check_posting_keeps_a_live_url_with_non_ascii_or_spaces(http):

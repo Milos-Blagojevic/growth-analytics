@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
 
@@ -119,6 +119,7 @@ CREATE TABLE results (
     signals TEXT,
     role_source TEXT,
     dead_roles TEXT,              -- JSON [{"title", "url"}]
+    third_party_roles TEXT,       -- JSON [{"title", "url", "location", ...}]: seen only on third-party sites
     grounding TEXT,               -- JSON {field: {"confidence", "urls"}}
     warnings TEXT,                -- JSON [str]: research warnings, e.g. a failed ATS fallback search
     score INTEGER,                -- NULL when not scored (research-only run or error)
