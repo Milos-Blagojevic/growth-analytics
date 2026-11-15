@@ -203,6 +203,24 @@ def test_traces_carry_timings_tokens_and_tool_names_but_no_text(mailboxes, monke
     assert "PRIVATE" not in exported and "ana@acme.com" not in exported
 
 
+def test_traces_of_failed_answers_carry_no_text_either(mailboxes, monkeypatch, capfire):
+    """A rejected tool call echoes its input back to the model, and an error's message can quote mail: neither may
+    reach the traces. The failure itself shows, by its type."""
+    def search(*a, **k):
+        raise KeyError("PRIVATE-ERROR")
+
+    monkeypatch.setattr(outlook, "search", search)
+    model, _ = scripted([("list_emails", {"account": "PRIVATE-ACCOUNT"})], [("list_emails", {"account": "outlook"})])
+    reply = chat.handle(chat.Conversation(chat.build_agent(model), mailboxes), "PRIVATE-QUESTION")
+
+    assert reply == "Sorry, that failed: KeyError: 'PRIVATE-ERROR'"
+    spans = capfire.exporter.exported_spans_as_dict()
+    assert any(e["attributes"].get("exception.type") == "KeyError" for s in spans for e in s.get("events", []))
+    exported = json.dumps([spans, capfire.log_exporter.exported_logs_as_dicts()], default=str)
+    assert "PRIVATE" not in exported
+
+
+
 def test_outlook_tools_refresh_a_write_scoped_token_once_and_search_graph(http, monkeypatch, tmp_path):
     monkeypatch.setenv("OUTLOOK_CLIENT_ID", "app-123")
     token_requests = []

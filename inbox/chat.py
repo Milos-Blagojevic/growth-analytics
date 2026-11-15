@@ -10,9 +10,9 @@ The conversation lives in memory for the life of the process (/new starts a fres
 MAX_TURNS exchanges. Emails are referred to by short handles (o1, g2: account letter plus a number) that the
 tools hand out, so the model never has to repeat provider ids.
 
-The agent emits OpenTelemetry traces without content (`build_agent`): timings, token counts, tool names and errors,
-never the text of a message, email, search, draft or answer. `hunt.py chat` sends them to Pydantic Logfire when
-LOGFIRE_TOKEN is set; otherwise they go nowhere.
+The agent emits OpenTelemetry traces without content (`build_agent`): timings, token counts, tool names and error
+types, never the text of a message, email, search, draft or answer. `hunt.py chat` sends them to Pydantic Logfire
+when LOGFIRE_TOKEN is set; otherwise they go nowhere.
 """
 
 import logging
