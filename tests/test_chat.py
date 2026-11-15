@@ -174,6 +174,35 @@ def test_drafts_are_created_never_sent_and_reported_with_their_link(mailboxes, m
     assert "outlook draft created to 2 recipient(s)" in caplog.text
 
 
+def test_traces_carry_timings_tokens_and_tool_names_but_no_text(mailboxes, monkeypatch, capfire):
+    """With LOGFIRE_TOKEN, hunt.py chat sends these traces to Logfire, which never scrubs model messages: no message,
+    email, search, draft or answer text may be in them, only what shows where an answer went wrong or slow."""
+    found = message(1, subject="PRIVATE-SUBJECT", from_name="PRIVATE-SENDER", preview="PRIVATE-PREVIEW")
+    monkeypatch.setattr(outlook, "search", lambda *a, **k: [found])
+    monkeypatch.setattr(outlook, "read", lambda token, message_id: {**found, "body": "PRIVATE-BODY"})
+    monkeypatch.setattr(outlook, "create_reply_draft", lambda token, message_id, body: {
+        "id": "d1", "web_link": "https://outlook.live.com/draft/1", "subject": "Re: PRIVATE-SUBJECT", "to": ["ana@acme.com"]})
+    monkeypatch.setattr(gmail, "create_draft", lambda token, *, to, subject, body: {
+        "id": "d2", "web_link": "https://mail.google.com/mail/#drafts", "subject": subject, "to": to})
+
+    answer, _, _ = run([
+        [("list_emails", {"account": "outlook", "query": "PRIVATE-QUERY"})],
+        [("read_email", {"handle": "o1"})],
+        [("draft_reply", {"handle": "o1", "body": "PRIVATE-REPLY"}),
+         ("draft_email", {"account": "gmail", "to": ["PRIVATE-RECIPIENT@acme.com"], "subject": "PRIVATE-DRAFT-SUBJECT",
+                          "body": "PRIVATE-DRAFT-BODY"})],
+        "PRIVATE-ANSWER",
+    ], mailboxes, text="PRIVATE-QUESTION")
+
+    assert answer == "PRIVATE-ANSWER"
+    spans = capfire.exporter.exported_spans_as_dict()
+    assert {s["attributes"].get("gen_ai.tool.name") for s in spans} - {None} == {
+        "list_emails", "read_email", "draft_reply", "draft_email"}
+    assert sum(s["attributes"].get("gen_ai.usage.input_tokens", 0) for s in spans) > 0
+    exported = json.dumps([spans, capfire.log_exporter.exported_logs_as_dicts()], default=str)
+    assert "PRIVATE" not in exported and "ana@acme.com" not in exported
+
+
 def test_outlook_tools_refresh_a_write_scoped_token_once_and_search_graph(http, monkeypatch, tmp_path):
     monkeypatch.setenv("OUTLOOK_CLIENT_ID", "app-123")
     token_requests = []

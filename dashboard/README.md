@@ -71,6 +71,7 @@ Railway's own cron services cannot share a volume with the dashboard, so the das
    | `OUTLOOK_CLIENT_ID`, optionally `OUTLOOK_TENANT` | Only for email updates and the chat bot: as in your `.env` (see [Email updates](../inbox/README.md#email-updates)). |
    | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` | Only for the chat bot's Gmail access: as in your `.env` (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
    | `CHAT_BOT` | `1` keeps the Telegram chat bot (`hunt.py chat`) running alongside the dashboard (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
+   | `LOGFIRE_TOKEN` | Optional, with `CHAT_BOT=1`: traces of the bot's answers in Pydantic Logfire, without their text (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
    | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
 
 4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.

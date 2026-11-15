@@ -26,3 +26,4 @@ prospects.csv
 prospects_discovered.csv
 prospect_runs/
 prospects.duckdb*
+.logfire/

@@ -9,6 +9,10 @@ can only read and draft, so a crafted email can at worst produce a misleading an
 The conversation lives in memory for the life of the process (/new starts a fresh one), trimmed to the last
 MAX_TURNS exchanges. Emails are referred to by short handles (o1, g2: account letter plus a number) that the
 tools hand out, so the model never has to repeat provider ids.
+
+The agent emits OpenTelemetry traces without content (`build_agent`): timings, token counts, tool names and errors,
+never the text of a message, email, search, draft or answer. `hunt.py chat` sends them to Pydantic Logfire when
+LOGFIRE_TOKEN is set; otherwise they go nowhere.
 """
 
 import logging
@@ -18,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai import Agent, InstrumentationSettings, ModelRetry, RunContext
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.usage import UsageLimits
@@ -218,11 +222,15 @@ def build_agent(model=None):
     """The agent; `model` defaults to Claude (SCORING_MODEL). Tests pass a pydantic_ai FunctionModel."""
     agent = Agent(
         model or AnthropicModel(os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL)),
+        name="chat",
         deps_type=Mailboxes,
         instructions=INSTRUCTIONS,
         tools=[list_emails, read_email, draft_email, draft_reply],
         retries=2,
     )
+    # Set on the agent, so it wins over any global Agent.instrument_all / logfire.instrument_pydantic_ai default.
+    # Logfire never scrubs model messages, so the text must not be recorded at all.
+    agent.instrument = InstrumentationSettings(include_content=False)
 
     @agent.instructions
     def situation(ctx: RunContext[Mailboxes]) -> str:

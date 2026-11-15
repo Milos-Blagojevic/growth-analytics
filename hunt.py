@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
 
+import logfire
+
 from clients import exa_client, jev, telegram
 from inbox import chat, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
@@ -549,6 +551,10 @@ def cmd_chat(args):
     if not mailboxes.accounts():
         sys.exit("No mailbox is set up: set OUTLOOK_CLIENT_ID or GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET in .env "
                  "(see inbox/README.md, Chat with your mail).")
+    if os.environ.get("LOGFIRE_TOKEN"):
+        # Traces of each answer without its text (chat.build_agent). Nothing else is instrumented: Logfire never
+        # scrubs Claude's messages, and request URLs carry the Telegram bot token and mail search terms.
+        logfire.configure(service_name="chat", console=False)
     try:
         chat.serve(chat.build_agent(), mailboxes)
     except KeyboardInterrupt:
