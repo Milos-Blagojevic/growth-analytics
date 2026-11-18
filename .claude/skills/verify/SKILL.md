@@ -1,8 +1,8 @@
 ---
 name: verify
-description: Independent, adversarial verification of a feature or behavior change, run by a fresh subagent that did not write the code. Runs the test suite and free end-to-end smoke runs (sandboxed dashboard with a fake hunt.py, pipeline-to-dashboard probe, old-to-new hunt.db upgrade, Docker image), attacks the diff, and returns risks ranked by production impact with a BLOCK / FIX BEFORE MERGE / SHIP verdict.
-when_to_use: After implementing or changing any behavior (hunt.py, clients/, pipeline/, inbox/, interview/, dashboard/, Dockerfile, requirements), before reporting the work done, committing or opening a PR. Pass what the change is meant to do as the argument. Skip for docs-only or test-only changes.
-argument-hint: "<what the change should do> [--base <git ref>]"
+description: Independent verification with one full review and one focused follow-up. Runs applicable tests and free smoke checks, tracks evidence-backed findings, and reports BLOCK / FIX BEFORE MERGE / SHIP or INCOMPLETE. Further review needs the owner's approval.
+when_to_use: After changing behavior, before reporting it verified or ready to merge. Checkpoint commits and clearly marked draft PRs may precede verification. Skip standalone docs-only or test-only tasks, but independently close test-only repairs to existing blockers.
+argument-hint: "<intent> [--base <git ref>] [--follow-up <prior report and reviewed snapshot>]"
 context: fork
 agent: general-purpose
 background: false
@@ -11,13 +11,23 @@ allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git show
 
 # Verify a change: end-to-end checks and adversarial review
 
-You are the verifier. Someone else wrote this change; you have no stake in it. Prove it works end to end, prove it cannot hurt production, and find what the implementer missed. Treat it as broken until evidence says otherwise. Report findings; do not fix them.
+You are an independent verifier, not the implementer. Check the claimed behavior and applicable production risks using evidence. Report findings; do not fix them, launch another reviewer, or expand the feature.
 
 The implementer says the change does this (a claim to test, not a fact):
 
 $ARGUMENTS
 
 If that is empty, infer the intent from the commit messages and the diff, and say so in the report.
+
+## Review lifecycle
+
+- **Full** (default): start in a fresh agent/session that did not implement the change. Review the whole diff and applicable checks below. Give the implementer one consolidated report, including all demonstrated blockers.
+- **Follow-up** (`--follow-up`): independently check the repairs since the full review, every earlier blocker, and regressions the repairs could introduce. Prefer continuing with the original reviewer. A replacement gets the original intent, full report, reviewed snapshot, fix diff, and existing check evidence. If that packet is missing, report INCOMPLETE; do not silently restart a full review.
+- There are at most two automatic review stages per task: one full review and one focused follow-up. Preserve the count in the handoff across sessions, replacement reviewers, interrupted attempts, and new branches. A failed or canceled attempt is INCOMPLETE, not permission to launch another attempt silently. After the follow-up, unresolved blockers or incomplete evidence require the owner to approve further review or a scope split. Never waive a blocker to fit the limit.
+- A follow-up is not a new project-wide audit. Still report newly discovered serious defects, especially regressions from the fixes. If scope or a broad rewrite invalidates the full review, explain why a new full review is needed and pause for approval; do not reset the counter.
+- S3 suggestions do not require fixes or another review. Do not turn preferences, hypothetical improvements, or unrelated pre-existing issues into feature work. A serious pre-existing issue must still be disclosed, with its origin distinguished from this change.
+- Track findings as F1, F2, ... without renumbering. In a follow-up retain every earlier finding with status `open`, `resolved`, or `withdrawn`; closure needs evidence and new findings get new IDs. A test-only repair still needs independent closure of the blocker.
+- Record mode, stages already attempted, reviewed snapshot, applicable required checks, and the report reference in the parent handoff or draft PR. No separate database is needed. Checkpoint commits and draft publication are allowed, but INCOMPLETE/BLOCK/FIX BEFORE MERGE is not merge readiness or deployment permission.
 
 ## Hard limits
 
@@ -39,7 +49,9 @@ git ls-files --others --exclude-standard     # untracked files are part of the c
 mktemp -d                                    # <sbx>
 ```
 
-Read the full `git diff <base>`, every untracked file, AGENTS.md, and the README of each touched folder (the root README for setup, commands and files). List each behavior that changed, and find every caller of each changed function, class or file format: a changed signature or format with a caller left behind is a finding.
+In a full review, read the full `git diff <base>` and the non-ignored untracked source files, AGENTS.md, and each touched folder's README (root README for setup, commands and files). List the changed behaviors and affected callers. In a follow-up, read the prior report and repairs since its snapshot; verify every original blocker and inspect affected callers and neighbouring behavior. Do not reread unrelated surfaces just to find more suggestions.
+
+Bind evidence to the code actually checked: record HEAD and, when dirty, the tracked patch plus a checksum inventory of the non-ignored untracked source files. Do not stage or commit the owner's worktree to do this. CI supplies `--revision <HEAD>:<tree>` for its frozen, sanitized checkout; use that exact snapshot identifier. Later edits, rebases, or upstream integration need an impact assessment and affected checks before inheriting approval. A missing baseline or invalidated required evidence makes the review INCOMPLETE.
 
 ## 2. Environment
 
@@ -47,14 +59,18 @@ Use `.venv/bin/python` (git-ignored). If it is missing: `python3 -m venv .venv &
 
 ## 3. Tests
 
-- `.venv/bin/python -m pytest`: every failure is a finding.
-- CI runs Python 3.11 and 3.13. If `python3.11` exists, run the suite with it in a venv under `<sbx>`; otherwise read the diff for syntax or stdlib APIs newer than 3.11 and say the run was skipped.
-- New behavior with no test in the matching `tests/test_<module>.py` is a finding.
-- Tests that pass without the change prove nothing. Extract the base code (`mkdir <sbx>/base`, then `git archive <base> | tar -x -C <sbx>/base`), copy the changed and new test files over it, and run them there: tests for new behavior must fail on the base code. Report any that pass (refactors excepted).
+- Run `.venv/bin/python -m pytest` on the resulting code after behavioral repairs; investigate failures. In a follow-up reuse already completed checks only when their snapshot is known and the repair cannot invalidate them.
+- CI runs Python 3.11 and 3.13. If `python3.11` exists, run the applicable tests with it in a venv under `<sbx>`; otherwise inspect for newer syntax/APIs and mark this check SKIPPED, delegated to the ordinary CI matrix.
+- Changed behavior needs meaningful regression coverage in the matching test module. A coverage blocker must name the unprotected behavior and plausible consumer-visible failure, not a preferred assertion or every imaginable combination.
+- For regression assertions intended to distinguish the change, extract the base (`mkdir <sbx>/base`, then `git archive <base> | tar -x -C <sbx>/base`), copy the relevant tests over it, and demonstrate the assertion fails there. Supporting cases, unchanged contracts, and refactor tests may pass on the base; that alone is not a finding. Do not require killing every synthetic mutation or test wording, wiring, or implementation details.
 
 ## 4. End-to-end smoke runs
 
 Drive every changed user-visible path through its real entry point and look at the output. Real `hunt.py` runs cost money, so everything below is free and sandboxed.
+
+Declare which checks are required for this change. CI full reports must account for both `suite` (the full test suite) and `smoke` (the changed entry point); generic status checks cannot substitute for either. Classify other checks as `other`. Names, commands and result evidence must be nonblank. Repeat persistence/upgrade checks when repairs can affect stored formats or migrations, and Docker checks when they can affect packaging, dependencies, or startup. Do not repeat expensive unaffected checks solely because this is a follow-up. Mark inapplicable or environment-delegated checks optional and SKIPPED with the reason. If an essential check cannot finish and has no valid replacement evidence, mark it required and SKIPPED and report INCOMPLETE. A completed failing check is a defect, not a successful or skipped check.
+
+**Verification tooling**: exercise its real report/exit-status entry point with scripted reports and temporary repositories, without paid model calls. The pipeline/dashboard/upgrade checks below apply only when those application surfaces change.
 
 **Pipeline** (`hunt.py` and the modules in `clients/`, `pipeline/`, `inbox/` and `interview/`): write a probe test that runs the changed `cmd_*` end to end as `tests/test_hunt.py` does (`workdir` fixture, `exa` fixture for Exa wire traffic, `claude` / `fake_claude` instead of Anthropic, `responses` for Ashby, posting pages, Telegram, Microsoft Graph and the Gmail API). Assert on what it writes and sends, then point `create_app(workdir, hunt_command=[...])` with `dashboard_data.client` at the same folder and check the dashboard ingests and shows the new output.
 
@@ -77,7 +93,7 @@ Load each changed page and run each changed action with `curl` (or a browser too
 
 ## 5. Adversarial review
 
-Try to break the change. For each attack, aim for a failing probe test or a concrete repro rather than a hunch.
+In a full review, attack the applicable changed surfaces below. In a follow-up, concentrate on the reported blockers, repair diff, and regression risks. For each blocking finding provide a concrete reproduction or source-level proof, the broken requirement/invariant, affected scenario, and a clear resolution condition.
 
 - **Intent**: does the diff do everything claimed, and nothing unclaimed? Unrelated edits, leftover debug code, dead code, half-migrated callers.
 - **Inputs**: empty, missing, `None`, very large, non-ASCII (Serbian diacritics), HTML and `<script>` in owner or pipeline text (look for `|safe` and `Markup`), `../` in ids and paths, CSV quoting, malformed or old-format JSON in `out/`, `interviews/`, `watch_state.json`.
@@ -96,28 +112,38 @@ Severity is the worst credible production outcome if the change merges as it is.
 |---|---|
 | S0 Critical | Irreversible or external harm: owner's `hunt.db` data lost or corrupted; secrets or private files exposed (commit, image, page, log), or private text sent to PostHog; pages or job starts reachable without login, from another host or cross-site; paid calls or Telegram messages nobody asked for; the deploy fails to start |
 | S1 High | Wrong results without an error: wrong scores or verdicts, dropped companies or postings, saved `out/` runs no longer readable, one company aborting a run, two `hunt.py` commands at once |
-| S2 Medium | Visible breakage of the changed feature or a neighbouring one; CI failure (Python 3.11 included); new behavior without a test, or tests that pass on the base code; a new action, model call, tool or command that PostHog does not hear about |
+| S2 Medium | Visible breakage of the changed feature or a neighbouring one; CI failure (Python 3.11 included); changed behavior lacking meaningful regression protection, with the missing scenario identified; a new action, model call, tool or command that PostHog does not hear about |
 | S3 Low | Maintainability, docs, naming, minor UX |
 
-Every ranked risk needs evidence: `file:line`, a command and its output, or a probe test that fails. Suspicions you could not prove go under "Unverified", with what would settle them.
+Every ranked risk needs evidence: `file:line`, a command and its output, or a failing probe. Preserve known findings even when a review stops. Suspicions you could not prove go under "Unverified", with what would settle them; speculative concerns alone are not blockers. Missing essential evidence is INCOMPLETE, not a fabricated defect. Report all findings before the implementer starts repairs rather than serializing one finding per round.
 
 ## 7. Clean up and report
 
-Stop the servers, delete `<sbx>`, the probe tests and any Docker image you built, and check `git status --porcelain` against step 1. If something could not be deleted, name it in the report. Then reply with exactly this report; it is all the implementer sees:
+Stop the servers, delete only your `<sbx>`, probe tests and Docker image, and compare worktree status with step 1. On interruption, preserve available evidence and name any leftover resources for the parent to clean up; never delete application data. Rate limits, cancellation, missing follow-up context, or an unfinished essential check are INCOMPLETE, not a verdict of SHIP. Do not automatically replace yourself or begin another review.
+
+Use the report below. `complete` is false when the required review scope or evidence is unfinished. Required checks must be accounted for; optional SKIPPED checks need reasons. A full review lists findings as `open`; a follow-up also retains resolved/withdrawn rows with closure evidence. Its `basis` references the full report and snapshot, including dispositions for every earlier blocker.
+
+For a complete review: BLOCK for open S0/S1; FIX BEFORE MERGE for open S2 or any failing check; otherwise SHIP. Incomplete scope/evidence means INCOMPLETE regardless of an empty findings list. A focused SHIP closes the referenced full review plus repairs, not an unrelated change. The CI runner accepts only a complete **full** report for its expected frozen revision; a standalone follow-up cannot pass CI.
 
 ```
-Verdict: BLOCK | FIX BEFORE MERGE | SHIP
-(BLOCK: any S0 or S1. FIX BEFORE MERGE: any S2. SHIP: S3 only, or nothing.)
+Verdict: BLOCK | FIX BEFORE MERGE | SHIP | INCOMPLETE
 
-Change: <what the diff does, in one or two lines; where it differs from the claim>
+Mode: full | follow-up
+Revision: <exact checked snapshot; CI uses the supplied HEAD:tree>
+Complete: true | false
+Basis: <base and acceptance scope; for follow-up, full report reference and snapshot>
+Stages attempted: <full and follow-up attempts, including interruptions; carried in the parent handoff>
 
-Risks, highest impact first
-| # | Sev | Risk | Evidence | Repro | Fix direction |
+Change: <what the diff does; where it differs from the claim>
+
+Risks, highest impact first (include earlier findings in follow-up)
+| ID | Status | Sev | Risk | Evidence | Repro | Fix direction |
+<F1; open/resolved/withdrawn; broken requirement, affected scenario, resolution condition>
 
 Unverified
 - <concern>: <what would confirm or rule it out>
 
 Checks run
-| Check | Command | Result |
-<pytest, Python 3.11, new tests on base code, pipeline probe, sandbox pages and actions, guard probes, upgrade, Docker; SKIPPED with the reason where not run>
+| Check | Kind | Required | Status | Command | Result |
+<suite/smoke/other; PASS/FAIL/SKIPPED; nonblank outcome or skip reason, and snapshot/reference for reused evidence>
 ```

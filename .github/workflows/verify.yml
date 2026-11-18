@@ -33,7 +33,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v10.3.3
 
-      # The exit status fails the check on BLOCK and FIX BEFORE MERGE.
+      # Only a complete SHIP report passes; BLOCK, FIX BEFORE MERGE and INCOMPLETE fail.
       - name: Verify
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
