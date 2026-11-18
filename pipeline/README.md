@@ -1,6 +1,6 @@
 # Job-hunt pipeline
 
-The job hunt itself: finding companies, researching them with Exa, screening roles with Jev and scoring fit with Claude, the Ashby watch list and the news digest. `hunt.py` at the repo root runs all of it.
+The job hunt itself: finding companies, researching them with Exa, screening roles with Jev and scoring fit with Claude, the Ashby watch list, Exa monitors for a few companies' new postings and the news digest. `hunt.py` at the repo root runs all of it.
 
 ## Files
 
@@ -9,6 +9,7 @@ The job hunt itself: finding companies, researching them with Exa, screening rol
 | `research.py` | Per-company Exa research (identity, signals, open roles) |
 | `scoring.py` | Jev role screen and Claude fit scoring (structured output) |
 | `watch.py` | Watch list: poll job boards, report new matching postings |
+| `monitor.py` | Exa monitors: one per `[monitor].companies` entry, kept in step with the profile; what their runs found since the last check; `monitor_state.json` |
 | `news.py` | News digest: Exa news search per topic, Jev's relevance screen, Claude's picks, `news_state.json` |
 | `runs.py` | Saved-run format, the domain normaliser and the one-command-at-a-time lock, shared by `hunt.py` and the dashboard (`out/<timestamp>/`, `_run.json`, `.hunt.lock`) |
 
@@ -23,6 +24,8 @@ python hunt.py run                             # research + score + send the not
 python hunt.py run --fiber --dry-run           # any mode: also ask Fiber's jobs database for open roles (paid agent runs)
 python hunt.py send                            # send the latest saved run's notification to Telegram (no new research or scoring)
 python hunt.py watch                           # send new growth-role postings from watched Ashby boards to Telegram
+python hunt.py monitor-sync                    # keep one Exa monitor per [monitor].companies entry (Exa runs them every 4 hours)
+python hunt.py monitor                         # send the suitable new postings the monitors found to Telegram (Claude)
 python hunt.py outlook-login                   # sign in to Outlook once (read, create drafts), for `mail` and `chat`
 python hunt.py mail                            # rejections and interview invites in new email: Telegram + dashboard suggestions (Claude)
 python hunt.py news                            # news digest on your [news].topics to Telegram (Exa + Claude)
@@ -33,7 +36,7 @@ python hunt.py chat                            # Telegram chat bot over your mai
 python -m dashboard                            # dashboard at http://127.0.0.1:8000: results, your tracking, starting runs (see dashboard/README.md)
 ```
 
-Options (`python hunt.py <command> --help` lists them): `--profile FILE` before the command reads another profile (default `profile.toml`); `run --companies FILE` (default `companies.csv`) and `run --fiber` (see Fiber as a role source, below); `discover --limit N` (default 15) and `--history FILE` (default `discovered.csv`); `send [DIR]` (a directory under `out/`, default the latest run); `watch --state FILE` (default `watch_state.json`); `outlook-login --token FILE` and `mail --token FILE` (default `outlook_token.json`); `mail --state FILE` (default `mail_state.json`) and `--days N` (default 14); `news --state FILE` (default `news_state.json`) and `--days N` (default 7); `gmail-login --token FILE` (default `gmail_token.json`); `chat --outlook-token FILE` and `--gmail-token FILE` (the two sign-in files). `run`, `watch`, `mail` and `news` take `--dry-run`.
+Options (`python hunt.py <command> --help` lists them): `--profile FILE` before the command reads another profile (default `profile.toml`); `run --companies FILE` (default `companies.csv`) and `run --fiber` (see Fiber as a role source, below); `discover --limit N` (default 15) and `--history FILE` (default `discovered.csv`); `send [DIR]` (a directory under `out/`, default the latest run); `watch --state FILE` (default `watch_state.json`); `monitor-sync --state FILE` and `monitor --state FILE` (default `monitor_state.json`); `outlook-login --token FILE` and `mail --token FILE` (default `outlook_token.json`); `mail --state FILE` (default `mail_state.json`) and `--days N` (default 14); `news --state FILE` (default `news_state.json`) and `--days N` (default 7); `gmail-login --token FILE` (default `gmail_token.json`); `chat --outlook-token FILE` and `--gmail-token FILE` (the two sign-in files). `run`, `watch`, `monitor`, `mail` and `news` take `--dry-run`.
 
 Each run saves raw research and scores to `out/<timestamp>/<domain>.json` (with the Jev screen of each role in `screen`, see [Jev screening](../clients/README.md#jev-screening), postings found only on third-party sites in `third_party_roles`, see Third-party sites below, and any research warnings, such as a failed ATS fallback search, in `warnings`), plus `out/<timestamp>/_run.json` with the run's mode (`research_only`, `dry_run` or `deliver`), whether it asked Fiber (`fiber`), start and save times, company and error counts, the Exa cost summary and, for scored runs, the scoring model and Claude token totals and, when `TYPESAFE_API_KEY` is set, the Jev model, requests, input tokens and dollars (`jev`). It also prints Exa cost, Claude token usage and Jev usage; a company's third-party listings and research warnings are printed under it in the digest and in the `--research-only` output. A failing company is reported in the digest and does not abort the run (exit code 1 if any failed). Missing keys are detected before any paid call: `run`, `discover` and `news` refuse to start without `EXA_API_KEY` (so does `interview-prep` when it would fetch the posting), and the same check covers `ANTHROPIC_API_KEY` and the Telegram values for the commands that use them.
 
@@ -92,6 +95,39 @@ Only Ashby boards are supported. To run it on a schedule while the laptop is on,
 ```
 0 */6 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py watch >> watch.log 2>&1
 ```
+
+## Monitors
+
+For a few companies whose new postings you want to hear about, list them in `[monitor].companies` in `profile.toml` (name and domain). Each gets an [Exa Monitor](https://exa.ai/docs/monitors/quickstart): a search for the company's new job openings in your target roles that Exa runs by itself every 4 hours and that returns only the pages its earlier runs did not. Two commands work with them:
+
+- `python hunt.py monitor-sync` makes the monitors on your Exa account match the list. It creates the missing ones, updates those whose search no longer matches the profile (the company's name, your `[search].roles`), deletes those of companies you removed, and prints when each runs next. Run it after every change to the list or to your roles.
+- `python hunt.py monitor` reads what the monitors' runs found since the last check, judges each new posting and sends the ones that suit you to Telegram. Schedule it for the times you want to hear about them.
+
+For 08:00, 12:00, 16:00 and 20:00, add this entry to `HUNT_SCHEDULE` on Railway (see [Deploy to Railway](../dashboard/README.md#deploy-to-railway)), or the same line with the usual `cd … && .venv/bin/python hunt.py monitor >> monitor.log 2>&1` to `crontab -e` on a laptop that is on:
+
+```
+0 8,12,16,20 * * * monitor
+```
+
+The message lists the postings best first:
+
+```
+Monitors: 1 new posting(s) for you
+
+[82] APPLY Acme: Senior Analytics Engineer
+https://jobs.ashbyhq.com/acme/1111
+```
+
+- **What a monitor searches.** "New job openings at Acme (acme.com) for any of: <your target roles>", restricted to the company's own domain and the job-board hosts of Role search (see [Run](#run)), 10 pages a run. The answer is a list of postings (title, link, location, remote or relocation, and whether the posting is the company's) with each new page's text. Seniority and location stay out of the query, as with Fiber: the screen and the scorer judge them.
+- **When a monitor runs.** Exa picks the time. In the first trials a new monitor's first run was set between 9 and 72 minutes after it was created; the next ones follow every 4 hours, each up to 30 minutes late (Exa's docs). A monitor cannot be set to a time of day, and each company's has its own cycle. That is why the Telegram message comes from the scheduled `monitor` and not from Exa: a posting a run finds at 21:00 is reported by the next check, at 08:00 with the schedule above.
+- **What counts as a new posting.** One that Exa marked as the company's, whose link is on a site where the company posts its jobs itself (see Third-party sites in [Run](#run)), is not closed and was not judged by an earlier check. Two links are one posting as they are for Fiber: whatever the letter case, `www.`, Ashby's `/application` suffix, or when both carry the job board's id. The link check is the free one of a run. A link it cannot settle (a bot check, a timeout) is judged as unverified, so at most consider, with a note to confirm it: no paid fetch decides it as in a run, because a posting is judged once here and a fetch that failed would write a new posting off for good. A link that is closed is remembered as closed and not looked at again.
+- **Is it suitable.** Each new posting is judged by itself, like a company's best role in a `run`: the Jev role screen when `TYPESAFE_API_KEY` is set, then Claude's fit score against your profile and CV, with the posting's text. The text is the one the monitor's run fetched; when the run found the careers page and not the posting's own, it is fetched for every new posting with a live link (about $0.001 each), and a posting without a text is judged on its title and location. Apply, consider and stretch postings are sent; the reasons and concerns for every posting are printed (the job's log on the dashboard). The scorer is told nothing about the company here but its name, so a posting can score lower than in a `run`, which also weighs funding and data-team signals.
+- **State.** `monitor_state.json` holds each company's monitor id, the search it was created with, the last run read and every posting judged, with its verdict and score. It is saved only after a successful send, so a failed send is judged and sent again by the next check, and so is a check that is stopped halfway; `--dry-run` prints the message and saves nothing. A posting whose scoring failed is read again by the next two checks and then given up (remembered as unscored); the others are not judged twice. Railway and a laptop do not share files: run `monitor-sync` and `monitor` in one place. A file that is not valid stops both commands with its name.
+- **Whose a monitor is.** Each monitor carries the company's domain and the id of the data folder that created it, which the first `monitor-sync` makes up and keeps in `monitor_state.json`. A monitor of this folder that the file does not list (the reply to a create was lost, or the file is an older copy) is taken over by its company at the next `monitor-sync`, or deleted when nothing lists it, so a company never has two and none runs unaccounted for. Monitors created under another folder's id are never taken over, changed or deleted: they are another data folder's (a trial on the laptop next to Railway), or this folder's from before `monitor_state.json` was lost. `monitor-sync` reports each of them and exits 1, since they are billed like the others: remove them with `monitor-sync` in the folder that created them (after emptying its `[monitor].companies`), or on [Exa's dashboard](https://dashboard.exa.ai). Without the file, `monitor-sync` starts over with new monitors, and the postings judged before are forgotten. When Exa cannot list the account's monitors, `monitor-sync` changes nothing.
+- **One copy of the file.** The folder's id travels with `monitor_state.json`. Two copies in use (the laptop's, and one uploaded to Railway) count as one folder: each copy's `monitor-sync` deletes the monitors the other has created since, as its own that nothing lists. To move the monitors to another place, move the file there and stop using the old copy.
+- **The webhook Exa asks for.** Every monitor needs a public HTTPS webhook address, and Exa refuses `localhost`. `monitor-sync` gives it the dashboard's address (`DASHBOARD_URL`, or the Railway domain) and subscribes it to the monitor's deletion only, so nothing is sent there while a monitor runs: the runs are read through Exa's API. Off Railway, set `DASHBOARD_URL` in `.env` to a public HTTPS address of yours before the first `monitor-sync`.
+- **Cost.** Exa bills each run $0.002 (up to 10 pages), six runs a day: about $0.36 a month per company. `monitor-sync` and reading the runs are free. `monitor` pays for new postings only: one Jev request each and, unless Jev rules the posting out, one Claude call each (about $0.014, the call a company gets in a `run`).
+- **Limits.** Exa is a search index, not a jobs feed: a run finds a posting only after Exa has indexed its page, so a posting can be reported late or not at all, and "nothing new" does not mean nothing opened. The three runs of the first trial (two over 4 hours and one over 7 days, for a company with a large job board) returned no page, so what a run with postings returns has been seen only in Exa's docs until your first real one. For a company on Ashby, the watch list above reads the board itself. `monitor` reports what went wrong and then exits 1 (a failed job on the dashboard): a monitor that cannot be read, a run that failed on Exa's side (for example `insufficient_credits`), a run that returned pages without a list of postings, a run still going after a later one has ended, and a run whose result cannot be read. The last one is tried again by the next two checks, with the runs after it waiting, and is then given up. These reach Telegram only in a message that has postings to send. A monitor paused or disabled on Exa's dashboard is reported by `monitor-sync` and not restarted. After more than ten days without a check, `monitor` reads each monitor's latest 60 runs.
 
 ## News digest
 

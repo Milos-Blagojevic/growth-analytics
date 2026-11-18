@@ -28,6 +28,9 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
         {"kind": "mail", "dry_run": ""},
         {"kind": "news", "dry_run": "1"},
     ]
+    four_times, dry, sync = schedule.parse("0 8,12,16,20 * * * monitor; 0 9 * * * monitor --dry-run; 30 7 * * 1 monitor-sync")
+    assert (four_times.form, four_times.hours) == ({"kind": "monitor", "dry_run": ""}, frozenset({8, 12, 16, 20}))
+    assert (dry.form, sync.form) == ({"kind": "monitor", "dry_run": "1"}, {"kind": "monitor_sync"})
 
 
 @pytest.mark.parametrize(
@@ -40,6 +43,8 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
         ("0 7 * * * run --fiber=1", "unsupported command"),
         ("0 7 * * * discover --limit 99", "--limit must be a number from 1 to 50"),
         ("0 7 * * * discover --verbose", "unsupported command"),
+        ("0 7 * * * monitor-sync --dry-run", "unsupported command"),
+        ("0 7 * * * monitor --state other.json", "unsupported command"),
         ("0 24 * * * run", "hour '24'"),
         ("0 7 * * mon run", "day of week 'mon'"),
         ("0 7 30 2 * run", "never occurs"),
@@ -125,3 +130,19 @@ def test_scheduled_commands_run_as_dashboard_jobs(tmp_path):
                                                            ["run"], "succeeded")
     page = client(app).get("/runs").text
     assert "<code>* * * * * run</code>" in page and f'href="/runs/jobs/{job["id"]}">job {job["id"]}' in page
+
+
+def test_the_monitor_check_and_sync_can_be_scheduled(tmp_path):
+    (tmp_path / "stub_hunt.py").write_text(STUB)
+    app = create_app(tmp_path, hunt_command=[sys.executable, str(tmp_path / "stub_hunt.py")],
+                     schedule_entries=schedule.parse("* * * * * monitor-sync; * * * * * monitor"))
+    soon = datetime.now() + timedelta(minutes=1)
+    app.state.scheduler.tick(soon)
+
+    conn = db.connect(tmp_path)
+    [sync] = jobs.recent(conn)  # the check is due too, and waits for the sync to finish
+    assert finished(tmp_path, sync["id"])["args"] == ["monitor-sync"]
+    app.state.scheduler.tick(soon)
+    check = jobs.recent(conn)[0]
+    conn.close()
+    assert (check["label"], finished(tmp_path, check["id"])["args"]) == ("Scheduled · Check monitors", ["monitor"])

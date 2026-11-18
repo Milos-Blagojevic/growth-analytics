@@ -39,6 +39,16 @@ title_keywords = []
 # Titles containing any of these are ignored, e.g. ["marketing manager"].
 title_exclude = []
 
+[monitor]
+# `python hunt.py monitor-sync` keeps one Exa Monitor per company listed here: Exa searches for the company's new
+# postings in your [search].roles every 4 hours ($0.002 a run, about $0.36 a month per company). `python hunt.py
+# monitor` then sends the ones that suit you to Telegram; schedule it for the times you want to hear about them.
+# Run monitor-sync again after changing this list or your roles. See pipeline/README.md, Monitors.
+# companies = [
+#   { name = "Acme", domain = "acme.com" },
+# ]
+companies = []
+
 [news]
 # `python hunt.py news` searches recent news on each topic (one Exa search each) and sends the articles Claude
 # picks as worth your time to Telegram. Only your target roles and these topics are sent to Claude, not your CV.
