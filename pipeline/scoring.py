@@ -9,7 +9,6 @@ import anthropic
 from pydantic import BaseModel
 
 from clients import jev, posthog_client
-from pipeline import research as postings  # "research" is one company's result throughout this module
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 
@@ -203,6 +202,9 @@ def score_company(research, profile, *, screen=None, model=None, client=None):
     the open roles that passed: any other link (a third-party listing, a source page, a role the screen dropped) is
     taken off it, and an apply, consider or stretch for it becomes "check_careers".
     """
+    # Research loads the Exa client's .env; Jev-only callers must not import it.
+    from pipeline import research as postings
+
     listings = research.get("third_party_roles") or []  # runs researched before the field have none
     choosable = research["content"]["open_roles"]  # what the best role can be
     if screen and screen["roles"]:
