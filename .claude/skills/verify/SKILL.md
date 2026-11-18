@@ -101,6 +101,7 @@ In a full review, attack the applicable changed surfaces below. In a follow-up, 
 - **Money and messages**: any path that could call Exa, Claude or Telegram more often than before, in a loop, on retry, from a schedule, or while ignoring `--dry-run` / `--research-only`.
 - **Security**: guard coverage of new routes, secrets or private data in pages, logs, job logs, error messages or the image, subprocess arguments built from form input.
 - **Deployment**: settings read outside `dashboard/__main__.py`, missing defaults, anything that needs a Railway variable or a manual step the docs do not mention.
+- **PostHog**: go through step 1 of `.claude/skills/posthog/SKILL.md` for the diff. Every new or changed dashboard action, model call, chat agent tool, command and job kind reports through `clients/posthog_client.py` as that table says, and an event that was renamed or removed is gone from the README tables too. Then attack what is sent: a probe test with the `posthog_api` fixture puts recognisable text through the changed path (a company, a note, a subject, a prompt) and searches `posthog_api.events()` and `posthog_api.records()` for it. Look for `Posthog(`, `posthog.ai` or an OpenTelemetry exporter outside `clients/posthog_client.py`, a `distinct_id`, and a call to PostHog that can raise into the feature or wait for the network.
 - **Repo rules**: go through AGENTS.md "Conventions" and give pass or fail for each rule the diff touches, including: verdict names changed everywhere they appear, `research.RESEARCH_SCHEMA` at most 10 properties, no `temperature`, `requests` calls with a timeout, no `Exa(` outside `clients/exa_client.py`, the dashboard importing nothing that loads `.env` or the paid clients, `db.USER_MIGRATIONS` only appended to, `db.SCHEMA_VERSION` bumped with derived tables, `process_company` never raising, `jobs.build` and `schedule._form` for schedulable commands, the matching folder README and `*.example` templates updated.
 
 ## 6. Rank the risks
@@ -109,9 +110,9 @@ Severity is the worst credible production outcome if the change merges as it is.
 
 | Severity | Outcome |
 |---|---|
-| S0 Critical | Irreversible or external harm: owner's `hunt.db` data lost or corrupted; secrets or private files exposed (commit, image, page, log); pages or job starts reachable without login, from another host or cross-site; paid calls or Telegram messages nobody asked for; the deploy fails to start |
+| S0 Critical | Irreversible or external harm: owner's `hunt.db` data lost or corrupted; secrets or private files exposed (commit, image, page, log), or private text sent to PostHog; pages or job starts reachable without login, from another host or cross-site; paid calls or Telegram messages nobody asked for; the deploy fails to start |
 | S1 High | Wrong results without an error: wrong scores or verdicts, dropped companies or postings, saved `out/` runs no longer readable, one company aborting a run, two `hunt.py` commands at once |
-| S2 Medium | Visible breakage of the changed feature or a neighbouring one; CI failure (Python 3.11 included); changed behavior lacking meaningful regression protection, with the missing scenario identified |
+| S2 Medium | Visible breakage of the changed feature or a neighbouring one; CI failure (Python 3.11 included); changed behavior lacking meaningful regression protection, with the missing scenario identified; a new action, model call, tool or command that PostHog does not hear about |
 | S3 Low | Maintainability, docs, naming, minor UX |
 
 Every ranked risk needs evidence: `file:line`, a command and its output, or a failing probe. Preserve known findings even when a review stops. Suspicions you could not prove go under "Unverified", with what would settle them; speculative concerns alone are not blockers. Missing essential evidence is INCOMPLETE, not a fabricated defect. Report all findings before the implementer starts repairs rather than serializing one finding per round.

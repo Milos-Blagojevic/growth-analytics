@@ -8,7 +8,7 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel
 
-from clients import jev
+from clients import jev, posthog_client
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 
@@ -223,7 +223,8 @@ def score_company(research, profile, *, screen=None, model=None, client=None):
         + "\n\nCompany research (with source grounding):\n"
         + json.dumps(evidence, indent=2)
     )
-    response = client.messages.parse(
+    response = posthog_client.parse_anthropic(
+        client,
         model=model or os.environ.get("SCORING_MODEL", DEFAULT_MODEL),
         max_tokens=8000,
         system=SYSTEM_PROMPT,

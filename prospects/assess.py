@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, create_model
 
+from clients import posthog_client
 from pipeline import scoring
 
 logger = logging.getLogger("assess")
@@ -174,7 +175,8 @@ def assess(research, config, *, model=None, client=None):
         + "\n\nCompany research (with source grounding):\n"
         + json.dumps(evidence, indent=2)
     )
-    response = client.messages.parse(
+    response = posthog_client.parse_anthropic(
+        client,
         model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
         max_tokens=4000,
         system=SYSTEM_PROMPT,

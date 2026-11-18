@@ -18,7 +18,7 @@ This is a prototype for a product priced as a share of the customer's revenue or
 
 ## Configure
 
-1. `EXA_API_KEY` and `ANTHROPIC_API_KEY` in `.env`, as for the job hunt. `SCORING_MODEL` overrides the Claude model here too.
+1. `EXA_API_KEY` and `ANTHROPIC_API_KEY` in `.env`, as for the job hunt. `SCORING_MODEL` overrides the Claude model here too. Optional: `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` report each command (started, finished, exit code) and each Exa and Claude call (model, tokens, seconds) to your PostHog project, never a prospect, a figure or your pricing (see [PostHog](../clients/README.md#posthog)).
 2. `cp prospects.example.toml prospects.toml` and fill it in. A missing, invalid or unknown key (a misspelt one, say) stops a command before any paid call, with the key named.
 
    | Key | What it is | Goes to |

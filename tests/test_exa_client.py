@@ -1,3 +1,4 @@
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -282,6 +283,24 @@ def test_agent_answer_raises_for_a_run_without_a_result_and_still_counts_its_cos
     with pytest.raises(RuntimeError, match=message):
         exa_client.agent_answer("find companies", AGENT_SCHEMA)
     assert exa_client.cost_summary()["dollars"] == pytest.approx(0.09)
+
+
+def test_posthog_gets_a_generation_for_each_answer_exas_model_wrote_and_none_of_what_was_asked(exa, posthog_api):
+    exa.on_search(structured_response({"summary": "PRIVATE-SUMMARY"}))
+    exa.on_agent(agent_run({"companies": [{"name": "PRIVATE-COMPANY"}]}))
+    schema = {"type": "object", "properties": {"summary": {"type": "string"}}}
+
+    exa_client.search_structured("PRIVATE-QUERY", schema, type="deep", system_prompt="PRIVATE-PROMPT")
+    exa_client.agent_answer("PRIVATE-QUERY", AGENT_SCHEMA, data_sources=["fiber"], effort="minimal")
+    exa_client.search("PRIVATE-QUERY")  # results to read, not an answer a model wrote
+    exa.on_agent(agent_run(status="failed", cost=0.09))
+    with pytest.raises(RuntimeError, match="failed"):  # no answer: nothing to report
+        exa_client.agent_answer("PRIVATE-QUERY", AGENT_SCHEMA)
+
+    generations = [event["properties"] for event in posthog_api.events()]
+    assert [(g["$ai_provider"], g["$ai_model"]) for g in generations] == [("exa", "search-deep"), ("exa", "agent-minimal")]
+    assert all(g["$ai_latency"] >= 0 and "$ai_input_tokens" not in g for g in generations)  # Exa counts no tokens
+    assert "PRIVATE" not in json.dumps(posthog_api.events())
 
 
 def test_agent_answer_keeps_a_paid_result_whose_grounding_is_missing_or_unusual(exa):

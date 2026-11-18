@@ -81,6 +81,23 @@ def test_run_assesses_rates_and_saves_and_a_failing_prospect_does_not_stop_it(ex
     assert [r["name"] for r in warehouse.ranking("prospects.duckdb")] == ["Acme"]
 
 
+def test_posthog_gets_the_command_and_the_assessment_as_a_generation_without_its_text(exa, workdir, monkeypatch, fake_claude,
+                                                                                     posthog_api):
+    acme_answers_beta_fails(exa)
+    with_claude(monkeypatch, fake_claude(assessment()))
+
+    assert run_cli(monkeypatch, "run") == 1
+
+    started, ended = posthog_api.records()
+    assert started == {"name": "prospects_command_started", "level": "INFO", "service": "prospects", "command": "run"}
+    assert (ended["name"], ended["level"], ended["exit_code"]) == ("prospects_command_finished", "ERROR", 1)
+    generations = posthog_api.events("$ai_generation")
+    assert sorted({g["properties"]["$ai_provider"] for g in generations}) == ["anthropic", "exa"]
+    told = json.dumps([posthog_api.events(), posthog_api.records()])
+    for private in ("Acme", "acme", "meditation", "subscriptions", "$12"):
+        assert private not in told
+
+
 def test_run_prints_what_backs_a_rating_and_keeps_research_warnings(exa, workdir, monkeypatch, fake_claude, capsys):
     exa.on_search(exa_replies(money=money_reply(identity_verified=False)))
     fake = with_claude(monkeypatch, fake_claude(assessment(

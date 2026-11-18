@@ -93,6 +93,28 @@ def test_a_correct_exam_returns_zero(jev_api, tmp_path):
     assert report["metrics"]["errors"] == 0
 
 
+def test_posthog_gets_a_live_run_and_its_jev_requests_without_the_postings_and_nothing_from_the_free_check(
+        jev_api, posthog_api, tmp_path):
+    jev_api.on(neutral)
+
+    assert main(["roles"]) == 0
+    assert posthog_api.events() == [] and posthog_api.records() == []  # the free check stays off the network
+
+    assert main(["roles", "--live", "--split", "holdout", "--output", str(tmp_path / "run")]) == 1
+
+    started, ended = posthog_api.records()
+    assert started == {"name": "evals_command_started", "level": "INFO", "service": "evals", "command": "roles"}
+    assert ended.pop("seconds") >= 0
+    assert ended == {"name": "evals_command_finished", "level": "ERROR", "service": "evals", "command": "roles",
+                     "exit_code": 1}  # the exam failed: two expected drops were kept
+    generations = [event["properties"] for event in posthog_api.events()]
+    assert [(g["$ai_provider"], g["$ai_model"], g["$ai_input_tokens"]) for g in generations] == [
+        ("typesafe", jev.DEFAULT_MODEL, 500)] * 3
+    told = json.dumps([posthog_api.events(), posthog_api.records()])
+    for text in ("Office Manager", "Mid-Level", "Belgrade", "example.invalid"):
+        assert text not in told
+
+
 def test_api_errors_are_unanswered_not_fallback_successes(http, monkeypatch, tmp_path):
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-jev-key")
     http.post(jev.API_URL, json={"error": "not-public-response"}, status=401)

@@ -5,6 +5,10 @@ jobs start hunt.py commands as subprocesses, from a button or from HUNT_SCHEDULE
 Host (loopback, plus the deployment's own host name), and with a password every page needs the login cookie. Every
 POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token header) and a matching Origin, so other
 websites open in the browser cannot start paid runs.
+
+With PostHog on (`python -m dashboard` turns it on from POSTHOG_PROJECT_TOKEN and POSTHOG_HOST), each action of
+yours that succeeds is reported as an anonymous event (`posthog_client.capture`: a name and a property or two from
+fixed sets, never a company, a note or an id) and each exception nothing handled by its type, stack and route.
 """
 
 import hashlib
@@ -20,6 +24,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from clients import posthog_client
 from dashboard import auth, bot, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
 from interview import interviews
 from pipeline import runs
@@ -90,6 +95,23 @@ def _same_origin(origin, host):
         return False
 
 
+class _ReportErrors:
+    """ASGI middleware. PostHog: an exception a page or an action did not handle, with the route as it is declared
+    rather than the address asked for, which names a company or an interview."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await self.app(scope, receive, send)
+        except Exception as exc:
+            if scope["type"] == "http":
+                posthog_client.capture_exception(
+                    exc, {"route": getattr(scope.get("route"), "path", ""), "method": scope["method"]})
+            raise
+
+
 def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
                chat_bot=False):
     """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
@@ -102,6 +124,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
 
     @asynccontextmanager
     async def lifespan(app):
+        posthog_client.log("dashboard_started")
         if scheduler:
             scheduler.start()
         if chat:
@@ -111,6 +134,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             scheduler.stop()
         if chat:
             chat.stop()
+        posthog_client.flush()
 
     app = FastAPI(title="Job hunt dashboard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -150,6 +174,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     startup = db.connect(root)
     runner.recover(startup)
     startup.close()
+
+    app.add_middleware(_ReportErrors)  # before the guard, which so stays outermost: only requests it admits get here
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -279,6 +305,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 )
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+            if form.get("status"):  # not for the notes, which save as the owner types
+                posthog_client.capture("pipeline_status_updated", {"status": item["status"]})
             if form.get("variant") == "reload":  # Pipeline: the card belongs in another column now
                 return reload()
             return templates.TemplateResponse(request, "partials/track.html", {"track": item})
@@ -302,6 +330,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             ingest.add_companies(root / ingest.COMPANIES, [(names[d], d) for d in domains])
         except ValueError as exc:  # companies.csv is unreadable (the banner names it): nothing is appended blind
             return PlainTextResponse(f"companies.csv {exc}", status_code=400)
+        posthog_client.capture("leads_queued", {"lead_count": len(domains)})
         return Response(status_code=204, headers={"HX-Refresh": "true"})
 
     # Pipeline and side projects -----------------------------------------------------------------------------
@@ -325,6 +354,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse(str(exc), status_code=409)
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+        posthog_client.capture("email_update_decided")
         return reload()
 
     @app.get("/projects", response_class=HTMLResponse)
@@ -353,6 +383,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 projects.create(conn, **{k: form.get(k, "") for k in projects.FIELDS})
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+        posthog_client.capture("project_created")
         return redirect("/projects")
 
     @app.post("/projects/{project_id}")
@@ -365,6 +396,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse(str(exc), status_code=404)
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+        posthog_client.capture("project_updated")
         return redirect("/projects")
 
     @app.post("/projects/{project_id}/delete")
@@ -374,6 +406,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 projects.delete(conn, project_id)
             except LookupError as exc:
                 return PlainTextResponse(str(exc), status_code=404)
+        posthog_client.capture("project_deleted")
         return redirect("/projects")
 
     @app.post("/projects/suggestions/{key}")
@@ -384,6 +417,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 projects.accept(conn, key, status="dismissed" if form.get("action") == "dismiss" else "idea")
             except LookupError as exc:
                 return PlainTextResponse(str(exc), status_code=404)
+        posthog_client.capture("project_suggestion_decided",
+                               {"decision": "dismissed" if form.get("action") == "dismiss" else "accepted"})
         return redirect("/projects")
 
     # Interviews ---------------------------------------------------------------------------------------------
@@ -425,6 +460,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             interview_id = interviews.create(root, await request.form())
         except ValueError as exc:
             return PlainTextResponse(str(exc), status_code=400)
+        posthog_client.capture("interview_created")
         return redirect(f"/interviews/{interview_id}")
 
     @app.post("/interviews/{interview_id}")
@@ -434,6 +470,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             interviews.update(root, interview_id, await request.form())
         except ValueError as exc:
             return PlainTextResponse(str(exc), status_code=400)
+        posthog_client.capture("interview_updated")
         return redirect(f"/interviews/{interview_id}")
 
     @app.get("/interviews/{interview_id}", response_class=HTMLResponse)
@@ -451,9 +488,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         form = await request.form(max_part_size=MAX_TRANSCRIPT_BYTES)
         upload = form.get("file")
         if upload is not None and getattr(upload, "filename", ""):
-            raw, filename = await upload.read(MAX_TRANSCRIPT_BYTES + 1), upload.filename
+            raw, filename, source = await upload.read(MAX_TRANSCRIPT_BYTES + 1), upload.filename, "file"
         else:
-            raw, filename = (form.get("text") or "").encode(), "pasted text"
+            raw, filename, source = (form.get("text") or "").encode(), "pasted text", "pasted"
         if len(raw) > MAX_TRANSCRIPT_BYTES:
             return PlainTextResponse("The transcript is larger than 2 MB.", status_code=400)
         if not raw.strip():
@@ -463,6 +500,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         except (ValueError, UnicodeDecodeError) as exc:
             return PlainTextResponse(f"Could not read the transcript: {exc}", status_code=400)
         interviews.save_json(path, interviews.TRANSCRIPT, transcript)
+        posthog_client.capture("interview_transcript_saved", {"source": source})
         return reload()
 
     @app.post("/interviews/{interview_id}/me")
@@ -473,6 +511,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         if transcript is None or me not in transcript["speakers"]:
             return PlainTextResponse("Choose one of the transcript's speakers.", status_code=400)
         interviews.save_json(path, interviews.TRANSCRIPT, transcript | {"me": me})
+        posthog_client.capture("interview_speaker_selected")
         return reload()
 
     # Runs ---------------------------------------------------------------------------------------------------
@@ -528,13 +567,15 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         form = await request.form()
         with connection() as conn:
             try:
-                job_id = runner.start(conn, jobs.build(conn, root, form))
+                spec = jobs.build(conn, root, form)
+                job_id = runner.start(conn, spec)
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
             except runs.Busy:
                 return PlainTextResponse("Another hunt.py command is running; wait for it to finish.", status_code=409)
             except OSError as exc:
                 return PlainTextResponse(f"Could not start hunt.py: {exc}", status_code=500)
+        posthog_client.capture("hunt_run_started", {"kind": spec.kind, "trigger": "button"})
         return redirect(f"/runs/jobs/{job_id}")
 
     def job_or_404(conn, job_id):
@@ -566,13 +607,16 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     def job_cancel(job_id: int):
         if not runner.cancel(job_id):
             return PlainTextResponse("This job is not running.", status_code=409)
+        posthog_client.capture("hunt_run_cancelled")
         return Response(status_code=204)
 
     def start_scheduled(form):
         with connection() as conn:
             spec = jobs.build(conn, root, form)
             spec.label = f"Scheduled · {spec.label}"
-            return runner.start(conn, spec)
+            job_id = runner.start(conn, spec)
+        posthog_client.capture("hunt_run_started", {"kind": spec.kind, "trigger": "schedule"})
+        return job_id
 
     if schedule_entries:
         scheduler = schedule.Scheduler(schedule_entries, start_scheduled)

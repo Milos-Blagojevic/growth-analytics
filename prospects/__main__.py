@@ -24,7 +24,7 @@ from pathlib import Path
 import duckdb
 
 import hunt
-from clients import exa_client
+from clients import exa_client, posthog_client
 from pipeline import runs, scoring
 from prospects import assess, config, discover, enrich, value, warehouse
 
@@ -286,7 +286,11 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    sys.exit(args.func(args))
+    # PostHog, when both are set: a record when the command starts and ends, and a generation per model call.
+    posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"),
+                             service="prospects")
+    with posthog_client.command(args.command):
+        sys.exit(args.func(args))
 
 
 if __name__ == "__main__":
