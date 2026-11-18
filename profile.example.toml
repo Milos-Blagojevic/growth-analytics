@@ -42,6 +42,7 @@ title_exclude = []
 [news]
 # `python hunt.py news` searches recent news on each topic (one Exa search each) and sends the articles Claude
 # picks as worth your time to Telegram. Only your target roles and these topics are sent to Claude, not your CV.
+# The chat bot (`python hunt.py chat`) makes the same digest when you ask it for news.
 topics = [
   "data analytics job market",
   "growth engineering",

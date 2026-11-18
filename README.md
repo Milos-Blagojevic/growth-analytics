@@ -11,7 +11,7 @@ Researches companies with Exa, scores how well they and their open roles fit you
 | `hunt.py` | The CLI entry point: `python hunt.py <command>` | [Commands](#commands) |
 | `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram | [clients/README.md](clients/README.md) |
 | `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, watch list, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
-| `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot | [inbox/README.md](inbox/README.md) |
+| `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot (your mail, and news digests on request) | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
 | `prospects/` | Sales prospects for your own product: Exa research, Claude assessment, value range and routing rules, DuckDB warehouse | [prospects/README.md](prospects/README.md) |
 | `dashboard/` | The dashboard app and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
@@ -40,7 +40,7 @@ python -m clients.exa_client
 1. Add keys to `.env`: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (see `.env.example` for how to get the Telegram values), and optionally `TYPESAFE_API_KEY` (see [Jev screening](clients/README.md#jev-screening)) and `LOGFIRE_TOKEN` (traces of the chat bot's answers, without their text; see [Chat with your mail](inbox/README.md#chat-with-your-mail)).
 2. `cp profile.example.toml profile.toml`. `[search].roles`, `seniority` and `work_mode` are required (a command exits with `[search].<key> is required` otherwise). Under `[candidate]`, set `location` and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). `notes` (preferences or deal-breakers) and `weak_spots` are also sent to the scorer (see Weak spots in [Run](pipeline/README.md#run)); optionally fill `gaps` (see Stretch in [Run](pipeline/README.md#run)).
 3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies). Domains are normalised as in `discover` and the dashboard: `https://`, `http://`, `www.` and any path after the host are stripped. A row whose domain still contains a `/` or has no `.` stops the run before any paid call, with the row named. A domain listed twice (case-insensitive) is researched once, with a warning. A file saved by Excel as "CSV UTF-8" (with a byte-order mark) is read as is.
-4. Optional: `[news].topics` in `profile.toml` for the news digest, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)). Fiber's jobs database as an extra source of open roles is chosen per run, not here: `run --fiber`, or **With Fiber** on the dashboard's Runs page (see Role search in [Run](pipeline/README.md#run); it costs more per company).
+4. Optional: `[news].topics` in `profile.toml` for the news digest (scheduled, or when you ask the chat bot for news), and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)). Fiber's jobs database as an extra source of open roles is chosen per run, not here: `run --fiber`, or **With Fiber** on the dashboard's Runs page (see Role search in [Run](pipeline/README.md#run); it costs more per company).
 5. Optional, for the prospect pipeline: `cp prospects.example.toml prospects.toml` (your product, ideal customer, pricing and routing tiers) and `cp prospects.example.csv prospects.csv` (`name,domain` rows, read like `companies.csv`). See [Prospects](prospects/README.md#configure).
 
 ## Commands
@@ -59,7 +59,7 @@ python -m clients.exa_client
 | `python hunt.py interview-prep` | Prep brief for one interview | Claude (and Exa for the posting) | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py gmail-login` | Signs in to Gmail once | No | No | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
-| `python hunt.py chat` | Telegram chat bot over your mail | Claude | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
+| `python hunt.py chat` | Telegram chat bot over your mail; makes a news digest when you ask for news | Claude; Exa and Jev for a news digest | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
 | `python -m prospects discover` | Finds companies that match your ideal customer in Fiber's company database | Exa agent run and Fiber (about $0.75 a run so far; no cap) | No | [Prospects](prospects/README.md#discover) |
 | `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
 | `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
@@ -97,7 +97,7 @@ python -m clients.exa_client
 | `gmail_token.json` | Your Gmail sign-in, from `gmail-login` (git-ignored; same access) |
 | `mail/` | Rejections and interview invites `mail` found, one file per check that found some (git-ignored) |
 | `mail_state.json` | When mail was last checked and the emails already labelled (git-ignored) |
-| `news_state.json` | Articles the news digest has already considered (git-ignored) |
+| `news_state.json` | Articles the news digest has already considered; the empty `news_state.json.lock` next to it is what its two writers, `news` and the chat bot, lock while they update it (git-ignored) |
 | `jobs/` | Logs and company lists of jobs started from the dashboard (git-ignored) |
 | `interviews/` | Your interviews: details, transcripts, prep briefs and reviews (git-ignored) |
 | `prospect_runs/` | Raw per-run JSON of the prospect pipeline: research, assessment and costs (git-ignored) |
