@@ -8,8 +8,8 @@ By default it serves the current directory on 127.0.0.1 only, without a login. A
   CHAT_BOT               1/true/yes keeps `hunt.py chat` (the Telegram chat bot) running alongside the dashboard
   RAILWAY_PUBLIC_DOMAIN  set by Railway; accepted as Host name, like the host of DASHBOARD_URL
   PORT                   default for --port (set by Railway)
-  POSTHOG_PROJECT_TOKEN  with POSTHOG_HOST, reports your actions, errors and a start record to PostHog (optional)
-  POSTHOG_HOST           the project's ingestion host, e.g. https://eu.i.posthog.com
+  POSTHOG_PROJECT_TOKEN  with POSTHOG_HOST, reports your actions, page views, errors and a start record to PostHog
+  POSTHOG_HOST           the project's ingestion host, e.g. https://eu.i.posthog.com (optional)
 """
 
 import argparse

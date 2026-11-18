@@ -7,8 +7,9 @@ POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token hea
 websites open in the browser cannot start paid runs.
 
 With PostHog on (`python -m dashboard` turns it on from POSTHOG_PROJECT_TOKEN and POSTHOG_HOST), each action of
-yours that succeeds is reported as an anonymous event (`posthog_client.capture`: a name and a property or two from
-fixed sets, never a company, a note or an id) and each exception nothing handled by its type, stack and route.
+yours that succeeds is reported as an event (`posthog_client.capture`: a name and a property or two from fixed sets,
+never a company, a note or an id), each page you open as a $pageview of its route as it is declared, and each
+exception nothing handled by its type, stack and route. All of them are the owner's, without a person profile.
 """
 
 import hashlib
@@ -112,6 +113,35 @@ class _ReportErrors:
             raise
 
 
+class _ReportPageviews:
+    """ASGI middleware. PostHog: a page the browser loaded (a GET answered with a full HTML page and 200), as a
+    $pageview of its route as it is declared. What htmx asks for by itself (a company's slide-over panel, a form, the
+    board's live filter, the polls of a running job) is part of the page it was asked from, not a page of its own."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "GET" or any(
+                name == b"hx-request" for name, _ in scope["headers"]):
+            await self.app(scope, receive, send)
+            return
+        page = False
+
+        async def watch(message):
+            nonlocal page
+            if message["type"] == "http.response.start":
+                page = message["status"] == 200 and any(
+                    name.lower() == b"content-type" and value.startswith(b"text/html")
+                    for name, value in message.get("headers", ()))
+            await send(message)
+
+        await self.app(scope, receive, watch)
+        route = getattr(scope.get("route"), "path", "")
+        if page and route:
+            posthog_client.pageview(route)
+
+
 def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
                chat_bot=False):
     """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
@@ -175,7 +205,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     runner.recover(startup)
     startup.close()
 
-    app.add_middleware(_ReportErrors)  # before the guard, which so stays outermost: only requests it admits get here
+    # Before the guard, which so stays outermost: only requests it admits get here.
+    app.add_middleware(_ReportErrors)
+    app.add_middleware(_ReportPageviews)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):

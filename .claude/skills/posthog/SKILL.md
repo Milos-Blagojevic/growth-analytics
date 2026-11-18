@@ -31,7 +31,7 @@ Go through every row. Most changes hit one or two.
 | A `hunt.py` or `python -m prospects` command | A record when it starts and one when it ends, with its exit code | Nothing to add: `main()` runs every command inside `posthog_client.command(args.command)` |
 | A `python -m evals` exam | The same for its `--live` run, and a generation per model call | The live part of `main()` already runs inside `command`; a new exam reuses it. The free check reports nothing and makes no request: keep it that way |
 | A new entry point (another `__main__`, another long-lived process) | The same as the existing ones | `posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"), service="<name>")` in its `main()`, then `with posthog_client.command(...)` around each command (a `main` that returns its exit code instead of exiting sets it on what `command` yields, as `evals/__main__.py` does), or `log("<name>_started")` and `flush()` on shutdown for a server |
-| A page or another GET route | Nothing | Looking at a page is not an event. An exception no route handles is reported by `_ReportErrors` with the route as it is declared |
+| A page or another GET route | A `$pageview` when the browser loads it as a page; nothing for what htmx asks for by itself | Nothing to add: `_ReportPageviews` in `dashboard/app.py` reports every GET answered with a full HTML page and 200, by its route as it is declared (`/c/{domain}`, never the address or its query), and skips requests with `HX-Request` (a slide-over panel, a form, a live filter, a poll). An exception no route handles is reported by `_ReportErrors` the same way |
 | The removal or renaming of any of the above | The event, property value or record goes or changes with it | In the code, its test and the README tables, and tell the owner (step 5) |
 
 A change that touches none of these rows needs nothing for PostHog. Say so in your final message in one line, so the owner knows it was checked.
@@ -57,7 +57,7 @@ Before you pass a value to `posthog_client`, ask where it comes from. A value fr
 Send the count, the fixed-set value, the boolean or the duration instead. And never:
 
 - construct `Posthog` or an OpenTelemetry exporter outside `clients/posthog_client.py`, use the SDK's model wrappers (`posthog.ai.*`) or its `PosthogASGIMiddleware`;
-- pass a `distinct_id`, call `identify`, or set person or group properties: the dashboard has one shared password and no accounts, so there is no person to name;
+- pass a `distinct_id`, call `identify`, set person or group properties, or turn person processing on: every event is the owner's already (`_before_send` sets `posthog_client.OWNER` and `process_person_profile: false` on each), since the dashboard has one shared password and no accounts and there is no person to name;
 - export one of the programs' own loggers, or attach a handler to them;
 - read `POSTHOG_PROJECT_TOKEN` or `POSTHOG_HOST` anywhere but an entry point's `main()`;
 - let PostHog fail or slow the work: no call to it that can raise into the feature, no flush in the middle of a command.
@@ -70,7 +70,7 @@ PostHog is off in tests unless the test asks for the `posthog_api` fixture (`tes
 
 - Put recognisable text through the feature (`PRIVATE-NOTE`, a company name, a subject), then assert exactly what was sent (event names with their own properties, in order) and that none of that text is in `json.dumps` of it.
 - Check the refusal too: an action that answers 400 sent nothing.
-- Put the test where the feature's tests are. A new dashboard action joins the sequence in `tests/test_dashboard_app.py::test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothing_of_theirs`, with each value its properties can take, instead of getting a test of its own. Model calls and commands follow `tests/test_hunt.py::test_posthog_gets_a_command_and_its_model_calls_and_nothing_they_read_or_wrote`, agent tools `tests/test_chat.py::test_posthog_gets_an_answer_as_one_trace_and_a_conversation_as_one_session_without_any_text`.
+- Put the test where the feature's tests are. A new dashboard action joins the sequence in `tests/test_dashboard_app.py::test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothing_of_theirs`, with each value its properties can take, instead of getting a test of its own; a new page, or a new kind of request a page makes by itself, joins `test_each_page_the_owner_opens_reaches_posthog_as_a_pageview_of_its_route_and_nothing_they_asked_for`. Model calls and commands follow `tests/test_hunt.py::test_posthog_gets_a_command_and_its_model_calls_and_nothing_they_read_or_wrote`, agent tools `tests/test_chat.py::test_posthog_gets_an_answer_as_one_trace_and_a_conversation_as_one_session_without_any_text`.
 - Do not patch `posthog_client` functions, and do not add a test that only repeats a `capture` call.
 
 ```bash

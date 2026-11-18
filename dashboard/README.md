@@ -56,10 +56,11 @@ The dashboard copies the pipeline files into `hunt.db` (SQLite, git-ignored) and
 
 ## PostHog events
 
-Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's environment (see [PostHog](../clients/README.md#posthog) for what they are and everything else that is sent), each action of yours that succeeds is reported as one event. Events have no person (PostHog gets a new random id with each) and name nothing of yours: no company, posting, note, title or id, and nothing about the request.
+Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's environment (see [PostHog](../clients/README.md#posthog) for what they are and everything else that is sent), each action of yours that succeeds is reported as one event, and each page you open as a `$pageview`. Every event is the owner's (one fixed distinct id, without a person profile: see [One owner, no person](../clients/README.md#posthog)) and names nothing of yours: no company, posting, note, title or id, and nothing about the request but a page's route as it is declared.
 
 | Event | When | Properties |
 |---|---|---|
+| `$pageview` | The browser loads a page: a GET answered with a full HTML page, the reload or redirect that follows an action included. A company's slide-over panel, the forms in the panel, the board's live filter and the polls of a running job or the chat bot are parts of the page they were asked from, not pages | `$current_url` and `$pathname`, both the route as it is declared (`/`, `/c/{domain}`, `/interviews/{interview_id}`), never the address or its query |
 | `pipeline_status_updated` | You set a status on a card (Board, a company's details, Pipeline). Saving notes sends nothing | `status` |
 | `leads_queued` | Leads are added to `companies.csv` | `lead_count` |
 | `email_update_decided` | An email update is confirmed, added to the pipeline or dismissed | |
@@ -71,7 +72,7 @@ Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's env
 | `hunt_run_started` | A job starts | `kind` (as on the Runs page: `run`, `discover`, `watch`, `monitor`, `monitor_sync`, `mail`, `news`, `send`, `interview_prep`, `interview_review`) and `trigger`: `button` or `schedule` |
 | `hunt_run_cancelled` | You stop a running job | |
 
-An action that is refused (a 400, a 409) sends nothing, and neither do reading pages, signing in and out, or the preview of a job before you confirm it. An exception no page handled is reported by its type and stack with the route as it is declared (`/c/{domain}`) and its method, never with its message. The dashboard also writes one log record, `dashboard_started`. The job itself reports its own start, end and model calls as `hunt.py` does everywhere (see [PostHog](../clients/README.md#posthog)).
+An action that is refused (a 400, a 409) sends nothing, and neither do signing in and out or the preview of a job before you confirm it (the login page is a page view like the others). An exception no page handled is reported by its type and stack with the route as it is declared (`/c/{domain}`) and its method, never with its message. The dashboard also writes one log record, `dashboard_started`. The job itself reports its own start, end and model calls as `hunt.py` does everywhere (see [PostHog](../clients/README.md#posthog)).
 
 ## Deploy to Railway
 
@@ -93,7 +94,7 @@ Railway's own cron services cannot share a volume with the dashboard, so the das
    | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` | Only for the chat bot's Gmail access: as in your `.env` (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
    | `CHAT_BOT` | `1` keeps the Telegram chat bot (`hunt.py chat`) running alongside the dashboard (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). A news digest you ask it for uses `EXA_API_KEY` and the volume's `profile.toml` and `news_state.json`, and costs Exa and Claude money each time. |
    | `LOGFIRE_TOKEN` | Optional, with `CHAT_BOT=1`: traces of the bot's answers in Pydantic Logfire, without their text (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
-   | `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | Optional, both or neither: your PostHog project token and its ingestion host (`https://eu.i.posthog.com` or `https://us.i.posthog.com`). The dashboard then reports your actions and its errors, and the jobs and the chat bot it starts report their commands and model calls, none of it with text (see [PostHog events](#posthog-events)). |
+   | `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | Optional, both or neither: your PostHog project token and its ingestion host (`https://eu.i.posthog.com` or `https://us.i.posthog.com`). The dashboard then reports your actions, the pages you open (by route) and its errors, and the jobs and the chat bot it starts report their commands and model calls, none of it with text (see [PostHog events](#posthog-events)). |
    | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
 
 4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.
