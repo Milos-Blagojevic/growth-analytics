@@ -14,7 +14,7 @@
     python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
     python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
     python hunt.py gmail-login               # sign in to Gmail once, for `chat`
-    python hunt.py chat                      # answer Telegram messages about your mail, draft replies (Claude)
+    python hunt.py chat                      # answer Telegram messages: your mail, drafts, news digests (Claude, Exa)
 """
 
 import argparse
@@ -657,7 +657,7 @@ def cmd_chat(args):
     _require_claude()
     if not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env.")
-    mailboxes = chat.Mailboxes()
+    mailboxes = chat.Mailboxes(news=chat.News(state=args.news_state))
     for name, module, path in (("outlook", outlook, args.outlook_token), ("gmail", gmail, args.gmail_token)):
         if not module.configured():
             continue
@@ -667,6 +667,16 @@ def cmd_chat(args):
     if not mailboxes.accounts():
         sys.exit("No mailbox is set up: set OUTLOOK_CLIENT_ID or GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET in .env "
                  "(see inbox/README.md, Chat with your mail).")
+    if not exa_client.configured():
+        mailboxes.news.off = "EXA_API_KEY is not set"
+    else:
+        try:
+            mailboxes.news.profile = load_profile(args.profile)  # the target roles and [news].topics of a news digest
+        except (SystemExit, Exception) as exc:  # load_profile exits on a profile it rejects; the mail chat starts anyway
+            why = exc if isinstance(exc, SystemExit) else f"{type(exc).__name__}: {exc}"
+            mailboxes.news.off = f"{args.profile} cannot be used ({why})"
+    if mailboxes.news.profile is None:  # the mail chat must not go down with the profile
+        logger.warning("news digests are off: %s", mailboxes.news.off)
     if os.environ.get("LOGFIRE_TOKEN"):
         # Traces of each answer without its text (chat.build_agent). Nothing else is instrumented: Logfire never
         # scrubs Claude's messages, and request URLs carry the Telegram bot token and mail search terms.
@@ -784,7 +794,7 @@ def cmd_news(args):
                     telegram.send(part)
                 print(f"Sent a digest of {len(picks)} of {len(articles)} new article(s) to Telegram.")
         if not args.dry_run:
-            news.save_state(args.state, news.next_state(state, articles))  # after the send, so failures retry
+            news.record(args.state, articles)  # after the send, so failures retry
     summary = exa_client.cost_summary()
     print(f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
           f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens"
@@ -964,9 +974,12 @@ def main():
     gmail_cmd.add_argument("--token", default=gmail.TOKEN_FILE, help="where the sign-in is saved")
     gmail_cmd.set_defaults(func=cmd_gmail_login)
 
-    chat_cmd = sub.add_parser("chat", help="answer Telegram messages about your mail and draft replies (Claude)")
+    chat_cmd = sub.add_parser("chat", help="answer Telegram messages about your mail (summaries, drafts) and make "
+                                           "news digests when asked (Claude; Exa for the digests)")
     chat_cmd.add_argument("--outlook-token", default=outlook.TOKEN_FILE, help="the sign-in saved by outlook-login")
     chat_cmd.add_argument("--gmail-token", default=gmail.TOKEN_FILE, help="the sign-in saved by gmail-login")
+    chat_cmd.add_argument("--news-state", default=news.STATE,
+                          help="the articles `news` has already considered; a digest on your topics shares it")
     chat_cmd.set_defaults(func=cmd_chat)
 
     args = parser.parse_args()
@@ -977,8 +990,9 @@ def main():
         sys.exit(args.func(args))
     if args.func in (cmd_gmail_login, cmd_chat):
         # gmail-login writes only gmail_token.json, which nothing else rewrites (Google keeps the refresh token).
-        # chat runs for hours and shares no file with the other commands except outlook_token.json, which it and
-        # `mail` replace atomically with tokens that are both valid, so neither needs the lock.
+        # chat runs for hours, so it cannot hold the lock. It shares two files with the other commands:
+        # outlook_token.json, which it and `mail` replace atomically with tokens that are both valid, and
+        # news_state.json, which it and `news` write through news.record, under a file lock of its own.
         sys.exit(args.func(args))
     # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
     try:

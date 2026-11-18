@@ -1,14 +1,23 @@
 import json
 import logging
 import threading
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from urllib.parse import parse_qs
 
+import anthropic
+import httpx
 import pytest
+import requests
 import responses
+from pydantic import TypeAdapter
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
+from clients import jev
+from exa_mock import error, result, search_response
 from inbox import chat, gmail, outlook
+from pipeline import news, scoring
 
 AUTH = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 INBOX = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
@@ -357,3 +366,265 @@ def test_serve_keeps_polling_after_telegram_errors(mailboxes, monkeypatch, caplo
     assert "Telegram request failed: ConnectionError; polling again in 5s" in caplog.text
     assert "could not confirm the messages yet (Telegram request failed: ReadTimeout); the next poll will" in caplog.text
     assert "could not send the answer: Telegram sendMessage failed" in caplog.text
+
+
+PROFILE = {"search": {"roles": ["growth engineer"]},
+           "news": {"topics": ["growth engineering", "data analytics job market"]}}
+EXPERIMENTS = "https://blog.example.com/experiments"
+HIRING = "https://news.example.com/hiring-rebounds"
+SENT = "https://old.example.com/sent"  # in news_state.json: an earlier digest considered it
+
+
+def article(url, title):
+    return result(url, title=title, highlights=[f"{title}: the details."]) | {"publishedDate": "2026-10-18T07:00:00.000Z"}
+
+
+@pytest.fixture
+def newsroom(mailboxes, exa, fake_claude, monkeypatch, tmp_path):
+    """News digests set up on `mailboxes`. "growth engineering" finds EXPERIMENTS and HIRING; every other search
+    finds HIRING and SENT. Claude picks the second article it is given."""
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    state = tmp_path / "news_state.json"
+    state.write_text(json.dumps({SENT: datetime.now().isoformat(timespec="seconds")}))
+    mailboxes.news = chat.News(profile=PROFILE, state=str(state))
+    exa.on_search(lambda body: search_response(
+        [article(EXPERIMENTS, "Experiment platforms in 2026"), article(HIRING, "Analytics hiring rebounds")]
+        if body["query"] == "growth engineering"
+        else [article(HIRING, "Analytics hiring rebounds"), article(SENT, "Already sent")]))
+    claude = fake_claude({"overview": "Hiring is picking up.",
+                          "picks": [{"number": 2, "takeaway": "Demand for your roles is up."}]})
+    monkeypatch.setattr(scoring, "_client", lambda: claude)
+    return SimpleNamespace(exa=exa, claude=claude, state=state)
+
+
+def chatting(model, deps, *texts, send=None):
+    """Runs chat.serve over the owner's `texts`, one message per poll. Returns the replies sent."""
+    stop, sent = threading.Event(), []
+    batches = [[{"update_id": n, "message": {"chat": {"id": 42}, "text": text}}] for n, text in enumerate(texts, 1)]
+
+    def poll(offset, timeout=None):
+        if timeout == 0:
+            return []
+        if len(batches) == 1:
+            stop.set()
+        return batches.pop(0)
+
+    chat.serve(chat.build_agent(model), deps, poll=poll, send=send or sent.append, stop=stop)
+    return sent
+
+
+def test_a_digest_on_the_configured_topics_skips_and_records_what_digests_considered(mailboxes, newsroom):
+    model, seen = scripted([("news_digest", {})], "Here it is.", [("news_digest", {})], "Nothing new.")
+
+    assert chatting(model, mailboxes, "any news?", "and now?") == ["Here it is.", "Nothing new."]
+
+    assert [b["query"] for b in newsroom.exa.requests()] == ["growth engineering", "data analytics job market"] * 2
+    digest = returned(seen[1])[0]
+    assert digest.startswith("Searched: growth engineering; data analytics job market (published in the last 7 day(s))\n")
+    assert "Hiring is picking up." in digest
+    assert f"• Analytics hiring rebounds (news.example.com)\nDemand for your roles is up.\n{HIRING}" in digest
+    content = newsroom.claude.calls[0]["messages"][0]["content"]
+    assert content.count("Analytics hiring rebounds (") == 1 and "Already sent" not in content
+    # Recorded once the first answer was sent, so the second digest has nothing new and pays for no Claude call.
+    assert set(json.loads(newsroom.state.read_text())) == {SENT, EXPERIMENTS, HIRING}
+    assert "No new articles" in returned(seen[3])[0] and len(newsroom.claude.calls) == 1
+
+
+def test_a_named_topic_is_searched_alone_and_neither_reads_nor_writes_the_state(mailboxes, newsroom):
+    model, seen = scripted([("news_digest", {"topics": [" "]})],
+                           [("news_digest", {"topics": [" DuckDB 2.0 ", ""], "days": 2})], "Here.")
+    before = newsroom.state.read_text()
+
+    assert chatting(model, mailboxes, "Give me the recent news about DuckDB 2.0") == ["Here."]
+
+    # Blank topics are not a request for the digest on the configured ones, which would write the state.
+    assert returned(seen[1]) == ["name a topic, or leave topics out for the owner's configured ones"]
+    (body,) = newsroom.exa.requests()
+    assert body["query"] == "DuckDB 2.0" and body["category"] == "news"
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(body["startPublishedDate"].replace("Z", "+00:00"))
+    assert timedelta(days=2) <= age < timedelta(days=2, minutes=5)
+    digest = returned(seen[2])[0]
+    assert digest.startswith("Searched: DuckDB 2.0 (published in the last 2 day(s))\n")
+    # What an earlier digest considered is not left out of a one-off lookup.
+    assert f"• Already sent (old.example.com)\nDemand for your roles is up.\n{SENT}" in digest
+    content = newsroom.claude.calls[0]["messages"][0]["content"]
+    assert '"DuckDB 2.0"' in content and "growth engineering" not in content
+    assert newsroom.state.read_text() == before
+
+
+def test_a_digest_that_never_reached_the_owner_is_not_recorded(mailboxes, newsroom):
+    before = newsroom.state.read_text()
+
+    def down_after_the_digest(messages, info):
+        if returned(messages[-1]):
+            raise ValueError("model down")
+        return ModelResponse(parts=[ToolCallPart(tool_name="news_digest", args={})])
+
+    assert chatting(FunctionModel(down_after_the_digest), mailboxes, "any news?") == [
+        "Sorry, that failed: ValueError: model down"]
+    assert newsroom.state.read_text() == before
+
+    tried = []
+
+    def refused_once(text):
+        tried.append(text)
+        if len(tried) == 1:
+            raise RuntimeError("Telegram sendMessage failed: Bad Request (code 400)")
+
+    model, _ = scripted([("news_digest", {})], "Here it is.")
+    chatting(model, mailboxes, "any news?", "/help", send=refused_once)
+    assert tried == ["Here it is.", chat.HELP]
+    assert newsroom.state.read_text() == before  # the reply that did arrive was not the digest's
+
+    def unreachable(**kwargs):
+        raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
+
+    def cut_off(**kwargs):  # pydantic's message quotes the output it rejects: only its first line is passed on
+        TypeAdapter(news.Digest).validate_json('{"overview": "CUT-OFF-OVERVIEW", "picks": [{"number": 1, "takeaway": "De')
+
+    # Claude returns no digest, cannot be reached or is cut off: the tool says so, and the articles are found again.
+    newsroom.claude.fields = None
+    for parse, told in ((newsroom.claude.parse, "RuntimeError: Claude returned no parsable news digest "
+                                                "(stop_reason=end_turn)"),
+                        (unreachable, "APIConnectionError: Connection error."),
+                        (cut_off, "ValidationError: 1 validation error for Digest")):
+        newsroom.claude.parse = parse
+        model, seen = scripted([("news_digest", {})], "No digest today.")
+        assert chatting(model, mailboxes, "any news?") == ["No digest today."]
+        assert returned(seen[1]) == [f"Error (news): {told}"]
+        assert newsroom.state.read_text() == before
+
+
+def test_a_bug_inside_a_digest_fails_the_answer_with_its_traceback_in_the_log(mailboxes, newsroom, caplog):
+    def bug(**kwargs):
+        raise KeyError("search")
+
+    newsroom.claude.parse = bug
+    before = newsroom.state.read_text()
+    model, _ = scripted([("news_digest", {})], "never said")
+
+    with caplog.at_level(logging.ERROR, logger="chat"):
+        assert chatting(model, mailboxes, "any news?") == ["Sorry, that failed: KeyError: 'search'"]
+
+    assert "answer failed" in caplog.text and "Traceback (most recent call last)" in caplog.text
+    assert newsroom.state.read_text() == before
+
+
+def test_articles_jev_drops_from_a_digest_never_reach_claude_and_are_recorded(mailboxes, newsroom, jev_api):
+    jev_api.on(lambda state, key, question: 0.1 if state["article"]["title"].startswith("Experiment") else 0.9)
+    newsroom.claude.fields["picks"][0]["number"] = 1
+    model, seen = scripted([("news_digest", {})], "Here it is.")
+
+    chatting(model, mailboxes, "any news?")
+
+    assert "Experiment platforms" not in newsroom.claude.calls[0]["messages"][0]["content"]
+    assert f"• Analytics hiring rebounds (news.example.com)\nDemand for your roles is up.\n{HIRING}" in returned(seen[1])[0]
+    assert set(json.loads(newsroom.state.read_text())) == {SENT, EXPERIMENTS, HIRING}  # not screened again next time
+
+
+def test_a_digest_without_picks_says_so_and_still_records_its_articles(mailboxes, newsroom):
+    newsroom.claude.fields["picks"] = []
+    model, seen = scripted([("news_digest", {})], "Nothing worth your time.")
+
+    chatting(model, mailboxes, "any news?")
+
+    assert returned(seen[1]) == ["Searched: growth engineering; data analytics job market (published in the last 7 "
+                                 "day(s))\nNone of the 2 article(s) found was worth a pick."]
+    assert set(json.loads(newsroom.state.read_text())) == {SENT, EXPERIMENTS, HIRING}  # not read by Claude again
+
+
+def test_a_topic_whose_search_fails_is_named_to_the_model(mailboxes, exa, tmp_path):
+    mailboxes.news = chat.News(profile=PROFILE, state=str(tmp_path / "news_state.json"))
+    exa.on_search(lambda body: error(400, "bad query"))
+
+    _, seen, _ = run([[("news_digest", {"topics": ["dbt"]})], "ok"], mailboxes)
+
+    digest = returned(seen[1])[0]
+    assert digest.startswith("Searched: dbt (published in the last 7 day(s))\nNews digest ")
+    assert digest.endswith(": 0 pick(s)\n\nCould not search:\n- dbt: ValueError")
+
+
+def test_news_digest_says_what_is_missing_and_bounds_what_one_answer_spends(mailboxes, newsroom):
+    _, seen, _ = run([[("news_digest", {})], "ok"], chat.Mailboxes(outlook_token="outlook_token.json"))
+    assert returned(seen[1]) == ["Error (news): news digests are off: they need EXA_API_KEY and profile.toml"]
+
+    mailboxes.news.profile = {"search": {"roles": ["growth engineer"]}}
+    _, seen, _ = run([[("news_digest", {})], "ok"], mailboxes)
+    assert returned(seen[1]) == ["Error (news): ValueError: [news].topics is empty"]
+
+    mailboxes.news.profile = PROFILE
+    newsroom.state.write_text("[]")  # found before the digest is paid for, not when its articles are recorded
+    _, seen, _ = run([[("news_digest", {})], "ok"], mailboxes)
+    assert returned(seen[1]) == [f"Error (news): ValueError: {newsroom.state} does not map article URLs to times"]
+
+    mailboxes.news.state = str(newsroom.state.parent)  # a folder
+    _, seen, _ = run([[("news_digest", {})], "ok"], mailboxes)
+    assert returned(seen[1])[0].startswith("Error (news): IsADirectoryError: ")
+    assert newsroom.exa.requests() == []
+
+    digests = [[("news_digest", args)] for args in (
+        {"topics": ["dbt"], "days": 4_000_000}, {"topics": ["dbt"], "days": 0},
+        {"topics": ["a", "b", "c", "d", "x" * 100]}, {"topics": ["dbt"]})]
+    _, seen, _ = run([[("news_digest", {"topics": list("abcdef")})], [("news_digest", {"topics": ["x" * 101]})],
+                      *digests, "ok"], mailboxes)
+    too_much = ["at most 5 topics per digest, each a few words (at most 100 characters)"]
+    assert returned(seen[1]) == too_much and returned(seen[2]) == too_much
+    assert [returned(seen[n])[0].split("\n")[0] for n in (3, 4)] == [
+        "Searched: dbt (published in the last 90 day(s))", "Searched: dbt (published in the last 1 day(s))"]
+    assert returned(seen[6]) == ["Error (news): at most 3 news digests per answer; the owner can ask again for more."]
+    assert [b["query"] for b in newsroom.exa.requests()] == ["dbt", "dbt", "a", "b", "c", "d", "x" * 100]
+    assert len(newsroom.claude.calls) == 3
+
+
+def test_neither_the_log_nor_the_traces_carry_the_text_of_a_news_digest(mailboxes, newsroom, capfire, caplog):
+    with caplog.at_level(logging.INFO):
+        answer, _, _ = run([[("news_digest", {"topics": ["PRIVATE-TOPIC"]})], "PRIVATE-ANSWER"], mailboxes,
+                           text="PRIVATE-QUESTION")
+
+    assert answer == "PRIVATE-ANSWER"
+    spans = capfire.exporter.exported_spans_as_dict()
+    assert "news_digest" in {s["attributes"].get("gen_ai.tool.name") for s in spans}
+    exported = json.dumps([spans, capfire.log_exporter.exported_logs_as_dicts()], default=str)
+    for text in ("PRIVATE", "Analytics hiring rebounds", "Already sent", "Demand for your roles", HIRING):
+        assert text not in exported and text not in caplog.text
+    assert "news digest: 1 topic(s), 2 article(s), 1 pick(s), 1200 in / 300 out tokens" in caplog.text
+
+
+def test_a_typesafe_outage_during_one_digest_does_not_end_the_screen_for_later_ones(mailboxes, newsroom, jev_api):
+    outage = [True]
+
+    def relevance(state, key, question):
+        if outage:
+            raise requests.ConnectionError("refused")
+        return 0.9
+
+    jev_api.on(relevance)
+    dbt = [("news_digest", {"topics": ["dbt"]})]
+    model, _ = scripted(dbt, "One.", dbt, "Two.")
+    conversation = chat.Conversation(chat.build_agent(model), mailboxes)
+
+    conversation.answer("news about dbt?")  # Jev is down: Claude reads both articles
+    outage.clear()
+    conversation.answer("and again?")
+
+    assert len(jev_api.requests) == jev.MAX_ATTEMPTS + 2  # the bot runs for weeks: the second digest is screened again
+
+
+def test_a_state_file_that_cannot_be_updated_does_not_stop_the_bot(mailboxes, newsroom, tmp_path, caplog):
+    sent = []
+
+    def spoiled_meanwhile(text):  # between the digest and its answer the file stops being a state file
+        newsroom.state.write_text("{not json")
+        sent.append(text)
+
+    model, _ = scripted([("news_digest", {})], "Here it is.", "You are welcome.")
+    with caplog.at_level(logging.WARNING, logger="chat"):
+        chatting(model, mailboxes, "any news?", "thanks", send=spoiled_meanwhile)
+    assert sent == ["Here it is.", "You are welcome."] and "could not record the digest's articles" in caplog.text
+
+    caplog.clear()
+    mailboxes.news.state = str(tmp_path / "gone" / "news_state.json")  # a folder that does not exist
+    model, _ = scripted([("news_digest", {})], "Here it is.", "You are welcome.")
+    with caplog.at_level(logging.WARNING, logger="chat"):
+        assert chatting(model, mailboxes, "any news?", "thanks") == ["Here it is.", "You are welcome."]
+    assert "could not record the digest's articles" in caplog.text

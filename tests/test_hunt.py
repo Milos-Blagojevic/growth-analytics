@@ -523,10 +523,11 @@ def test_chat_and_gmail_login_run_without_the_lock(workdir, monkeypatch):
 
 
 def chat_args(**overrides):
-    return argparse.Namespace(**{"outlook_token": "outlook_token.json", "gmail_token": "gmail_token.json", **overrides})
+    return argparse.Namespace(**{"profile": "profile.toml", "outlook_token": "outlook_token.json",
+                                 "gmail_token": "gmail_token.json", "news_state": "news_state.json", **overrides})
 
 
-def test_chat_needs_telegram_and_a_signed_in_mailbox_before_it_starts(http, workdir, monkeypatch):
+def test_chat_needs_telegram_and_a_signed_in_mailbox_before_it_starts(http, workdir, monkeypatch, caplog):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     with pytest.raises(SystemExit, match="TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set"):
         hunt.cmd_chat(chat_args())
@@ -557,6 +558,39 @@ def test_chat_needs_telegram_and_a_signed_in_mailbox_before_it_starts(http, work
     ((agent, mailboxes),) = served
     assert agent == "agent" and mailboxes.accounts() == ["outlook", "gmail"]
     assert (mailboxes.outlook_token, mailboxes.gmail_token) == ("outlook_token.json", "gmail_token.json")
+    assert mailboxes.news.profile["search"]["roles"] == ["analytics engineer", "growth engineer"]
+    assert mailboxes.news.state == "news_state.json"
+
+    # Without Exa, or a profile it can use, the bot still starts for the mail; the digest tool says what is missing.
+    with caplog.at_level("WARNING", logger="hunt"):
+        assert hunt.cmd_chat(chat_args(profile="none.toml")) == 0
+        Path("profile.toml").write_text("[search]\nroles = []\n")
+        assert hunt.cmd_chat(chat_args()) == 0
+        Path("profile.toml").write_bytes(b'[search]\nroles = ["caf\xe9"]\n')  # not UTF-8
+        assert hunt.cmd_chat(chat_args()) == 0
+        monkeypatch.delenv("EXA_API_KEY")
+        assert hunt.cmd_chat(chat_args()) == 0
+    off = [boxes.news.off for _, boxes in served[1:] if boxes.news.profile is None]
+    assert off[0].startswith("none.toml cannot be used (FileNotFoundError: ")
+    assert off[1] == "profile.toml cannot be used (profile.toml: [search].roles is required)"
+    assert off[2].startswith("profile.toml cannot be used (UnicodeDecodeError: ")
+    assert off[3] == "EXA_API_KEY is not set" and "news digests are off: EXA_API_KEY is not set" in caplog.text
+
+    # A digest on your topics shares the state file of `news` unless --news-state names another.
+    for argv, state in ((["hunt.py", "chat"], "news_state.json"),
+                        (["hunt.py", "chat", "--news-state", "elsewhere.json"], "elsewhere.json")):
+        monkeypatch.setattr("sys.argv", argv)
+        with pytest.raises(SystemExit):
+            hunt.main()
+        assert served[-1][1].news.state == state
+
+    def interrupted(path):
+        raise KeyboardInterrupt
+
+    monkeypatch.setenv("EXA_API_KEY", "key")
+    monkeypatch.setattr(hunt, "load_profile", interrupted)
+    with pytest.raises(KeyboardInterrupt):  # Ctrl-C while the profile loads is not "a profile it cannot use"
+        hunt.cmd_chat(chat_args())
 
 
 RHO = "20261013-rho-senior-data-engineer"
