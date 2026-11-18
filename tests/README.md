@@ -23,6 +23,11 @@ Tests need no keys and make no network calls. Every HTTP request made through `r
 
 CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
 
+## Eval runner versus model quality
+
+`test_evals.py` checks grading, split isolation, explicit paid-call opt-in, error accounting, public-report safety and preservation of existing baselines using the HTTP-level Jev fake. A fresh-process probe rejects private configuration and network access from the free command; malformed and unsolicited provider fields exercise safe reporting. These software tests do not measure the real model's judgment. The separate [AI eval runner](../evals/README.md) uses public human-labeled cases; its default command is free, and only explicit `--live` calls TypeSafe. Do not run live evals as part of the ordinary test suite.
+
+
 ## Verify in CI
 
 The Verify workflow (`.github/workflows/verify.yml`) runs the `verify` skill (see [Files](../README.md#files)) without Claude Code. `.claude/skills/verify/scripts/ci.py` gives the skill to a [Pydantic AI Coder](https://pydantic.dev/docs/ai/harness/coder/) agent on `claude-opus-5-5`, with the pull request's title and description as what the change should do. The agent works on a copy of the branch in a Docker container without network access. The copy holds the git history and the tracked and untracked files, never git-ignored ones (`.env`, the token files, `hunt.db`, ...), and the container gets none of the runner's environment, so the agent's commands cannot read the API key or reach Exa, Anthropic or Telegram. The report goes to the job summary, with the model requests, tokens and dollars it took, and the check fails on BLOCK and FIX BEFORE MERGE. The skill's Docker image check cannot run inside the container and is reported as skipped.

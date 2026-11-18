@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "name": "Jev role screen: nine synthetic boundary cases",
+  "kind": "synthetic",
+  "label_source": "owner-reviewed interactively before model execution",
+  "candidate": {
+    "location": "Belgrade, Serbia",
+    "target_roles": ["analytics engineer", "growth engineer"]
+  },
+  "cases": [
+    {
+      "id": "a_us_only",
+      "split": "calibration",
+      "expected": "drop",
+      "label_reason": "US residency is required, excludes Serbia, and relocation is not offered.",
+      "role": {
+        "title": "Senior Analytics Engineer",
+        "location": "Remote, United States only",
+        "remote_or_relocation": "Fully remote. Applicants must reside in the United States. No relocation support.",
+        "description": "SQL, dbt, and data modelling. Senior role. Fully remote, but applicants must reside in the United States. No relocation support."
+      }
+    },
+    {
+      "id": "b_remote_unspecified",
+      "split": "calibration",
+      "expected": "keep",
+      "label_reason": "Missing country eligibility is uncertainty, not evidence for a confident rejection.",
+      "role": {
+        "title": "Senior Analytics Engineer",
+        "location": "Remote",
+        "remote_or_relocation": "Fully remote. Eligible countries and residency restrictions are not stated.",
+        "description": "SQL, dbt, and data modelling. Senior role. Fully remote. No eligible countries or residency restrictions are mentioned."
+      }
+    },
+    {
+      "id": "c_berlin_relocation",
+      "split": "calibration",
+      "expected": "keep",
+      "label_reason": "Relocation support keeps an otherwise relevant overseas hybrid role in consideration.",
+      "role": {
+        "title": "Senior Analytics Engineer",
+        "location": "Berlin, Germany",
+        "remote_or_relocation": "Hybrid, three days on-site weekly. Visa sponsorship and relocation assistance offered.",
+        "description": "SQL, dbt, and data modelling. Senior role. Berlin office, three days on-site weekly. Visa sponsorship and relocation assistance offered."
+      }
+    },
+    {
+      "id": "d_junior_analyst",
+      "split": "calibration",
+      "expected": "drop",
+      "label_reason": "An explicitly entry-level role fails the senior-or-above requirement.",
+      "role": {
+        "title": "Junior Data Analyst",
+        "location": "Remote worldwide",
+        "remote_or_relocation": "Fully remote worldwide.",
+        "description": "Entry-level role, 0-1 years of experience, supervised spreadsheet reporting. Fully remote worldwide."
+      }
+    },
+    {
+      "id": "e_bi_engineering",
+      "split": "calibration",
+      "expected": "keep",
+      "label_reason": "Senior analytics-engineering duties count despite the BI Developer title.",
+      "role": {
+        "title": "Senior BI Developer",
+        "location": "Remote worldwide",
+        "remote_or_relocation": "Fully remote worldwide.",
+        "description": "Owns dbt transformations, warehouse data models, ELT pipelines, testing, and documentation. SQL and five years of relevant experience required. Fully remote worldwide."
+      }
+    },
+    {
+      "id": "f_berlin_no_relocation",
+      "split": "calibration",
+      "expected": "drop",
+      "label_reason": "Overseas mandatory office attendance without relocation support fails the location rule.",
+      "role": {
+        "title": "Senior Analytics Engineer",
+        "location": "Berlin, Germany",
+        "remote_or_relocation": "Hybrid, three days in the Berlin office weekly. No sponsorship or relocation support.",
+        "description": "Strong SQL and dbt match. Senior role. Must work in the Berlin office three days weekly. Applicants must already have German work authorization; no sponsorship or relocation support."
+      }
+    },
+    {
+      "id": "g_us_preferred",
+      "split": "holdout",
+      "expected": "keep",
+      "label_reason": "A US time-zone preference is not a residency restriction; worldwide applicants are explicitly welcome.",
+      "role": {
+        "title": "Senior Growth Engineer",
+        "location": "Remote worldwide",
+        "remote_or_relocation": "Fully remote worldwide. US time-zone overlap preferred; applicants outside the US are welcome.",
+        "description": "Owns experimentation, product analytics, and growth data pipelines. Senior role. Fully remote worldwide. US time-zone overlap preferred; applicants outside the US are welcome."
+      }
+    },
+    {
+      "id": "h_office_manager",
+      "split": "holdout",
+      "expected": "drop",
+      "label_reason": "Administrative office-management duties do not overlap the target engineering roles.",
+      "role": {
+        "title": "Senior Office Manager",
+        "location": "Remote worldwide",
+        "remote_or_relocation": "Fully remote worldwide.",
+        "description": "Manages office suppliers, travel bookings, facilities, and administrative budgets. No engineering, analytics, or data-pipeline duties. Fully remote worldwide."
+      }
+    },
+    {
+      "id": "i_mid_level",
+      "split": "holdout",
+      "expected": "drop",
+      "label_reason": "An explicitly mid-level role fails the senior-or-above requirement despite relevant tools.",
+      "role": {
+        "title": "Analytics Engineer, Mid-Level",
+        "location": "Remote worldwide",
+        "remote_or_relocation": "Fully remote worldwide.",
+        "description": "SQL and dbt, 2-4 years of experience. This is a mid-level position, not a senior role. Fully remote worldwide."
+      }
+    }
+  ]
+}

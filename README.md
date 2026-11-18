@@ -14,6 +14,7 @@ Researches companies with Exa, scores how well they and their open roles fit you
 | `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot (your mail, and news digests on request) | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
 | `prospects/` | Sales prospects for your own product: Exa research, Claude assessment, value range and routing rules, DuckDB warehouse | [prospects/README.md](prospects/README.md) |
+| `evals/` | Public, human-labeled AI exams: Jev role-screen runner and reproducible results | [evals/README.md](evals/README.md) |
 | `dashboard/` | The dashboard app and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
 | `tests/` | The test suite and Verify in CI | [tests/README.md](tests/README.md) |
 | `docs/` | Specs for coding agents and parked ideas | [docs/parked-ideas.md](docs/parked-ideas.md) |
@@ -28,6 +29,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then set EXA_API_KEY in .env
 ```
+
+The [AI eval](evals/README.md) checks its public dataset without keys (`python -m evals roles`). Its explicit `--live` mode needs only `TYPESAFE_API_KEY` exported in the environment; it does not load `.env` or read your private files.
 
 Smoke test (searches "what is exa.ai" and prints 3 results with highlights):
 
@@ -66,6 +69,7 @@ python -m clients.exa_client
 | `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
 | `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
 | `python -m dashboard` | Dashboard: results, tracking, starting jobs | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard) |
+| `python -m evals roles` | Validate the public Jev keep/drop exam; `--live --output NEW_DIRECTORY` runs it and saves reports | No by default; Jev with `--live` | No | [AI evaluations](evals/README.md) |
 | `python -m pytest` | Test suite, no keys and no network | No | No | [Tests](tests/README.md#run-the-tests) |
 
 ## Files
@@ -75,6 +79,7 @@ python -m clients.exa_client
 | `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic,logfire]` and `logfire` for the chat bot and its traces, `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard, and `duckdb` for the prospect warehouse) |
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`, `PyYAML` for the Verify workflow test) |
 | `pytest.ini` | pytest settings: test paths and options |
+| `evals/data/roles.json`, `evals/results/<run>/` | Public synthetic exam and owner-reviewed labels; selected live result directories can be committed with per-case evidence and a Markdown report |
 | `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see [Verify in CI](tests/README.md#verify-in-ci)) |
