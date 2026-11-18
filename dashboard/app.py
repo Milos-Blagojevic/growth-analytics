@@ -50,7 +50,6 @@ JOB_LABELS = {
     "interrupted": "interrupted",
 }
 MODE_LABELS = {"research_only": "research only", "dry_run": "dry run", "deliver": "sent to Telegram"}
-INBOX_DAYS = (7, 14, 30, 0)
 MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 PUBLIC_PATHS = ("/login", "/static/")  # reachable without logging in
@@ -234,7 +233,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         """Reload the current page after an htmx POST (HX-Redirect to the same URL with a #fragment would only scroll)."""
         return Response(status_code=204, headers={"HX-Refresh": "true"})
 
-    # Board, detail, inbox, leads ----------------------------------------------------------------------------
+    # Board, detail, leads -----------------------------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse)
     def board(request: Request, verdict: str = "apply", q: str = "", min_score: int = 0, sort: str = "score",
@@ -280,17 +279,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 )
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
-            variant = form.get("variant")
-            if variant == "reload":  # Pipeline: the card belongs in another column now
+            if form.get("variant") == "reload":  # Pipeline: the card belongs in another column now
                 return reload()
-            template = "partials/track_select.html" if variant == "select" else "partials/track.html"
-            return templates.TemplateResponse(request, template, {"track": item})
-
-    @app.get("/inbox", response_class=HTMLResponse)
-    def inbox(request: Request, days: int = 14):
-        with connection() as conn:
-            return render(request, "inbox.html", conn, page="inbox", days=days, day_options=INBOX_DAYS,
-                          **queries.inbox(conn, days=days))
+            return templates.TemplateResponse(request, "partials/track.html", {"track": item})
 
     @app.get("/leads", response_class=HTMLResponse)
     def leads(request: Request, status: str = ""):

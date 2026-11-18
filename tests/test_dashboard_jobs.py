@@ -129,6 +129,20 @@ def test_run_on_selected_leads_runs_hunt_with_a_companies_file(root, app):
     assert "args: [" in page and f"{job_id}-companies.csv" in page and "done" in page  # the log is shown
 
 
+def test_finished_run_links_to_board_results(root, app):
+    write_run(root, "20260110-090000", [
+        result("Delta", "delta.ai", fit=fit(80, "apply", "Analytics Engineer", "https://delta.ai/jobs/1")),
+    ])
+    c = client(app)
+    job_id = started_job_id(c.post("/runs", data={"kind": "run", "mode": "dry_run"}))
+    assert finished(root, job_id)["status"] == "succeeded"
+
+    page = c.get(f"/runs/jobs/{job_id}").text
+    assert 'href="/?sort=recent"' in page
+    assert 'href="/inbox' not in page
+    assert "Analytics Engineer" in c.get("/?sort=recent").text
+
+
 def test_exit_code_decides_the_job_status(root, app, monkeypatch):
     c = client(app)
     monkeypatch.setenv("STUB_EXIT", "1")

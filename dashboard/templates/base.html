@@ -14,7 +14,7 @@
   <header class="topbar">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Job hunt</a>
     <nav class="nav">
-      {% for key, href, text in (('board', '/', 'Board'), ('inbox', '/inbox', 'Inbox'), ('pipeline', '/pipeline', 'Pipeline'),
+      {% for key, href, text in (('board', '/', 'Board'), ('pipeline', '/pipeline', 'Pipeline'),
                                   ('interviews', '/interviews', 'Interviews'), ('projects', '/projects', 'Projects'),
                                   ('leads', '/leads', 'Leads'), ('runs', '/runs', 'Runs')) %}
       <a href="{{ href }}" class="{{ 'active' if page == key }}">{{ text }}</a>

@@ -4,7 +4,6 @@ import json
 from datetime import datetime, timedelta
 
 VERDICTS = ("apply", "consider", "stretch", "check_careers", "skip")  # hunt.VERDICTS, in board tab order
-NEW_VERDICTS = ("apply", "consider", "stretch")  # what the inbox and Telegram notification surface
 JSON_FIELDS = ("reasons", "concerns", "proof_ideas", "dead_roles", "third_party_roles", "grounding", "warnings")
 
 # The latest scored result per company, with its run time, the best role's link status and your tracking
@@ -157,39 +156,6 @@ def sparkline(history, width=240, height=64, pad=5):
         "min": min(scores),
         "max": max(scores),
     }
-
-
-def inbox(conn, *, days):
-    """Watch postings and apply/consider/stretch roles first seen in the last `days` days (all if days is 0)."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds") if days else ""
-    postings = [
-        dict(r)
-        for r in conn.execute(
-            "SELECT w.*, COALESCE(t.status, 'new') AS status FROM watch_postings w"
-            " LEFT JOIN tracking t ON t.kind = 'posting' AND t.ref = w.url"
-            " WHERE w.first_seen >= ? ORDER BY w.first_seen DESC, w.board, w.title",
-            [cutoff],
-        )
-    ]
-    placeholders = ", ".join("?" for _ in NEW_VERDICTS)
-    roles = [
-        _row(r)
-        for r in conn.execute(
-            LATEST
-            + """, firsts AS (
-                SELECT domain, best_role_url, MIN(run_id) AS first_run FROM results
-                WHERE score IS NOT NULL GROUP BY domain, best_role_url
-            )
-            SELECT latest.*, first.saved_at AS first_seen FROM latest
-            JOIN firsts ON firsts.domain = latest.domain AND firsts.best_role_url IS latest.best_role_url
-            JOIN runs AS first ON first.id = firsts.first_run
-            WHERE first.saved_at >= ? AND latest.verdict IN ("""
-            + placeholders
-            + ") ORDER BY first_seen DESC, score DESC",
-            [cutoff, *NEW_VERDICTS],
-        )
-    ]
-    return {"postings": postings, "roles": roles}
 
 
 def leads(conn, *, status=""):
