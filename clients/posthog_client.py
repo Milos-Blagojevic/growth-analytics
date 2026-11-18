@@ -1,10 +1,11 @@
 """PostHog: product events, error tracking, AI Observability and logs. The only place that talks to PostHog.
 
 Off until `configure` gets both the project token and the ingestion host (POSTHOG_PROJECT_TOKEN and POSTHOG_HOST,
-read by the entry points: hunt.py, `python -m prospects` and `python -m dashboard`). Until then every function here
-does nothing. None of them raises or waits for PostHog: events and log records are queued and sent by background
-threads, and a failure is logged and never reaches the work it reports on. What is still queued when a process
-exits is sent then, for a bounded time (TIMEOUT, RETRIES, FLUSH_MILLIS), and dropped after it.
+read by the entry points: hunt.py, `python -m prospects`, `python -m dashboard` and a live `python -m evals` run).
+Until then every function here does nothing. None of them raises or waits for PostHog: events and log records are
+queued and sent by background threads, and a failure is logged and never reaches the work it reports on. What is
+still queued when a process exits is sent then, for a bounded time (TIMEOUT, RETRIES, FLUSH_MILLIS), and dropped
+after it.
 
 PostHog is a third party, so what goes to it is limited here, by what these functions take:
 
@@ -24,10 +25,12 @@ PostHog is a third party, so what goes to it is limited here, by what these func
 import atexit
 import inspect
 import logging
+import os
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
+from types import SimpleNamespace
 from uuid import uuid4
 
 from opentelemetry._logs import SeverityNumber
@@ -40,6 +43,7 @@ from posthog import Posthog
 logger = logging.getLogger("posthog_client")
 
 LOGS_PATH = "/i/v1/logs"  # PostHog's OTLP endpoint for logs, under the ingestion host
+CODE = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep  # where this code is on this machine
 # How long a process that is exiting can wait for a PostHog that does not answer: about 10 seconds, with these.
 TIMEOUT = 3  # seconds PostHog gets to answer one request
 RETRIES = 1  # of a batch of events that could not be sent; after it the batch is dropped
@@ -47,7 +51,7 @@ FLUSH_MILLIS = 2_000  # how long a flush waits for the log records to be sent
 
 _client = None  # the process's posthog.Posthog, once configured
 _records = None  # (LoggerProvider, its logger): log records go out through a provider of their own, never the global one
-_service = None  # "dashboard", "hunt" or "prospects": on every event and log record
+_service = None  # "dashboard", "hunt", "prospects" or "evals": on every event and log record
 _session = f"process-{uuid4()}"  # the AI session of the generations one command makes outside an agent turn
 _turn = ContextVar("posthog_agent_turn", default=None)  # the agent answer in progress: {"trace_id", "session_id"}
 
@@ -83,13 +87,25 @@ def configure(token, host, *, service, exceptions=False):
 
 def _without_messages(event):
     """The SDK's last step before it queues an event (an event this raises on is dropped). An exception keeps its
-    type and its stack and loses its message, and each frame the path of its file on this machine: the first can
-    name a company or quote what was read, the second holds the home folder's name."""
+    type and its stack and loses its message, and each frame says where its file is in the code, not on this
+    machine: the first can name a company or quote what was read, the second holds the home folder's name."""
     for raised in event["properties"].get("$exception_list") or []:
         raised["value"] = ""
         for frame in (raised.get("stacktrace") or {}).get("frames") or []:
             frame.pop("abs_path", None)
+            for key in frame.keys() & {"filename", "module"}:  # a template, or a module the SDK could not name
+                frame[key] = _in_the_code(frame[key])
     return event
+
+
+def _in_the_code(path):
+    """An absolute path as the path inside this repo, or inside site-packages, or else the file's name alone."""
+    if not isinstance(path, str) or not os.path.isabs(path):
+        return path
+    if path.startswith(CODE):
+        return path[len(CODE):]
+    _, installed, inside = path.rpartition(f"{os.sep}site-packages{os.sep}")
+    return inside if installed else os.path.basename(path)
 
 
 def configured():
@@ -266,17 +282,19 @@ def log(name, *, error=False, **attributes):
 @contextmanager
 def command(name):
     """Log records around one command of a CLI: <service>_command_started, then <service>_command_finished with
-    its exit code, its seconds and, when it raised, the exception's type (never its message)."""
+    its exit code, its seconds and, when it raised, the exception's type (never its message). The exit code is the
+    one the command exits with (`sys.exit`); a `main` that returns its code instead sets it as `.code` on what
+    this yields."""
     log(f"{_service}_command_started", command=name)
-    started, code, raised = time.monotonic(), 0, {}
+    started, ended, raised = time.monotonic(), SimpleNamespace(code=0), {}
     try:
-        yield
+        yield ended
     except SystemExit as exc:  # sys.exit(code), or sys.exit("what is wrong"), which exits with 1
-        code = exc.code if isinstance(exc.code, int) else 0 if exc.code is None else 1
+        ended.code = exc.code if isinstance(exc.code, int) else 0 if exc.code is None else 1
         raise
     except BaseException as exc:
-        code, raised = 1, {"error_type": type(exc).__name__}
+        ended.code, raised = 1, {"error_type": type(exc).__name__}
         raise
     finally:
-        log(f"{_service}_command_finished", error=code != 0, command=name, exit_code=code,
+        log(f"{_service}_command_finished", error=ended.code != 0, command=name, exit_code=ended.code,
             seconds=round(time.monotonic() - started, 1), **raised)

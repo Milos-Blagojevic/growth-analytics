@@ -1,7 +1,9 @@
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 import uvicorn
@@ -266,6 +268,8 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     (root / "discovered.csv").write_text("discovered_at,name,domain,why,focus\n2026-01-01T08:00:00,Delta,delta.ai,PRIVATE-WHY,\n")
     update = mail_update(1, "rejected", "PRIVATE-EMPLOYER")
     write_mail(root, "20261015-090000", [update])
+    write_run(root, stamp(1)[0], [result("Epsilon", "epsilon.dev", fit=fit(
+        71, "stretch", "Growth Engineer", "https://epsilon.dev/g", gap_note="1 year.", proof_ideas=["PRIVATE-IDEA"]))])
     app = create_app(root, hunt_command=[sys.executable, str(root / "stub_hunt.py")],
                      schedule_entries=schedule.parse("* * * * * monitor-sync"))
     c = make_client(app)  # without the lifespan: the scheduler's own thread stays off, and this test ticks it
@@ -282,17 +286,20 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     assert c.post("/projects", data={"title": "PRIVATE-PROJECT"}).status_code == 204
     assert c.post("/projects", data={"title": "  "}).status_code == 400
     conn = db.connect(root)
-    (project,), (idea,) = projects.board(conn)["idea"], projects.suggestions(conn)
+    (project,), (first, second) = projects.board(conn)["idea"], projects.suggestions(conn)
     conn.close()
     assert c.post(f"/projects/{project['id']}", data={"status": "active"}).status_code == 204
     assert c.post(f"/projects/{project['id']}/delete").status_code == 204
     assert c.post(f"/projects/{project['id']}/delete").status_code == 404
-    assert c.post(f"/projects/suggestions/{idea['key']}", data={"action": "dismiss"}).status_code == 204
+    assert c.post(f"/projects/suggestions/{first['key']}", data={"action": "accept"}).status_code == 204
+    assert c.post(f"/projects/suggestions/{second['key']}", data={"action": "dismiss"}).status_code == 204
     interview = {"company": "PRIVATE-EMPLOYER", "role": "PRIVATE-ROLE", "stage": "hr", "language": "English"}
     page = c.post("/interviews", data=interview).headers["HX-Redirect"]
     assert c.post("/interviews", data=interview | {"company": ""}).status_code == 400
     assert c.post(page, data=interview | {"role": "PRIVATE-NEW-ROLE"}).status_code == 204
     assert c.post(page + "/transcript", data={"text": ""}).status_code == 400
+    pasted = "Ana: PRIVATE-QUESTION one\nMe: PRIVATE-ANSWER one\nAna: PRIVATE-QUESTION two\nMe: PRIVATE-ANSWER two\n"
+    assert c.post(page + "/transcript", data={"text": pasted}).status_code == 204
     assert c.post(page + "/transcript", files={"file": ("refined.ndjson", wispr(*INTERVIEW_TURNS).encode())}).status_code == 204
     assert c.post(page + "/me", data={"me": "9"}).status_code == 400
     assert c.post(page + "/me", data={"me": "2"}).status_code == 204
@@ -318,9 +325,11 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("project_created", {}),
         ("project_updated", {}),
         ("project_deleted", {}),
+        ("project_suggestion_decided", {"decision": "accepted"}),
         ("project_suggestion_decided", {"decision": "dismissed"}),
         ("interview_created", {}),
         ("interview_updated", {}),
+        ("interview_transcript_saved", {"source": "pasted"}),
         ("interview_transcript_saved", {"source": "file"}),
         ("interview_speaker_selected", {}),
         ("hunt_run_started", {"kind": "monitor", "trigger": "button"}),
@@ -330,7 +339,7 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     ]
     assert len({event["distinct_id"] for event in events}) == len(events)  # no person to tie them to
     told = json.dumps(events).lower()
-    for private in ("acme", "delta", "private", "127.0.0.1", "$ip", "$current_url", "$request_path"):
+    for private in ("acme", "delta", "epsilon", "private", "127.0.0.1", "$ip", "$current_url", "$request_path"):
         assert private not in told
 
 
@@ -340,24 +349,32 @@ def test_an_exception_no_page_handles_reaches_posthog_by_type_stack_and_route_wi
         raise PermissionError(13, "Permission denied", "/data/interviews/20261020-acme-senior-analyst/transcript.json")
 
     monkeypatch.setattr(queries, "company", unwritable)
+    monkeypatch.setattr(projects, "board", lambda conn: dict.fromkeys(projects.STATUSES, 5))  # fails in the template
     c = make_client(create_app(root))
 
     with pytest.raises(PermissionError):  # the test client raises what a browser gets a 500 for
         c.get("/c/acme.com")
+    with pytest.raises(TypeError):
+        c.get("/projects")
     assert c.get("/interviews/no-such-interview").status_code == 404  # an answer, not an exception
     assert c.get("/", headers={"Host": "evil.example"}).status_code == 400  # refused by the guard: nothing reported
 
-    (reported,) = posthog_api.events("$exception")
-    properties = reported["properties"]
-    assert own(reported)[1] == {"route": "/c/{domain}", "method": "GET"}
-    assert [(raised["type"], raised["value"]) for raised in properties["$exception_list"]] == [("PermissionError", "")]
-    frames = [frame for raised in properties["$exception_list"] for frame in raised["stacktrace"]["frames"]]
-    assert "unwritable" in {frame["function"] for frame in frames} and not any("abs_path" in frame for frame in frames)
-    for frame in frames:  # a frame quotes the source around its line: code, and here this test's own
-        for key in ("pre_context", "context_line", "post_context"):
+    in_a_route, in_a_template = posthog_api.events("$exception")
+    assert own(in_a_route)[1] == {"route": "/c/{domain}", "method": "GET"}
+    assert own(in_a_template)[1] == {"route": "/projects", "method": "GET"}
+    raised = [r for reported in (in_a_route, in_a_template) for r in reported["properties"]["$exception_list"]]
+    assert [(r["type"], r["value"]) for r in raised] == [("PermissionError", ""), ("TypeError", "")]
+    frames = [frame for r in raised for frame in r["stacktrace"]["frames"]]
+    assert "unwritable" in {frame["function"] for frame in frames}
+    assert "dashboard/templates/projects.html" in {frame["filename"] for frame in frames}  # where it is in the code
+    for frame in frames:  # and nowhere where the code is on this machine
+        assert "abs_path" not in frame
+        assert not any(os.path.isabs(frame.get(key) or "") for key in ("filename", "module")), frame
+        for key in ("pre_context", "context_line", "post_context"):  # the source around the line: code, here this test's
             frame.pop(key, None)
-    told = json.dumps(reported)
+    told = json.dumps([in_a_route, in_a_template])
     assert "acme" not in told and "/data" not in told and "Permission denied" not in told
+    assert str(Path(__file__).parent.parent) not in told
 
 
 def test_the_dashboard_takes_posthog_from_its_environment_and_works_the_same_without_it(tmp_path, posthog_api,

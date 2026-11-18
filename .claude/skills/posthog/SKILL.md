@@ -29,7 +29,8 @@ Go through every row. Most changes hit one or two.
 | A tool of the chat agent (`inbox/chat.py`) | A span per call, in the answer's trace | Add the function to the tuple in `build_agent` that `posthog_client.instrument_tool` wraps. Model calls the tool makes join the trace by themselves |
 | Another agent, or a flow of several model calls that is one answer to the owner | One trace per answer, one session per conversation | Run it inside `with posthog_client.agent_turn(session_id):` and report its model usage with `generation` before the block ends |
 | A `hunt.py` or `python -m prospects` command | A record when it starts and one when it ends, with its exit code | Nothing to add: `main()` runs every command inside `posthog_client.command(args.command)` |
-| A new entry point (another `__main__`, another long-lived process) | The same as the existing ones | `posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"), service="<name>")` in its `main()`, then `command(...)` around each command, or `log("<name>_started")` and `flush()` on shutdown for a server |
+| A `python -m evals` exam | The same for its `--live` run, and a generation per model call | The live part of `main()` already runs inside `command`; a new exam reuses it. The free check reports nothing and makes no request: keep it that way |
+| A new entry point (another `__main__`, another long-lived process) | The same as the existing ones | `posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"), service="<name>")` in its `main()`, then `with posthog_client.command(...)` around each command (a `main` that returns its exit code instead of exiting sets it on what `command` yields, as `evals/__main__.py` does), or `log("<name>_started")` and `flush()` on shutdown for a server |
 | A page or another GET route | Nothing | Looking at a page is not an event. An exception no route handles is reported by `_ReportErrors` with the route as it is declared |
 | The removal or renaming of any of the above | The event, property value or record goes or changes with it | In the code, its test and the README tables, and tell the owner (step 5) |
 
@@ -69,7 +70,7 @@ PostHog is off in tests unless the test asks for the `posthog_api` fixture (`tes
 
 - Put recognisable text through the feature (`PRIVATE-NOTE`, a company name, a subject), then assert exactly what was sent (event names with their own properties, in order) and that none of that text is in `json.dumps` of it.
 - Check the refusal too: an action that answers 400 sent nothing.
-- Put the test where the feature's tests are. A new dashboard action joins the sequence in `tests/test_dashboard_app.py::test_what_the_owner_does_reaches_posthog_as_events_that_name_nothing_of_theirs` instead of getting a test of its own. Model calls and commands follow `tests/test_hunt.py::test_posthog_gets_a_command_and_its_model_calls_and_nothing_they_read_or_wrote`, agent tools `tests/test_chat.py::test_posthog_gets_an_answer_as_one_trace_and_a_conversation_as_one_session_without_any_text`.
+- Put the test where the feature's tests are. A new dashboard action joins the sequence in `tests/test_dashboard_app.py::test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothing_of_theirs`, with each value its properties can take, instead of getting a test of its own. Model calls and commands follow `tests/test_hunt.py::test_posthog_gets_a_command_and_its_model_calls_and_nothing_they_read_or_wrote`, agent tools `tests/test_chat.py::test_posthog_gets_an_answer_as_one_trace_and_a_conversation_as_one_session_without_any_text`.
 - Do not patch `posthog_client` functions, and do not add a test that only repeats a `capture` call.
 
 ```bash
