@@ -31,6 +31,8 @@ from pathlib import Path
 import logfire
 
 from clients import exa_client, jev, telegram
+from dashboard.config import get_settings
+from dashboard.posthog_logs import configure_posthog_logs
 from inbox import chat, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
 from pipeline import news, research, runs, scoring, watch
@@ -846,6 +848,9 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    posthog_log = configure_posthog_logs(get_settings())
+    if posthog_log:
+        posthog_log.info("hunt_command_started", extra={"component": "hunt", "command": args.func.__name__[4:]})
     if args.func is cmd_outlook_login:  # interactive, up to 15 minutes; writes only the token file, so no lock
         if runs.is_locked():  # a running `mail` could overwrite the new sign-in with the token it refreshed
             sys.exit("Another hunt.py command is running here; sign in when it finishes.")

@@ -29,7 +29,7 @@ from pydantic_ai.usage import UsageLimits
 
 from clients import telegram
 from inbox import gmail, outlook
-from pipeline import scoring
+from pipeline import ai_observability, scoring
 
 logger = logging.getLogger("chat")
 
@@ -225,7 +225,12 @@ def build_agent(model=None):
         name="chat",
         deps_type=Mailboxes,
         instructions=INSTRUCTIONS,
-        tools=[list_emails, read_email, draft_email, draft_reply],
+        tools=[
+            ai_observability.instrument_tool(list_emails),
+            ai_observability.instrument_tool(read_email),
+            ai_observability.instrument_tool(draft_email),
+            ai_observability.instrument_tool(draft_reply),
+        ],
         retries=2,
     )
     # Set on the agent, so it wins over any global Agent.instrument_all / logfire.instrument_pydantic_ai default.
@@ -267,16 +272,22 @@ class Conversation:
         self.agent = agent
         self.deps = deps
         self.history = []
+        self.session_id = ai_observability.new_session_id()
 
     def reset(self):
         self.history = []
         self.deps.reset()
+        self.session_id = ai_observability.new_session_id()
 
     def answer(self, text):
-        result = self.agent.run_sync(text, deps=self.deps, message_history=self.history,
-                                     usage_limits=UsageLimits(request_limit=MAX_REQUESTS))
+        with ai_observability.agent_turn(self.session_id) as turn:
+            result = self.agent.run_sync(text, deps=self.deps, message_history=self.history,
+                                         usage_limits=UsageLimits(request_limit=MAX_REQUESTS))
         self.history = trim(result.all_messages())
         usage = result.usage
+        ai_observability.capture_agent_turn(
+            turn, os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL), text, result.output, usage
+        )
         logger.info("answered with %d model call(s), %d tool call(s), %d in / %d out tokens", usage.requests,
                     usage.tool_calls, usage.input_tokens, usage.output_tokens)
         return result.output

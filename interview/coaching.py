@@ -10,7 +10,7 @@ import os
 from pydantic import BaseModel, create_model
 
 from interview import interviews
-from pipeline import scoring
+from pipeline import ai_observability, scoring
 
 
 class Match(BaseModel):
@@ -114,7 +114,8 @@ def _usage(response):
 
 
 def _parse(client, model, system, content, output_format, what):
-    response = client.messages.parse(
+    response = ai_observability.parse_anthropic(
+        client,
         model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
         # A Serbian prep brief hit 8000 and was cut off mid-JSON. 16000 stays under the SDK's
         # non-streaming limit (about 21k), above which it requires streaming.

@@ -7,7 +7,9 @@ POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token hea
 websites open in the browser cannot start paid runs.
 """
 
+import atexit
 import hashlib
+import logging
 import secrets
 import threading
 from contextlib import asynccontextmanager, contextmanager
@@ -19,8 +21,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from posthog import Posthog
+from posthog.integrations.asgi import PosthogASGIMiddleware
 
 from dashboard import auth, bot, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
+from dashboard.config import get_settings
+from dashboard.posthog_logs import configure_posthog_logs, shutdown_posthog_logs
 from interview import interviews
 from pipeline import runs
 
@@ -97,12 +103,25 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     `password` turns on the login (required when serving beyond loopback); `schedule_entries` come from
     schedule.parse(HUNT_SCHEDULE); `chat_bot` keeps `hunt.py chat` running while the app serves (CHAT_BOT=1)."""
     root = Path(root).resolve()
+    settings = get_settings()
+    posthog_log = configure_posthog_logs(settings)
+    posthog_client = None
+    if settings.posthog_configured:
+        posthog_client = Posthog(
+            settings.posthog_project_token,
+            host=settings.posthog_host,
+            enable_exception_autocapture=True,
+        )
+        atexit.register(posthog_client.shutdown)
+
     login = auth.Auth(password) if password else None
     scheduler = None  # set below, once the job helpers exist
     chat = bot.Bot(root, hunt_command) if chat_bot else None
 
     @asynccontextmanager
     async def lifespan(app):
+        if posthog_log:
+            posthog_log.info("dashboard_started", extra={"component": "dashboard"})
         if scheduler:
             scheduler.start()
         if chat:
@@ -112,8 +131,17 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             scheduler.stop()
         if chat:
             chat.stop()
+        if posthog_client:
+            try:
+                posthog_client.flush()
+            except Exception:
+                logging.getLogger(__name__).exception("PostHog flush failed during shutdown")
+        shutdown_posthog_logs()
 
     app = FastAPI(title="Job hunt dashboard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.state.posthog_client = posthog_client
+    if posthog_client:
+        app.add_middleware(PosthogASGIMiddleware, client=posthog_client)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     csrf_token = secrets.token_urlsafe(32)
@@ -234,6 +262,14 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         """Reload the current page after an htmx POST (HX-Redirect to the same URL with a #fragment would only scroll)."""
         return Response(status_code=204, headers={"HX-Refresh": "true"})
 
+    def capture(event, properties=None):
+        """Queue an anonymous dashboard action when PostHog is configured."""
+        if posthog_client:
+            try:
+                posthog_client.capture(event, properties=properties)
+            except Exception:
+                logging.getLogger(__name__).exception("PostHog capture failed")
+
     # Board, detail, inbox, leads ----------------------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse)
@@ -280,6 +316,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 )
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+            capture("pipeline_status_updated", {"status": item["status"]})
             variant = form.get("variant")
             if variant == "reload":  # Pipeline: the card belongs in another column now
                 return reload()
@@ -311,6 +348,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             ingest.add_companies(root / ingest.COMPANIES, [(names[d], d) for d in domains])
         except ValueError as exc:  # companies.csv is unreadable (the banner names it): nothing is appended blind
             return PlainTextResponse(f"companies.csv {exc}", status_code=400)
+        capture("leads_queued", {"lead_count": len(domains)})
         return Response(status_code=204, headers={"HX-Refresh": "true"})
 
     # Pipeline and side projects -----------------------------------------------------------------------------
@@ -334,6 +372,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse(str(exc), status_code=409)
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+        capture("email_update_decided")
         return reload()
 
     @app.get("/projects", response_class=HTMLResponse)
@@ -362,6 +401,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 projects.create(conn, **{k: form.get(k, "") for k in projects.FIELDS})
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+        capture("project_created")
         return redirect("/projects")
 
     @app.post("/projects/{project_id}")
@@ -374,6 +414,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse(str(exc), status_code=404)
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
+        capture("project_updated")
         return redirect("/projects")
 
     @app.post("/projects/{project_id}/delete")
@@ -383,6 +424,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 projects.delete(conn, project_id)
             except LookupError as exc:
                 return PlainTextResponse(str(exc), status_code=404)
+        capture("project_deleted")
         return redirect("/projects")
 
     @app.post("/projects/suggestions/{key}")
@@ -393,6 +435,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 projects.accept(conn, key, status="dismissed" if form.get("action") == "dismiss" else "idea")
             except LookupError as exc:
                 return PlainTextResponse(str(exc), status_code=404)
+        capture("project_suggestion_decided", {"decision": "dismissed" if form.get("action") == "dismiss" else "accepted"})
         return redirect("/projects")
 
     # Interviews ---------------------------------------------------------------------------------------------
@@ -434,6 +477,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             interview_id = interviews.create(root, await request.form())
         except ValueError as exc:
             return PlainTextResponse(str(exc), status_code=400)
+        capture("interview_created")
         return redirect(f"/interviews/{interview_id}")
 
     @app.post("/interviews/{interview_id}")
@@ -443,6 +487,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             interviews.update(root, interview_id, await request.form())
         except ValueError as exc:
             return PlainTextResponse(str(exc), status_code=400)
+        capture("interview_updated")
         return redirect(f"/interviews/{interview_id}")
 
     @app.get("/interviews/{interview_id}", response_class=HTMLResponse)
@@ -472,6 +517,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         except (ValueError, UnicodeDecodeError) as exc:
             return PlainTextResponse(f"Could not read the transcript: {exc}", status_code=400)
         interviews.save_json(path, interviews.TRANSCRIPT, transcript)
+        capture("interview_transcript_saved", {"source": "file" if upload is not None and getattr(upload, "filename", "") else "pasted"})
         return reload()
 
     @app.post("/interviews/{interview_id}/me")
@@ -482,6 +528,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         if transcript is None or me not in transcript["speakers"]:
             return PlainTextResponse("Choose one of the transcript's speakers.", status_code=400)
         interviews.save_json(path, interviews.TRANSCRIPT, transcript | {"me": me})
+        capture("interview_speaker_selected")
         return reload()
 
     # Runs ---------------------------------------------------------------------------------------------------
@@ -544,6 +591,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse("Another hunt.py command is running; wait for it to finish.", status_code=409)
             except OSError as exc:
                 return PlainTextResponse(f"Could not start hunt.py: {exc}", status_code=500)
+        capture("hunt_run_started")
+        if posthog_log:
+            posthog_log.info("dashboard_hunt_run_started", extra={"component": "dashboard"})
         return redirect(f"/runs/jobs/{job_id}")
 
     def job_or_404(conn, job_id):
@@ -575,6 +625,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     def job_cancel(job_id: int):
         if not runner.cancel(job_id):
             return PlainTextResponse("This job is not running.", status_code=409)
+        capture("hunt_run_cancelled")
         return Response(status_code=204)
 
     def start_scheduled(form):

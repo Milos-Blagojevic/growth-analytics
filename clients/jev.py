@@ -13,6 +13,8 @@ import time
 
 import requests
 
+from pipeline import ai_observability
+
 logger = logging.getLogger("jev")
 
 API_URL = "https://api.typesafe.ai/v1/systemone"
@@ -97,6 +99,7 @@ def ask(state, questions):
     if _down.is_set():
         raise JevError("TypeSafe was unavailable earlier in this run")
     body = {"model": model(), "state": state, "questions": questions}
+    started_at = time.monotonic()
     for attempt in range(1, MAX_ATTEMPTS + 1):
         rate_limited = False
         try:
@@ -136,6 +139,14 @@ def ask(state, questions):
     bad = sorted(key for key, question in questions.items() if not _valid(question, answers.get(key)))
     if bad:
         raise JevError(f"TypeSafe returned no usable answer for {', '.join(bad)}")
+    ai_observability.capture_manual_generation(
+        "typesafe",
+        body["model"],
+        {"state": state, "questions": questions},
+        answers,
+        input_tokens=tokens,
+        latency=time.monotonic() - started_at,
+    )
     return answers
 
 

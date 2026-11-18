@@ -16,6 +16,8 @@ from exa_py import Exa
 import exa_py.api
 import requests
 
+from pipeline import ai_observability
+
 load_dotenv()
 
 TIMEOUT_SECONDS = (15, 120)  # (connect, read) for every Exa request; deep searches can take tens of seconds
@@ -182,7 +184,8 @@ def search_structured(
     Schema limits: max nesting depth 2, max 10 total properties. Do not add
     citation/confidence fields -- grounding is returned automatically.
     """
-    return _call(
+    started_at = time.monotonic()
+    response = _call(
         f"search_structured:{type}",
         "search",
         query,
@@ -192,6 +195,16 @@ def search_structured(
         contents=_contents_or_default(contents, max_age_hours),
         **kwargs,
     )
+    output = getattr(response, "output", None)
+    if output is not None:
+        ai_observability.capture_manual_generation(
+            "exa",
+            f"search-{type}",
+            {"query": query, "system_prompt": system_prompt, "output_schema": output_schema},
+            getattr(output, "content", None),
+            latency=time.monotonic() - started_at,
+        )
+    return response
 
 
 _CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
@@ -276,6 +289,7 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
         raise ValueError(f"effort must be one of {', '.join(AGENT_EFFORTS)}, not {effort!r}")
     if _stop.is_set():
         raise RuntimeError("Exa agent run not started: the program is stopping")
+    started_at = time.monotonic()
     runs = get_client().agent.runs
     label = f"agent:{effort}"
     try:
@@ -340,7 +354,21 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
     output = run.output
     if output is None or not isinstance(output.structured, dict):
         raise RuntimeError(f"Exa agent returned no structured output for query: {query[:80]}")
-    return output.structured, _compact_grounding(output.grounding, prefix="structured.")
+    grounding = _compact_grounding(output.grounding, prefix="structured.")
+    ai_observability.capture_manual_generation(
+        "exa",
+        f"agent-{effort}",
+        {
+            "query": query,
+            "system_prompt": system_prompt,
+            "output_schema": output_schema,
+            "data_sources": list(data_sources),
+            "exclude": exclude,
+        },
+        {"structured": output.structured, "grounding": grounding},
+        latency=time.monotonic() - started_at,
+    )
+    return output.structured, grounding
 
 
 # Search-type wrappers. All forward to search(); latencies are approximate (Exa docs).
