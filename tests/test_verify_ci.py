@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic import ValidationError
 
 REPO = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("verify_ci", REPO / ".claude" / "skills" / "verify" / "scripts" / "ci.py")
@@ -91,58 +92,120 @@ def test_copy_leaves_out_staged_private_files_symlinked_folders_and_submodules(t
     assert (copy / ".gitignore").exists() and not any((copy / "vendor").iterdir())
 
 
-def test_prompt_is_the_skill_body_with_the_arguments():
-    arguments = "Adds a --verbose flag to watch\n\n--base 0123abc"
-    text = ci.prompt(arguments)
+REVISION = "reviewed-head:reviewed-tree"
 
-    assert arguments in text
-    assert "$ARGUMENTS" not in text and "allowed-tools" not in text
+
+def check(status="PASS", *, kind="suite", required=True):
+    return ci.Check(check=f"{kind} evidence", kind=kind, required=required, status=status,
+                    command=f"run-{kind}", result="observed outcome")
+
+
+def report(*severities, **changes):
+    data = dict(mode="full", revision=REVISION, complete=True, basis="base commit; changed behavior",
+                change="c", unverified=[], checks=[check(), check(kind="smoke")],
+                risks=[ci.Risk(id=f"F{n}", status="open", severity=s, risk=f"risk {s}",
+                               evidence="a | b\nc", repro="r", fix_direction="f")
+                       for n, s in enumerate(severities, 1)])
+    data.update(changes)
+    return ci.Report(**data)
 
 
 @pytest.mark.parametrize("severities, expected", [
     ([], "SHIP"),
-    (["S3", "S3"], "SHIP"),
+    (["S3"], "SHIP"),
     (["S3", "S2"], "FIX BEFORE MERGE"),
     (["S2", "S1"], "BLOCK"),
     (["S3", "S0"], "BLOCK"),
 ])
-def test_verdict_follows_the_worst_severity(severities, expected):
-    risks = [ci.Risk(severity=s, risk="r", evidence="e", repro="p", fix_direction="f") for s in severities]
-
-    assert ci.verdict(risks) == expected
+def test_completed_review_verdict_follows_the_worst_severity(severities, expected):
+    assert ci.verdict(report(*severities), REVISION) == expected
 
 
-def report(*severities):
-    return ci.Report(change="c", unverified=[], checks=[ci.Check(check="pytest", command="pytest", result="pass")],
-                     risks=[ci.Risk(severity=s, risk=f"risk {s}", evidence="a | b\nc", repro="r", fix_direction="f")
-                            for s in severities])
-
-
-def test_report_lists_the_worst_risks_first_and_keeps_the_tables_intact():
-    lines = ci.render(report("S3", "S2"), "1 model requests").splitlines()
-
-    assert lines[0] == "Verdict: FIX BEFORE MERGE"
-    rows = [line for line in lines if line.startswith(("| 1 ", "| 2 "))]
-    assert rows == ["| 1 | S2 | risk S2 | a \\| b<br>c | r | f |", "| 2 | S3 | risk S3 | a \\| b<br>c | r | f |"]
-
-
-@pytest.mark.parametrize("outcome, raised, code, first_line", [
-    (report("S3"), SystemExit, 0, "Verdict: SHIP"),
-    (report("S2"), SystemExit, 1, "Verdict: FIX BEFORE MERGE"),
-    (UsageLimitExceeded("request_limit of 150"), UsageLimitExceeded, None,
-     "Verdict: none, the run stopped before its report: UsageLimitExceeded("),
-    (asyncio.CancelledError(), asyncio.CancelledError, None,  # GitHub's cancel or timeout
-     "Verdict: none, the run stopped before its report: CancelledError()"),
+@pytest.mark.parametrize("changes", [
+    {"complete": False},
+    {"checks": []},
+    {"checks": [check(required=False), check(kind="smoke")]},
+    {"checks": [check()]},
+    {"checks": [check(kind="smoke")]},
+    {"checks": [check(kind="other")]},
+    {"checks": [check("SKIPPED"), check(kind="smoke")]},
+    {"mode": "follow-up", "basis": "prior full review; repairs"},
+    {"revision": "an-earlier-head:an-earlier-tree"},
+    {"risks": [ci.Risk(id="F1", status="resolved", severity="S1", risk="hidden blocker",
+                       evidence="claimed fixed", repro="r", fix_direction="f")]},
 ])
-def test_main_fails_the_check_unless_ship_and_writes_the_job_summary(tmp_path, monkeypatch, outcome, raised, code,
-                                                                     first_line):
+def test_incomplete_or_unbound_evidence_cannot_approve_ci(changes):
+    review = report(**changes)
+    assert ci.verdict(review, REVISION) == "INCOMPLETE"
+    assert ci.incomplete_reasons(review, REVISION)
+
+
+def test_optional_environment_skip_does_not_hide_a_required_failure():
+    delegated = check("SKIPPED", kind="other", required=False)
+    smoke = check(kind="smoke")
+    assert ci.verdict(report(checks=[check(), smoke, delegated]), REVISION) == "SHIP"
+    assert ci.verdict(report(checks=[check("FAIL"), smoke, delegated]), REVISION) == "FIX BEFORE MERGE"
+    assert ci.verdict(report("S1", checks=[check("FAIL"), smoke, delegated]), REVISION) == "BLOCK"
+
+
+@pytest.mark.parametrize("missing", ["mode", "revision", "complete"])
+def test_reports_without_explicit_review_state_are_rejected(missing):
+    data = report().model_dump()
+    del data[missing]
+    with pytest.raises(ValidationError):
+        ci.Report.model_validate(data)
+
+
+@pytest.mark.parametrize("field", ["check", "command", "result"])
+@pytest.mark.parametrize("blank", ["", " \t\n"])
+def test_check_evidence_cannot_be_empty_or_whitespace(field, blank):
+    data = check().model_dump()
+    data[field] = blank
+    with pytest.raises(ValidationError) as error:
+        ci.Check.model_validate(data)
+    assert error.value.errors()[0]["loc"] == (field,)
+
+
+def test_report_preserves_finding_ids_and_escapes_evidence_table_cells():
+    rendered = ci.render(report("S3", "S2"), "1 model request", REVISION)
+    rows = [line for line in rendered.splitlines() if line.startswith(("| F1 ", "| F2 "))]
+    assert [row.split("|")[1].strip() for row in rows] == ["F2", "F1"]
+    assert all(r"a \| b<br>c" in row and len(row.split(" | ")) == 7 for row in rows)
+
+
+@pytest.mark.parametrize("outcome, raised, code, expected", [
+    (report("S3"), SystemExit, 0, "SHIP"),
+    (report("S2"), SystemExit, 1, "FIX BEFORE MERGE"),
+    (report(complete=False), SystemExit, 1, "INCOMPLETE"),
+    (report(checks=[check(kind="other")]), SystemExit, 1, "INCOMPLETE"),
+    (UsageLimitExceeded("request_limit of 150"), UsageLimitExceeded, None, "INCOMPLETE"),
+    (asyncio.CancelledError(), asyncio.CancelledError, None, "INCOMPLETE"),
+])
+def test_main_fails_unless_complete_and_writes_the_snapshot_and_summary(tmp_path, monkeypatch, outcome, raised,
+                                                                      code, expected):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git("init", "-q", cwd=repo)
+    (repo / "code.py").write_text("old = True\n")
+    git("add", ".", cwd=repo)
+    git("commit", "-qm", "base", cwd=repo)
+    (repo / "code.py").write_text("old = False\n")
+    (repo / "new.py").write_text("new = True\n")
+    before = git("status", "--porcelain", cwd=repo)
+    snapshots = []
+
     async def verify(agent, checkout, arguments, max_requests, usage):
+        snapshot = f"{git('rev-parse', 'HEAD', cwd=checkout).strip()}:{git('write-tree', cwd=checkout).strip()}"
+        assert f"--revision {snapshot}" in arguments
+        assert snapshot.split(":")[1] != git("rev-parse", "HEAD^{tree}", cwd=checkout).strip()
+        snapshots.append(snapshot)
         if isinstance(outcome, BaseException):
             raise outcome
-        return SimpleNamespace(output=outcome, usage=usage, all_messages=list)
+        return SimpleNamespace(output=outcome.model_copy(update={"revision": snapshot}),
+                               usage=usage, all_messages=list)
 
+    monkeypatch.setattr(ci, "REPO", repo)
     monkeypatch.setattr(ci, "make_agent", lambda model: object())
-    monkeypatch.setattr(ci, "stage", lambda repo, dest, base: None)
     monkeypatch.setattr(ci, "build_image", lambda checkout, context: None)
     monkeypatch.setattr(ci, "verify", verify)
     monkeypatch.setattr(sys, "argv", ["ci.py", "--base", "HEAD"])
@@ -152,7 +215,51 @@ def test_main_fails_the_check_unless_ship_and_writes_the_job_summary(tmp_path, m
         ci.main()
 
     assert getattr(error.value, "code", None) == code
-    assert (tmp_path / "summary.md").read_text().splitlines()[0].startswith(first_line)
+    summary = (tmp_path / "summary.md").read_text()
+    assert summary.splitlines()[0] == f"Verdict: {expected}"
+    assert snapshots[0] in summary
+    assert git("status", "--porcelain", cwd=repo) == before
+
+
+def test_source_snapshot_covers_newly_staged_source_that_becomes_ignored(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git("init", "-q", cwd=repo)
+    (repo / ".gitignore").write_text(".env\n")
+    git("add", ".", cwd=repo)
+    git("commit", "-qm", "base", cwd=repo)
+    (repo / "staged.py").write_text("value = 10\n")
+    git("add", "staged.py", cwd=repo)
+    (repo / ".gitignore").write_text(".env\nstaged.py\n")
+    (repo / ".env").write_text("private fixture\n")
+    snapshots = []
+
+    async def verify(agent, checkout, arguments, max_requests, usage):
+        assert git("show", ":staged.py", cwd=checkout) == (repo / "staged.py").read_text()
+        assert not (checkout / ".env").exists()
+        snapshot = f"{git('rev-parse', 'HEAD', cwd=checkout).strip()}:{git('write-tree', cwd=checkout).strip()}"
+        snapshots.append(snapshot)
+        # Reusing the first report after source changes must not approve the second snapshot.
+        return SimpleNamespace(output=report(revision=snapshots[0]), usage=usage, all_messages=list)
+
+    monkeypatch.setattr(ci, "REPO", repo)
+    monkeypatch.setattr(ci, "make_agent", lambda model: object())
+    monkeypatch.setattr(ci, "build_image", lambda checkout, context: None)
+    monkeypatch.setattr(ci, "verify", verify)
+    monkeypatch.setattr(sys, "argv", ["ci.py", "--base", "HEAD"])
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    for value, code in [(10, 0), (99, 1)]:
+        (repo / "staged.py").write_text(f"value = {value}\n")
+        before = git("status", "--porcelain", cwd=repo)
+        with pytest.raises(SystemExit) as error:
+            ci.main()
+        assert error.value.code == code
+        assert git("status", "--porcelain", cwd=repo) == before
+
+    assert snapshots[0] != snapshots[1]
+    assert summary.read_text().splitlines().count("Verdict: INCOMPLETE") == 1
 
 
 def test_workflow_starts_only_on_the_label_or_by_hand_with_a_read_only_token():

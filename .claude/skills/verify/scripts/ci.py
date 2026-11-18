@@ -15,8 +15,8 @@ The container holds HEAD's history and the working tree's tracked and untracked 
 the token files, hunt.db, ...). It has no network and none of this machine's environment, so nothing the agent runs
 can reach Exa, Anthropic or Telegram or read the API key, and it works on its own copy, so this checkout is never
 changed. The prompt is SKILL.md with --intent and `--base <commit>` (default: git merge-base HEAD origin/main) in
-place of $ARGUMENTS. The report goes to stdout and, in GitHub Actions, to the job summary; the exit status is 0 for
-SHIP and 1 for BLOCK or FIX BEFORE MERGE.
+place of $ARGUMENTS. The report goes to stdout and, in GitHub Actions, to the job summary. Only a complete full
+review of the frozen source snapshot with no blockers or failing checks exits 0; incomplete reviews exit 1 too.
 
 The dependencies are pinned here, not in requirements*.txt: pydantic-ai-harness needs a newer pydantic-ai-slim than
 the one inbox/chat.py runs on.
@@ -56,13 +56,21 @@ You are the verifier of the verify skill, running unattended in CI. /workspace i
 container without network access: no private files, no API keys, no `origin/main` (the base commit is the `--base` \
 in the arguments) and no `docker` (report the Docker check SKIPPED). `.venv` already holds requirements-dev.txt on \
 Python 3.13; Python 3.11 is not installed (CI's pytest job runs the suite on 3.11 and 3.13). The skill's hard limits \
-still apply. Report, never fix. Your final output is the step 7 report as structured data: the runner derives the \
-verdict from the severities."""
+still apply. Run one full review, never a repair/follow-up loop. The runner supplies --revision HEAD:tree for its \
+frozen checkout; copy that exact identifier into revision. Mark complete false if required scope/evidence is \
+unfinished; explicitly classify each check by kind (suite, smoke, other), required/optional and PASS/FAIL/SKIPPED. \
+Both the full test suite and changed-entry-point smoke need required evidence; unrelated status checks cannot \
+replace them. Names, commands and results must contain non-whitespace evidence. Python 3.11 and Docker checks \
+delegated above are optional here. Full-review findings are open, with stable F1, F2, ... IDs. Report, never fix. \
+Your final output is the step 7 report as structured data; the runner derives the verdict from completeness, \
+snapshot, check outcomes and severities."""
 
 Severity = Literal["S0", "S1", "S2", "S3"]
 
 
 class Risk(BaseModel):
+    id: str = Field(pattern=r"^F[1-9][0-9]*$")
+    status: Literal["open", "resolved", "withdrawn"]
     severity: Severity
     risk: str
     evidence: str = Field(description="file:line, a command and its output, or a failing probe test")
@@ -76,26 +84,55 @@ class Unverified(BaseModel):
 
 
 class Check(BaseModel):
-    check: str
-    command: str
-    result: str = Field(description="the outcome, or SKIPPED with the reason")
+    check: str = Field(min_length=1, pattern=r"\S")
+    kind: Literal["suite", "smoke", "other"] = Field(description="full test suite, changed-entry-point smoke, or other")
+    required: bool = Field(description="essential to this review; unavailable checks delegated to CI are optional")
+    status: Literal["PASS", "FAIL", "SKIPPED"]
+    command: str = Field(min_length=1, pattern=r"\S")
+    result: str = Field(min_length=1, pattern=r"\S", description="observed outcome, or the reason for a skip")
 
 
 class Report(BaseModel):
-    """The step 7 report without its verdict line, which follows from the severities."""
+    """Step 7 evidence; CI accepts only a completed full review of its frozen source snapshot."""
 
+    mode: Literal["full", "follow-up"]
+    revision: str = Field(min_length=1, description="the exact --revision HEAD:tree supplied by the runner")
+    complete: bool = Field(description="false if required review scope or evidence is unfinished")
+    basis: str = Field(min_length=1, description="base and acceptance scope; prior report/snapshot for a follow-up")
     change: str = Field(description="what the diff does, in one or two lines; where it differs from the claim")
     risks: list[Risk] = Field(description="highest impact first")
     unverified: list[Unverified]
     checks: list[Check]
 
 
-def verdict(risks):
-    """The skill's rule: BLOCK for any S0 or S1, FIX BEFORE MERGE for any S2, otherwise SHIP."""
-    severities = {risk.severity for risk in risks}
+def incomplete_reasons(report, revision):
+    reasons = []
+    if not report.complete:
+        reasons.append("Required review scope or evidence is unfinished.")
+    if report.mode != "full":
+        reasons.append("CI requires a full review; a standalone follow-up cannot approve the change.")
+    if report.revision != revision:
+        reasons.append("The report does not describe the frozen source snapshot being checked.")
+    for kind in ("suite", "smoke"):
+        if not any(check.kind == kind and check.required for check in report.checks):
+            reasons.append(f"No required {kind} evidence was accounted for.")
+    if any(check.required and check.status == "SKIPPED" for check in report.checks):
+        reasons.append("An essential check was skipped without replacement evidence.")
+    if any(risk.status != "open" for risk in report.risks):
+        reasons.append("A full review cannot close findings without an earlier review and independent follow-up.")
+    return reasons
+
+
+def verdict(report, revision):
+    """Incomplete evidence cannot approve CI; completed failures retain the severity-based verdicts."""
+    if incomplete_reasons(report, revision):
+        return "INCOMPLETE"
+    severities = {risk.severity for risk in report.risks}
     if severities & {"S0", "S1"}:
         return "BLOCK"
-    return "FIX BEFORE MERGE" if "S2" in severities else "SHIP"
+    if "S2" in severities or any(check.status == "FAIL" for check in report.checks):
+        return "FIX BEFORE MERGE"
+    return "SHIP"
 
 
 def git(*args, cwd):
@@ -211,15 +248,24 @@ def spend(result):
     return f"{tokens(result.usage)}, ${dollars:.2f}"
 
 
-def render(report, usage):
-    risks = sorted(report.risks, key=lambda risk: risk.severity)  # stable: keeps the likelihood order within one
-    lines = [f"Verdict: {verdict(risks)}", "", f"Change: {report.change}", "", "Risks, highest impact first", "",
-             "| # | Sev | Risk | Evidence | Repro | Fix direction |", "|---|---|---|---|---|---|"]
-    lines += [f"| {n} | {r.severity} | {cell(r.risk)} | {cell(r.evidence)} | {cell(r.repro)} | {cell(r.fix_direction)} |"
-              for n, r in enumerate(risks, 1)]
+def render(report, usage, revision):
+    risks = sorted(report.risks, key=lambda risk: risk.severity)  # stable: keeps likelihood order within one
+    lines = [f"Verdict: {verdict(report, revision)}", "", f"Mode: {report.mode}",
+             f"Revision: {cell(report.revision)}", f"Expected revision: {cell(revision)}",
+             f"Complete: {str(report.complete).lower()}", f"Basis: {cell(report.basis)}",
+             "Stages attempted: full (single CI run)", "", f"Change: {report.change}"]
+    if reasons := incomplete_reasons(report, revision):
+        lines += ["", "Incomplete"] + [f"- {reason}" for reason in reasons]
+    lines += ["", "Risks, highest impact first", "",
+              "| ID | Status | Sev | Risk | Evidence | Repro | Fix direction |",
+              "|---|---|---|---|---|---|---|"]
+    lines += [f"| {r.id} | {r.status} | {r.severity} | {cell(r.risk)} | {cell(r.evidence)} | {cell(r.repro)} | "
+              f"{cell(r.fix_direction)} |" for r in risks]
     lines += ["", "Unverified", ""] + [f"- {cell(u.concern)}: {cell(u.settle)}" for u in report.unverified]
-    lines += ["", "Checks run", "", "| Check | Command | Result |", "|---|---|---|"]
-    lines += [f"| {cell(c.check)} | {cell(c.command)} | {cell(c.result)} |" for c in report.checks]
+    lines += ["", "Checks run", "", "| Check | Kind | Required | Status | Command | Result |",
+              "|---|---|---|---|---|---|"]
+    lines += [f"| {cell(c.check)} | {c.kind} | {str(c.required).lower()} | {c.status} | {cell(c.command)} | "
+              f"{cell(c.result)} |" for c in report.checks]
     return "\n".join([*lines, "", f"Usage: {usage}"])
 
 
@@ -249,15 +295,20 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         checkout = Path(tmp).resolve() / "checkout"
         stage(REPO, checkout, base)
+        # Force-index every allowed source file, including newly staged files now ignored by the working rules.
+        # stage() has already excluded private files; only this sanitized copy's index is changed.
+        git("add", "--force", "--all", cwd=checkout)
+        revision = f"{git('rev-parse', 'HEAD', cwd=checkout).strip()}:{git('write-tree', cwd=checkout).strip()}"
         build_image(checkout, Path(tmp) / "image")
         try:
-            result = asyncio.run(verify(agent, checkout, f"{args.intent.strip()}\n\n--base {base}".strip(),
-                                        args.max_requests, usage))
+            arguments = f"{args.intent.strip()}\n\n--base {base}\n--revision {revision}".strip()
+            result = asyncio.run(verify(agent, checkout, arguments, args.max_requests, usage))
         except BaseException as error:  # also a cancel or timeout: a paid run without a report still shows its cost
-            publish(f"Verdict: none, the run stopped before its report: {error!r}\n\nUsage: {tokens(usage)}")
+            publish(f"Verdict: INCOMPLETE\n\nThe run stopped before its report: {error!r}\n\n"
+                    f"Revision: {revision}\n\nUsage: {tokens(usage)}")
             raise
-    publish(render(result.output, spend(result)))
-    sys.exit(0 if verdict(result.output.risks) == "SHIP" else 1)
+    publish(render(result.output, spend(result), revision))
+    sys.exit(0 if verdict(result.output, revision) == "SHIP" else 1)
 
 
 if __name__ == "__main__":
