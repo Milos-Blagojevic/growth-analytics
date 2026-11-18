@@ -91,13 +91,21 @@ def test_back_to_new_without_notes_forgets_the_item(root, app_client):
     conn.close()
 
 
-def test_watch_postings_can_be_tracked_from_the_inbox(app_client):
+def test_existing_watch_postings_remain_in_pipeline(root, app_client):
     url = "https://jobs.ashbyhq.com/acme/w1"
-    response = track(app_client, "posting", url, status="saved", variant="select")
-    assert 'class="status-select s-saved"' in response.text and '<option value="new"' in response.text
+    conn = db.connect(root)
+    tracking.update(conn, "posting", url, status="saved", notes="Ask about remote work")
+    conn.close()
 
-    assert 'value="saved" selected' in app_client.get("/inbox", params={"days": 0}).text
-    assert "Growth Analyst" in app_client.get("/pipeline").text
+    pipeline = app_client.get("/pipeline").text
+    assert "Growth Analyst" in pipeline and "Ask about remote work" in pipeline
+    assert 'value="saved" selected' in pipeline
+
+    response = track(app_client, "posting", url, status="interviewing", variant="reload")
+    assert (response.status_code, response.headers.get("HX-Refresh")) == (204, "true")
+    pipeline = app_client.get("/pipeline").text
+    assert "Growth Analyst" in pipeline and "Ask about remote work" in pipeline
+    assert 'value="interviewing" selected' in pipeline
 
 
 def test_invalid_tracking_is_rejected(app_client):

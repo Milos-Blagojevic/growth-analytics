@@ -34,7 +34,7 @@ Render the affected pages with the old code and the new, on identical sample dat
 .venv/bin/python .claude/skills/visualize-changes/scripts/snapshot.py --out .change-reports/pages/after <path> ...
 ```
 
-Pass the same paths to both. Choose the pages the change affects, from: `/`, `/inbox`, `/leads`, `/pipeline`, `/projects`, `/runs`, `/interviews`, `/interviews/20261020-se-ranking-senior-data-analyst`, `/c/acme.com`, and any new route. For a CSS or `base.html` change, take `/` and two other pages. Nothing is started: requests run in-process, and the folders are temporary.
+Pass the same paths to both. Choose the pages the change affects, from: `/`, `/leads`, `/pipeline`, `/projects`, `/runs`, `/interviews`, `/interviews/20261020-se-ranking-senior-data-analyst`, `/c/acme.com`, and any new route. For a CSS or `base.html` change, take `/` and two other pages. Nothing is started: requests run in-process, and the folders are temporary.
 
 ## 3. Write the description
 

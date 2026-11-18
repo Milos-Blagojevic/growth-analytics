@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1>Pipeline</h1>
-  <p class="muted small">Everything you marked saved or beyond. Set a status from a company's details, the inbox, or here.</p>
+  <p class="muted small">Everything you marked saved or beyond. Set a status from a company's details or here.</p>
 </div>
 
 {% if mail_suggestions %}
@@ -56,7 +56,7 @@
       {% if i.notes %}<p class="lane-notes">{{ i.notes }}</p>{% endif %}
       <div class="lane-foot">
         <span class="muted small">{% if i.applied_at %}applied {{ i.applied_at | ago }}{% else %}updated {{ i.updated_at | ago }}{% endif %}</span>
-        {% with track = i, reload = true %}{% include "partials/track_select.html" %}{% endwith %}
+        {% with track = i %}{% include "partials/track_select.html" %}{% endwith %}
       </div>
     </article>
     {% else %}
