@@ -10,7 +10,7 @@ Researches companies with Exa, scores how well they and their open roles fit you
 |---|---|---|
 | `hunt.py` | The CLI entry point: `python hunt.py <command>` | [Commands](#commands) |
 | `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram | [clients/README.md](clients/README.md) |
-| `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, watch list, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
+| `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, watch list, Exa monitors, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
 | `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
 | `prospects/` | Sales prospects for your own product: Exa research, Claude assessment, value range and routing rules, DuckDB warehouse | [prospects/README.md](prospects/README.md) |
@@ -40,7 +40,7 @@ python -m clients.exa_client
 1. Add keys to `.env`: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (see `.env.example` for how to get the Telegram values), and optionally `TYPESAFE_API_KEY` (see [Jev screening](clients/README.md#jev-screening)) and `LOGFIRE_TOKEN` (traces of the chat bot's answers, without their text; see [Chat with your mail](inbox/README.md#chat-with-your-mail)).
 2. `cp profile.example.toml profile.toml`. `[search].roles`, `seniority` and `work_mode` are required (a command exits with `[search].<key> is required` otherwise). Under `[candidate]`, set `location` and point `cv_file` at your CV (`cp cv.example.md cv.md`, then edit; leave out contact details). The CV text is sent to the scoring model, never to Exa or Telegram. Without a CV or `experience`, fit is scored on role, seniority and location criteria only. `location` is used to judge whether "remote" roles are open to you (for example, US-only remote is not a fit). `notes` (preferences or deal-breakers) and `weak_spots` are also sent to the scorer (see Weak spots in [Run](pipeline/README.md#run)); optionally fill `gaps` (see Stretch in [Run](pipeline/README.md#run)).
 3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies). Domains are normalised as in `discover` and the dashboard: `https://`, `http://`, `www.` and any path after the host are stripped. A row whose domain still contains a `/` or has no `.` stops the run before any paid call, with the row named. A domain listed twice (case-insensitive) is researched once, with a warning. A file saved by Excel as "CSV UTF-8" (with a byte-order mark) is read as is.
-4. Optional: `[news].topics` in `profile.toml` for the news digest, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest) and [Email updates](inbox/README.md#email-updates)). Fiber's jobs database as an extra source of open roles is chosen per run, not here: `run --fiber`, or **With Fiber** on the dashboard's Runs page (see Role search in [Run](pipeline/README.md#run); it costs more per company).
+4. Optional: `[news].topics` in `profile.toml` for the news digest, `[monitor].companies` for the few companies whose new postings Exa should watch for you, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest), [Monitors](pipeline/README.md#monitors) and [Email updates](inbox/README.md#email-updates)). Fiber's jobs database as an extra source of open roles is chosen per run, not here: `run --fiber`, or **With Fiber** on the dashboard's Runs page (see Role search in [Run](pipeline/README.md#run); it costs more per company).
 5. Optional, for the prospect pipeline: `cp prospects.example.toml prospects.toml` (your product, ideal customer, pricing and routing tiers) and `cp prospects.example.csv prospects.csv` (`name,domain` rows, read like `companies.csv`). See [Prospects](prospects/README.md#configure).
 
 ## Commands
@@ -53,6 +53,8 @@ python -m clients.exa_client
 | `python hunt.py run` | Researches and scores every company in `companies.csv` | Exa, Jev, Claude (and an Exa agent run with Fiber per company with `--fiber`) | Yes, unless `--dry-run` or `--research-only` | [Run](pipeline/README.md#run) |
 | `python hunt.py send` | Sends a saved run's notification again | No | Yes | [Run](pipeline/README.md#run) |
 | `python hunt.py watch` | New postings from watched Ashby boards | No | Yes, unless `--dry-run` | [Watch list](pipeline/README.md#watch-list) |
+| `python hunt.py monitor-sync` | Creates, updates and deletes the Exa monitors to match `[monitor].companies` | None by itself; Exa then bills each monitor's runs ($0.002 a run, six a day) | No | [Monitors](pipeline/README.md#monitors) |
+| `python hunt.py monitor` | Suitable new postings the monitors found since the last check | Jev, Claude (Exa only for an unclear link or a missing posting text) | Yes, unless `--dry-run` | [Monitors](pipeline/README.md#monitors) |
 | `python hunt.py outlook-login` | Signs in to Outlook once | No | No | [Email updates](inbox/README.md#email-updates) |
 | `python hunt.py mail` | Rejections and interview invites in new email | Jev, Claude | Yes, unless `--dry-run` | [Email updates](inbox/README.md#email-updates) |
 | `python hunt.py news` | News digest on your `[news].topics` | Exa, Jev, Claude | Yes, unless `--dry-run` | [News digest](pipeline/README.md#news-digest) |
@@ -92,6 +94,7 @@ python -m clients.exa_client
 | `out/` | Raw per-run JSON results (git-ignored) |
 | `discovered.csv` | History of every company `discover` has suggested (git-ignored) |
 | `watch_state.json` | Postings the watch list has already reported (git-ignored) |
+| `monitor_state.json` | Your Exa monitors, the last run read of each and the postings already judged (git-ignored) |
 | `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects, job history, answers to email suggestions and the applications you added from email (git-ignored; back it up with the dashboard stopped, since its `hunt.db-wal` and `hunt.db-shm` sidecars hold the newest changes until a checkpoint) |
 | `outlook_token.json` | Your Outlook sign-in, from `outlook-login` (git-ignored; gives read access to your mail and lets drafts be created) |
 | `gmail_token.json` | Your Gmail sign-in, from `gmail-login` (git-ignored; same access) |

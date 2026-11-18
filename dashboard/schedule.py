@@ -7,11 +7,13 @@ One entry per line (or separated by ";"): five cron fields, then the hunt.py com
     0 */6 * * * watch
     0 8-20/2 * * * mail
     0 8 * * 1   news
+    0 8,12,16,20 * * * monitor
 
 Times are the dashboard's local time (the TZ environment variable). Commands are limited to what the Runs page
 can start: `run [--dry-run | --research-only] [--fiber]`, `discover [focus] [--limit N]`, `watch [--dry-run]`,
-`mail [--dry-run]` and `news [--dry-run]`. A due command that finds another one running stays pending and starts
-as soon as the lock is free; commands due while the dashboard was down are not caught up.
+`mail [--dry-run]`, `news [--dry-run]`, `monitor [--dry-run]` and `monitor-sync`. A due command that finds
+another one running stays pending and starts as soon as the lock is free; commands due while the dashboard was
+down are not caught up.
 """
 
 import logging
@@ -28,7 +30,7 @@ logger = logging.getLogger("dashboard.schedule")
 # name, lowest, highest; day of week accepts 7 for Sunday, as cron does
 FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day of month", 1, 31), ("month", 1, 12), ("day of week", 0, 7))
 COMMANDS = ("run [--dry-run | --research-only] [--fiber], discover [focus] [--limit N], watch [--dry-run], "
-            "mail [--dry-run] or news [--dry-run]")
+            "mail [--dry-run], news [--dry-run], monitor [--dry-run] or monitor-sync")
 MAX_CATCH_UP = timedelta(days=1)  # after a long pause (laptop sleep), check at most this many past minutes
 
 
@@ -61,9 +63,12 @@ def _form(args):
         flags = [a for a in rest if a != "--fiber"]
         if len(rest) - len(flags) <= 1 and len(flags) <= 1 and all(a in modes for a in flags):
             return {"kind": "run", "mode": modes[flags[0]] if flags else "deliver", "fiber": "1" if flags != rest else ""}
-    elif command in ("watch", "mail", "news"):
+    elif command in ("watch", "mail", "news", "monitor"):
         if rest in ([], ["--dry-run"]):
             return {"kind": command, "dry_run": "1" if rest else ""}
+    elif command == "monitor-sync":
+        if not rest:
+            return {"kind": "monitor_sync"}
     elif command == "discover":
         focus, limit = [], "15"
         words = iter(rest)

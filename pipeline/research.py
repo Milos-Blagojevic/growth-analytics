@@ -330,11 +330,13 @@ def check_posting(url):
     return "live"
 
 
-def verify_roles(roles):
+def verify_roles(roles, *, settle=True):
     """Split roles into (usable, dead). Usable roles get link_status "live" or "unverified".
 
     Ambiguous HTTP results are resolved with a fresh Exa fetch (about $0.001 per URL): an Exa error
-    means dead; otherwise the link is kept as "unverified" (reachable but not confirmed open).
+    means dead; otherwise the link is kept as "unverified" (reachable but not confirmed open). With
+    settle=False there is no such fetch and every ambiguous link stays "unverified": for postings that are
+    looked at once only (a monitor's), where a fetch that failed must not pass for a posting that closed.
     """
     if not roles:
         return [], []
@@ -342,7 +344,7 @@ def verify_roles(roles):
         states = list(pool.map(lambda role: check_posting(role["url"]), roles))
     unknown = [role["url"] for role, state in zip(roles, states) if state == "unknown"]
     exa_errors = set()
-    if unknown:
+    if unknown and settle:
         try:
             response = exa_client.contents(unknown, max_age_hours=0)
             exa_errors = {s.id for s in (response.statuses or []) if s.status == "error"}
@@ -380,13 +382,13 @@ def _third_party_leads(roles):
     return list(leads.values()), list(dead.values())
 
 
-def attach_descriptions(roles):
-    """Add the posting text as `description` to the first MAX_DESCRIBED_ROLES live roles.
+def attach_descriptions(roles, *, limit=MAX_DESCRIBED_ROLES):
+    """Add the posting text as `description` to the first `limit` live roles (all of them with limit=None).
 
     Search summaries rarely contain a posting's responsibilities and required tools, which the scorer
     needs. Costs about $0.001 per page. Failures are logged and the roles are returned unchanged.
     """
-    targets = [r for r in roles if r.get("link_status") == "live"][:MAX_DESCRIBED_ROLES]
+    targets = [r for r in roles if r.get("link_status") == "live"][:limit]
     if not targets:
         return roles
     try:
@@ -425,12 +427,17 @@ def find_roles_on_ats(name, domain, profile, *, seen_elsewhere=()):
     content, grounding = exa_client.grounded_answer(
         query, ATS_SCHEMA, system_prompt=ATS_SYSTEM_PROMPT, include_domains=[domain, f"*.{domain}", *ATS_DOMAINS]
     )
-    roles = [
+    return own_postings(content["open_roles"], domain), grounding.get("open_roles")
+
+
+def own_postings(roles, domain):
+    """The roles of an ATS_SCHEMA answer that are the company's postings: a title and a link, marked by Exa as
+    belonging to the company at `domain`, on a site where it posts its jobs itself. Without `company_verified`."""
+    return [
         {k: v for k, v in role.items() if k != "company_verified"}
-        for role in content["open_roles"]
+        for role in roles
         if _named(role) and role.get("company_verified") and _posts_own_jobs(role["url"], domain)
     ]
-    return roles, grounding.get("open_roles")
 
 
 def _posting_url(url):

@@ -43,6 +43,21 @@
   </form>
 
   <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="monitor">
+    <h2>Check monitors</h2>
+    <p class="muted small">Reads what your Exa monitors found since the last check and sends the postings that suit you to Telegram. Jev + Claude.</p>
+    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="monitor_sync">
+    <h2>Sync monitors</h2>
+    <p class="muted small">Creates, updates and deletes the Exa monitors to match <code>[monitor].companies</code> in <code>profile.toml</code>. Exa runs each one every 4 hours.</p>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
     <input type="hidden" name="kind" value="mail">
     <h2>Check email</h2>
     <p class="muted small">Finds rejections and interview invites in new Outlook mail and suggests status changes on <a class="link" href="/pipeline">Pipeline</a>. Jev + Claude.</p>
