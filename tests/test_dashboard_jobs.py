@@ -169,6 +169,23 @@ def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, 
     assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])
 
 
+def test_the_monitor_jobs_run_their_commands_and_say_what_exa_bills(root, app):
+    c = client(app)
+
+    sync = c.post("/runs/preview", data={"kind": "monitor_sync"}).text
+    assert "python hunt.py monitor-sync" in sync
+    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.36 a month for each company" in sync
+    assert "Creates, updates and deletes monitors on your Exa account" in sync
+    check = c.post("/runs/preview", data={"kind": "monitor"}).text
+    assert "Sends the suitable new postings to Telegram" in check and "one call per new posting" in check
+    assert "Telegram" not in c.post("/runs/preview", data={"kind": "monitor", "dry_run": "1"}).text
+
+    synced = finished(root, started_job_id(c.post("/runs", data={"kind": "monitor_sync", "dry_run": "1"})))
+    assert synced["args"] == ["monitor-sync"]  # it has no dry run
+    checked = finished(root, started_job_id(c.post("/runs", data={"kind": "monitor", "dry_run": "1"})))
+    assert (checked["status"], checked["args"]) == ("succeeded", ["monitor", "--dry-run"])
+
+
 def test_one_command_at_a_time(root, app, monkeypatch):
     c = client(app)
     with runs.lock(root):  # e.g. a cron `hunt.py watch`

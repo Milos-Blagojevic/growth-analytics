@@ -47,6 +47,14 @@ MAIL_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): one request per applicatio
 NEWS_ESTIMATE = ["Exa: about $0.007 per search, one per [news].topics entry.",
                  "Jev (when TYPESAFE_API_KEY is set): one request per new article, a fraction of a cent in total.",
                  "Claude: one call, a few cents; none when no new article is relevant."]
+# pipeline/README.md, Monitors: Exa bills the monitors' own runs, not the commands that manage or read them.
+MONITOR_ESTIMATE = ["Exa: reading the monitors' runs is free; about $0.001 for a posting whose link is unclear or "
+                    "whose page a run did not fetch.",
+                    "Jev (when TYPESAFE_API_KEY is set): one request per new posting, a fraction of a cent in total.",
+                    f"Claude: one call per new posting Jev does not rule out, about ${CLAUDE_DOLLARS_PER_COMPANY:.3f} "
+                    "each (the same call as a company's in a run); none when nothing is new."]
+MONITOR_SYNC_ESTIMATE = ["Free by itself. Exa then bills every monitor $0.002 a run, six runs a day: about $0.36 a "
+                         "month for each company in [monitor].companies."]
 
 
 @dataclass
@@ -136,6 +144,18 @@ def build(conn, root, form):
         warnings = [] if dry else ["Sends the digest to Telegram and records the articles in news_state.json."]
         return Spec("news", ["news"] + (["--dry-run"] if dry else []), "News digest" + (" (dry run)" if dry else ""),
                     {"kind": kind, "dry_run": "1" if dry else ""}, estimate=NEWS_ESTIMATE, warnings=warnings)
+    if kind == "monitor":
+        dry = form.get("dry_run") == "1"
+        warnings = [] if dry else ["Sends the suitable new postings to Telegram and records what was judged in "
+                                   "monitor_state.json."]
+        return Spec("monitor", ["monitor"] + (["--dry-run"] if dry else []),
+                    "Check monitors" + (" (dry run)" if dry else ""), {"kind": kind, "dry_run": "1" if dry else ""},
+                    estimate=MONITOR_ESTIMATE, warnings=warnings)
+    if kind == "monitor_sync":
+        return Spec("monitor_sync", ["monitor-sync"], "Sync monitors", {"kind": kind}, estimate=MONITOR_SYNC_ESTIMATE,
+                    warnings=["Creates, updates and deletes monitors on your Exa account to match [monitor].companies "
+                              "in profile.toml, and records them in monitor_state.json.",
+                              "A new monitor runs, billed, every 4 hours until a later sync deletes it."])
     if kind == "send":
         run_id = form.get("run_id", "")
         scored = {r["run_id"] for r in conn.execute("SELECT DISTINCT run_id FROM results WHERE score IS NOT NULL")}

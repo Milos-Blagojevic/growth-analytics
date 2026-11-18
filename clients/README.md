@@ -6,7 +6,7 @@ Thin clients for the outside services the other folders share: Exa search, TypeS
 
 | File | Purpose |
 |---|---|
-| `exa_client.py` | Exa search client: the only place that talks to Exa (retries, cost logging, cost tally) |
+| `exa_client.py` | Exa client: the only place that talks to Exa, for search, contents, agent runs and monitors (retries, cost logging, cost tally) |
 | `jev.py` | TypeSafe's Jev decision model: the only place that calls TypeSafe (retries, usage tally, cost per token) |
 | `ashby.py` | Ashby public job-board API client (used by link checks and the watch list) |
 | `telegram.py` | Telegram delivery and `getUpdates` polling for the chat bot |
@@ -60,6 +60,8 @@ page = contents(["https://exa.ai"])
 | `agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), exclude=None, effort="low")` | An [Exa Agent](https://exa.ai/docs/agent/quickstart) run, waited for: `(structured, grounding)` in the shape of `grounded_answer()`. `data_sources` attaches [Exa Connect](https://exa.ai/docs/agent/connect/overview) partners such as `"fiber"`; `exclude` lists records it must not return. See [Agent runs](#agent-runs). |
 | `instant_search` / `fast_search` / `deep_lite_search` / `deep_search` / `deep_reasoning_search` `(query, **kwargs)` | `search()` with `type` preset (see below). |
 | `contents(urls, *, max_age_hours=None, highlights=True, **kwargs)` | Page contents for given URLs: highlights only by default (full text only if `text` is passed). `highlights=False` with `text={...}` fetches full text only. |
+| `create_monitor(params)` / `get_monitor(id)` / `update_monitor(id, changes)` / `delete_monitor(id)` / `monitors()` | [Exa Monitors](https://exa.ai/docs/monitors/quickstart): searches Exa runs by itself on an interval. `get_monitor` returns `None` and `delete_monitor` `False` for a monitor Exa no longer has. See [Monitors](#monitors). |
+| `monitor_runs(id)` / `monitor_run_output(id, run_id)` | A monitor's runs, newest first, read a page at a time; and what one run found: `(content, grounding, pages)`, content and grounding in the shape of `grounded_answer()`. |
 
 `max_age_hours` controls content freshness, not publication date: `0` always fetches fresh, `-1` uses cache only, `N` uses cache if newer than `N` hours, `None` lets Exa decide. It overrides any `max_age_hours` inside `contents`.
 
@@ -79,7 +81,7 @@ Every request made through the module functions goes through one internal path t
 
 - **Retries** transient failures with exponential backoff (jittered, capped): HTTP 408/429/500/502/503/504 and `requests` connection/timeout errors. Other errors (400s, invalid options) raise immediately. Tune via module constants `MAX_ATTEMPTS` (default 4 total tries), `BACKOFF_BASE_SECONDS` (1.0), `BACKOFF_MAX_SECONDS` (30.0) and `RETRYABLE_STATUS`. Every request has a timeout (`TIMEOUT_SECONDS`: 15 s to connect, 120 s to read, since deep searches can take tens of seconds), whatever timeout the SDK passes itself (one value for both, 600 s by default); a request that times out is retried like any other transient failure.
 - **Logs cost** at INFO on the `exa_client` logger, one line per request (`search:fast cost=$0.0070 search_time=450ms`), and retries at WARNING. Enable with `logging.basicConfig(level=logging.INFO)`.
-- **Tallies cost** per label (`search:<type>`, `search_structured:<type>`, `contents`, `agent:<effort>`), using the `costDollars` Exa reports.
+- **Tallies cost** per label (`search:<type>`, `search_structured:<type>`, `contents`, `agent:<effort>`, `monitors`), using the `costDollars` Exa reports.
 
 ```python
 from clients.exa_client import cost_summary, reset_costs
@@ -100,6 +102,16 @@ Notes: the tally is in-process only (not persisted) and counts successful reques
 - **Failures.** A run that fails, is cancelled or returns no structured output raises `RuntimeError`; whatever it cost until then is still tallied. One odd answer to a status check (a 404 just after the create, say) does not stop a paid run: only after `AGENT_FAILED_CHECKS` (5) failed checks in a row is the run given up. It is then cancelled if Exa still answers (or read once more, in case it ended), and the error says whether it was stopped or may still be running and billed.
 - **Ctrl-C.** In the thread that waits, Ctrl-C cancels the run and is raised again. It never reaches worker threads, so a program that waits there calls `stop_agent_runs()` when it is interrupted (`hunt.py run` does): every waiting run is cancelled within one poll and no new one starts. A process that is killed (the dashboard's job cancel) can do neither, and its runs go on to their end at Exa.
 - **Grounding.** Field paths come back as `structured.<field>`; the prefix is dropped so the result reads like `grounded_answer()`'s. Grounding is optional in Exa's replies: a run without any returns `{}`, and a field without a confidence, or with one other than low, medium or high, has `None`.
+
+### Monitors
+
+A monitor is a search that Exa runs by itself every period (1 hour at least) and keeps a history for: each run returns only the pages its earlier runs did not, with JSON written from them when the monitor has an `outputSchema`. `pipeline/monitor.py` keeps one per company for new job postings (see [Monitors](../pipeline/README.md#monitors)).
+
+- **Cost.** Exa bills the runs ($0.002 each for up to 10 results), not these requests, and no reply carries a cost: they count as `monitors` requests at $0 in the tally.
+- **Retries.** As with agent runs, a create is sent again only when Exa turns it down for rate (429). After a timeout, a dropped connection or a 5xx the monitor may exist, and a second one would run, billed, next to it: `create_monitor` raises `RuntimeError` saying so. The other requests are retried like any other.
+- **Schedule.** Only an interval. Exa sets a new monitor's first run itself (9 to 72 minutes after the create in the first trials, for a 4-hour period) and `next_run_at` a moment after the create, so read it with `get_monitor`. An update that sends the trigger the monitor already has leaves its cycle alone; another period starts a new cycle from the update.
+- **Webhook.** Required on every monitor: a public HTTPS address (Exa refuses `localhost`, private addresses and `example.com`), called for the events the monitor subscribes to. The runs can be read instead, with `monitor_runs` and `monitor_run_output`.
+- **Runs.** `monitor_runs` gives each run's `id`, `status`, `fail_reason` (`insufficient_credits`, `source_not_available`, ...) and `empty`: true when the list of runs itself says the run found nothing new, so only the others are read by id with `monitor_run_output`. Both read Exa's JSON as it comes, not through the SDK's run models, which refuse a whole run for one grounding row without a confidence or a citation: as with a search's, grounding is optional, and odd rows are left out.
 
 ## Jev screening
 
