@@ -6,13 +6,15 @@
     python hunt.py run --fiber               # also take open roles from Fiber's jobs database (paid agent runs)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
     python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
+    python hunt.py monitor-sync              # keep one Exa monitor per [monitor].companies entry (Exa runs them)
+    python hunt.py monitor [--dry-run]       # send the suitable new postings the monitors found (Claude)
     python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
     python hunt.py mail [--dry-run]          # find rejections and interview invites in new email (Claude)
     python hunt.py news [--dry-run]          # news digest on your [news].topics (Exa + Claude)
     python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
     python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
     python hunt.py gmail-login               # sign in to Gmail once, for `chat`
-    python hunt.py chat                      # answer Telegram messages about your mail, draft replies (Claude)
+    python hunt.py chat                      # answer Telegram messages: your mail, drafts, news digests (Claude, Exa)
 """
 
 import argparse
@@ -35,7 +37,7 @@ from dashboard.config import get_settings
 from dashboard.posthog_logs import configure_posthog_logs
 from inbox import chat, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
-from pipeline import news, research, runs, scoring, watch
+from pipeline import monitor, news, research, runs, scoring, watch
 
 logger = logging.getLogger("hunt")
 WORKERS = 4
@@ -106,20 +108,25 @@ def process_company(name, domain, profile, *, score, fiber=False):
     try:
         result["research"] = research.research_company(name, domain, profile, fiber=fiber)
         if score:
-            screen = None
-            if jev.configured() and result["research"]["content"]["open_roles"]:
-                try:
-                    screen = result["screen"] = scoring.screen_roles(result["research"], profile)
-                except Exception as exc:  # the screen only saves Claude tokens: without it Claude scores every role
-                    logger.warning("%s: Jev screen failed (%s); Claude scores every role", name, exc)
-                    result["screen"] = {"error": f"{type(exc).__name__}: {exc}"}
-            fit, usage = scoring.score_company(result["research"], profile, screen=screen)
-            result["fit"] = fit.model_dump()
-            result["usage"] = usage
+            _score(result, profile)
     except Exception as exc:  # one failing company must not abort the batch
         logger.exception("%s (%s) failed", name, domain)
         result["error"] = f"{type(exc).__name__}: {exc}"
     return result
+
+
+def _score(result, profile):
+    """Adds the Jev screen (when TYPESAFE_API_KEY is set) and Claude's fit to a result that holds its research."""
+    screen = None
+    if jev.configured() and result["research"]["content"]["open_roles"]:
+        try:
+            screen = result["screen"] = scoring.screen_roles(result["research"], profile)
+        except Exception as exc:  # the screen only saves Claude tokens: without it Claude scores every role
+            logger.warning("%s: Jev screen failed (%s); Claude scores every role", result["name"], exc)
+            result["screen"] = {"error": f"{type(exc).__name__}: {exc}"}
+    fit, usage = scoring.score_company(result["research"], profile, screen=screen)
+    result["fit"] = fit.model_dump()
+    result["usage"] = usage
 
 
 def format_company(result):
@@ -516,6 +523,115 @@ def cmd_watch(args):
     return 1 if problems else 0
 
 
+def cmd_monitor_sync(args):
+    profile = load_profile(args.profile)
+    try:
+        companies = monitor.load_config(profile)
+    except ValueError as exc:
+        sys.exit(f"{args.profile}: {exc}")
+    state = _monitor_state(args.state)
+    if not companies and not state["monitors"] and "folder" not in state:
+        sys.exit(f"{args.profile}: [monitor].companies is empty")
+    # With nothing listed and a folder id, the sync still runs: a monitor whose create lost its reply may be left.
+    try:
+        webhook = monitor.webhook_url(dashboard_url()) if companies else None  # deleting the last ones needs none
+    except ValueError as exc:
+        sys.exit(str(exc))
+    _require_exa()
+
+    lines, problems = monitor.sync(companies, profile, webhook, state, lambda: monitor.save_state(args.state, state))
+    for line in lines:
+        print(line)
+    for problem in problems:
+        logger.warning("monitor-sync: %s", problem)
+    if state["monitors"]:
+        print(f"\n{len(state['monitors'])} monitor(s). Exa runs each every {monitor.PERIOD} and bills "
+              f"${monitor.RUN_DOLLARS} a run; `python hunt.py monitor` reads what they find.")
+    else:
+        print(f"\nNo monitors: [monitor].companies in {args.profile} lists none.")
+    return 1 if problems else 0
+
+
+def _monitor_state(path):
+    try:
+        return monitor.load_state(path)
+    except ValueError as exc:
+        sys.exit(f"{path}: {exc}. Fix the file by hand: without it `python hunt.py monitor-sync` starts over with new "
+                 "monitors and leaves the old ones running on Exa.")
+
+
+def judge_posting(found, profile):
+    """Screen and score one posting a monitor found (a research with that one open role). Never raises; an error
+    is returned in the result."""
+    result = {"name": found["name"], "domain": found["domain"], "research": found}
+    try:
+        _score(result, profile)
+    except Exception as exc:  # one failing posting must not lose the others
+        logger.exception("%s: scoring %s failed", found["name"], found["content"]["open_roles"][0]["title"])
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def cmd_monitor(args):
+    profile = load_profile(args.profile)
+    state = _monitor_state(args.state)
+    if not state["monitors"]:
+        sys.exit(f"{args.state}: no monitors yet. List companies under [monitor] in {args.profile}, then run "
+                 "`python hunt.py monitor-sync`.")
+    _require_exa()
+    _require_claude()
+    if not args.dry_run and not telegram.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
+    if not jev.configured():
+        print("TYPESAFE_API_KEY is not set: Claude scores every new posting (no Jev screen).")
+
+    results, problems, unreadable = [], [], 0
+    for domain, entry in state["monitors"].items():
+        try:
+            found, dead, progress, run_problems = monitor.findings(domain, entry)
+        except Exception as exc:  # one monitor that cannot be read must not stop the others
+            problems.append(f"{entry['name']}: {type(exc).__name__}: {exc}")
+            unreadable += 1
+            continue
+        judged = [judge_posting(posting, profile) for posting in found]
+        problems += [f"{entry['name']}: {problem}" for problem in run_problems]
+        for closed in dead:
+            print(f"{entry['name']}: closed already: {closed['title']} | {closed['url']}")
+        again = monitor.remember(entry, judged, dead)
+        for result in judged:
+            if "error" in result:
+                given_up = "" if any(result is one for one in again) else f"; given up after {monitor.MAX_TRIES} checks"
+                title = result["research"]["content"]["open_roles"][0]["title"]
+                problems.append(f"{entry['name']}: {title}: {result['error']}{given_up}")
+        # A posting to be scored again keeps the last run read where it was: its run is read again by the next check.
+        monitor.advance(entry, progress, hold=bool(again))
+        results += judged
+    for problem in problems:
+        logger.warning("monitor: %s", problem)
+
+    scored = sorted((r for r in results if "fit" in r), key=lambda r: r["fit"]["score"], reverse=True)
+    suitable = [r for r in scored if r["fit"]["verdict"] in NOTIFY_VERDICTS]
+    read = len(state["monitors"]) - unreadable
+    if not scored:
+        print(f"No new postings from {read}/{len(state['monitors'])} monitor(s).")
+    else:
+        print("\n\n".join(format_company(r) for r in scored))
+        print(f"\n{len(suitable)} of {len(scored)} new posting(s) from {read}/{len(state['monitors'])} monitor(s) "
+              "are worth a look.")
+    if suitable:
+        message = monitor.format_message(suitable, problems)
+        if args.dry_run:
+            print(f"\n{message}")
+        else:
+            for part in telegram.pack_blocks([message]):
+                telegram.send(part)
+            print(f"Sent {len(suitable)} new posting(s) to Telegram.")
+    if not args.dry_run:
+        monitor.save_state(args.state, state)  # only after a successful send, so a failed send is judged again
+    log_costs(results, score=True)
+    return 1 if problems else 0
+
+
 def cmd_outlook_login(args):
     if not outlook.configured():
         sys.exit("OUTLOOK_CLIENT_ID is not set. Add it to .env (see inbox/README.md, Email updates).")
@@ -543,7 +659,7 @@ def cmd_chat(args):
     _require_claude()
     if not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env.")
-    mailboxes = chat.Mailboxes()
+    mailboxes = chat.Mailboxes(news=chat.News(state=args.news_state))
     for name, module, path in (("outlook", outlook, args.outlook_token), ("gmail", gmail, args.gmail_token)):
         if not module.configured():
             continue
@@ -553,6 +669,16 @@ def cmd_chat(args):
     if not mailboxes.accounts():
         sys.exit("No mailbox is set up: set OUTLOOK_CLIENT_ID or GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET in .env "
                  "(see inbox/README.md, Chat with your mail).")
+    if not exa_client.configured():
+        mailboxes.news.off = "EXA_API_KEY is not set"
+    else:
+        try:
+            mailboxes.news.profile = load_profile(args.profile)  # the target roles and [news].topics of a news digest
+        except (SystemExit, Exception) as exc:  # load_profile exits on a profile it rejects; the mail chat starts anyway
+            why = exc if isinstance(exc, SystemExit) else f"{type(exc).__name__}: {exc}"
+            mailboxes.news.off = f"{args.profile} cannot be used ({why})"
+    if mailboxes.news.profile is None:  # the mail chat must not go down with the profile
+        logger.warning("news digests are off: %s", mailboxes.news.off)
     if os.environ.get("LOGFIRE_TOKEN"):
         # Traces of each answer without its text (chat.build_agent). Nothing else is instrumented: Logfire never
         # scrubs Claude's messages, and request URLs carry the Telegram bot token and mail search terms.
@@ -670,7 +796,7 @@ def cmd_news(args):
                     telegram.send(part)
                 print(f"Sent a digest of {len(picks)} of {len(articles)} new article(s) to Telegram.")
         if not args.dry_run:
-            news.save_state(args.state, news.next_state(state, articles))  # after the send, so failures retry
+            news.record(args.state, articles)  # after the send, so failures retry
     summary = exa_client.cost_summary()
     print(f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
           f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens"
@@ -812,6 +938,15 @@ def main():
     watch_cmd.add_argument("--dry-run", action="store_true", help="print new matches; do not send or save state")
     watch_cmd.set_defaults(func=cmd_watch)
 
+    sync_cmd = sub.add_parser("monitor-sync", help="create, update and delete Exa monitors to match [monitor].companies")
+    sync_cmd.add_argument("--state", default=monitor.STATE, help="JSON file of the monitors and the postings judged")
+    sync_cmd.set_defaults(func=cmd_monitor_sync)
+
+    monitor_cmd = sub.add_parser("monitor", help="send the suitable new postings your Exa monitors found to Telegram (Claude)")
+    monitor_cmd.add_argument("--state", default=monitor.STATE, help="JSON file of the monitors and the postings judged")
+    monitor_cmd.add_argument("--dry-run", action="store_true", help="print the postings; do not send or save state")
+    monitor_cmd.set_defaults(func=cmd_monitor)
+
     login_cmd = sub.add_parser("outlook-login", help="sign in to Outlook (read, create drafts) for mail and chat")
     login_cmd.add_argument("--token", default=outlook.TOKEN_FILE, help="where the sign-in is saved")
     login_cmd.set_defaults(func=cmd_outlook_login)
@@ -841,9 +976,12 @@ def main():
     gmail_cmd.add_argument("--token", default=gmail.TOKEN_FILE, help="where the sign-in is saved")
     gmail_cmd.set_defaults(func=cmd_gmail_login)
 
-    chat_cmd = sub.add_parser("chat", help="answer Telegram messages about your mail and draft replies (Claude)")
+    chat_cmd = sub.add_parser("chat", help="answer Telegram messages about your mail (summaries, drafts) and make "
+                                           "news digests when asked (Claude; Exa for the digests)")
     chat_cmd.add_argument("--outlook-token", default=outlook.TOKEN_FILE, help="the sign-in saved by outlook-login")
     chat_cmd.add_argument("--gmail-token", default=gmail.TOKEN_FILE, help="the sign-in saved by gmail-login")
+    chat_cmd.add_argument("--news-state", default=news.STATE,
+                          help="the articles `news` has already considered; a digest on your topics shares it")
     chat_cmd.set_defaults(func=cmd_chat)
 
     args = parser.parse_args()
@@ -857,8 +995,9 @@ def main():
         sys.exit(args.func(args))
     if args.func in (cmd_gmail_login, cmd_chat):
         # gmail-login writes only gmail_token.json, which nothing else rewrites (Google keeps the refresh token).
-        # chat runs for hours and shares no file with the other commands except outlook_token.json, which it and
-        # `mail` replace atomically with tokens that are both valid, so neither needs the lock.
+        # chat runs for hours, so it cannot hold the lock. It shares two files with the other commands:
+        # outlook_token.json, which it and `mail` replace atomically with tokens that are both valid, and
+        # news_state.json, which it and `news` write through news.record, under a file lock of its own.
         sys.exit(args.func(args))
     # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
     try:

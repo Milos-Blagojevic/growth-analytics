@@ -128,13 +128,14 @@ def test_third_party_listings_show_on_the_card_and_in_the_details_and_old_result
             '        <span class="muted small">hirify.me</span>') in page
 
 
-def test_inbox_window(client):
-    week = client.get("/inbox", params={"days": 7}).text
-    assert "Growth Analyst" in week and "Data Lead" not in week
-    # Acme counts as new: its best role changed in the recent run. Gamma (skip) never shows.
-    assert "Analytics Engineer" in week and "Growth Engineer" in week and "Gamma" not in week
+def test_inbox_is_removed_and_remaining_sections_stay_in_navigation(client):
+    assert client.get("/inbox?days=7").status_code == 404
 
-    assert "Data Lead" in client.get("/inbox", params={"days": 0}).text
+    page = client.get("/").text
+    navigation = page.split('<nav class="nav">')[1].split("</nav>")[0]
+    assert 'href="/inbox' not in navigation
+    for path in ("/", "/pipeline", "/interviews", "/projects", "/leads", "/runs"):
+        assert f'href="{path}"' in navigation
 
 
 def test_empty_project_explains_how_to_get_data(tmp_path):
@@ -175,7 +176,7 @@ def test_a_corrupt_watch_state_or_csv_is_reported_without_taking_down_the_pages(
     assert "Some saved files could not be read" in board.text and "watch_state.json: JSONDecodeError" in board.text
     assert "companies.csv: cannot be read" in board.text and "discovered.csv: KeyError" in board.text  # both named
     assert c.get("/leads").status_code == 200
-    assert c.get("/inbox", params={"days": 7}).status_code == 200
+    assert c.get("/pipeline").status_code == 200
 
     (root / "companies.csv").write_text("# name,domain\nAcme,acme.com\n")
     leads = c.get("/leads")

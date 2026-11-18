@@ -2,9 +2,11 @@
 summarised by Claude, each sent once.
 
 STATE (news_state.json) maps every article URL already considered (screened or given to Claude) to when, so a later
-digest skips it.
+digest skips it. Two commands write it (`record`): `hunt.py news`, and the chat bot (inbox/chat.py), which makes the
+same digest when asked for it in Telegram.
 """
 
+import fcntl
 import json
 import logging
 import os
@@ -50,16 +52,25 @@ class Digest(BaseModel):
 
 
 def load_config(profile):
-    """[news].topics; raises ValueError when there are none."""
-    topics = [t.strip() for t in profile.get("news", {}).get("topics", []) if t.strip()]
+    """[news].topics; raises ValueError when it is not a list of topics, or holds none."""
+    table = profile.get("news", {})
+    topics = table.get("topics", []) if isinstance(table, dict) else None
+    if not isinstance(topics, list) or not all(isinstance(t, str) for t in topics):
+        raise ValueError("[news].topics must be a list of strings")  # a bare string would be searched letter by letter
+    topics = [t.strip() for t in topics if t.strip()]
     if not topics:
         raise ValueError("[news].topics is empty")
     return topics
 
 
 def load_state(path):
+    """The state file: article URL -> when it was considered ({} before the first digest). Raises ValueError when
+    the file holds anything else: found before a digest is paid for, not when its articles are recorded."""
     path = Path(path)
-    return json.loads(path.read_text()) if path.exists() else {}
+    state = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(state, dict) or not all(isinstance(t, str) for t in state.values()):
+        raise ValueError(f"{path} does not map article URLs to times")
+    return state
 
 
 def save_state(path, state):
@@ -157,6 +168,16 @@ def next_state(state, articles, now=None):
     cutoff = (now - timedelta(days=KEEP_DAYS)).isoformat(timespec="seconds")
     kept = {url: t for url, t in state.items() if t >= cutoff}
     return kept | {a["url"]: now.isoformat(timespec="seconds") for a in articles}
+
+
+def record(path, articles):
+    """Adds `articles` to the state file as considered now. `hunt.py news` and the chat bot both write it, and the
+    bot holds no run lock: a file lock next to the state file makes them take turns, and the file is read again
+    under it, so neither drops what the other recorded while it was searching."""
+    path = Path(path)
+    with open(path.with_suffix(path.suffix + ".lock"), "a") as turn:
+        fcntl.flock(turn, fcntl.LOCK_EX)  # held for milliseconds; released when the file closes
+        save_state(path, next_state(load_state(path), articles))
 
 
 def format_message(overview, picks, problems):

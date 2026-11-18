@@ -6,6 +6,8 @@ companies.csv
 discovered.csv
 watch_state.json*
 watch.log
+monitor_state.json*
+monitor.log
 out/
 hunt.db*
 jobs/

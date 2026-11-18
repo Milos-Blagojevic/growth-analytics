@@ -1,4 +1,4 @@
-"""Exa client for growth-analytics: search, contents and agent runs.
+"""Exa client for growth-analytics: search, contents, agent runs and monitors.
 
 Defaults follow the project setup: type="auto", highlights for content.
 Docs: https://docs.exa.ai/reference/search-api-guide-for-coding-agents
@@ -10,6 +10,7 @@ import random
 import re
 import threading
 import time
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 from exa_py import Exa
@@ -89,6 +90,12 @@ def _is_retryable(exc):
     if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
         return True
     return _http_status(exc) in RETRYABLE_STATUS
+
+
+def _refused(exc):
+    """True when Exa turned a request down (4xx other than a timeout): nothing was started or created by it."""
+    status = _http_status(exc)
+    return status is not None and 400 <= status < 500 and status != 408
 
 
 def _record_cost(label, response):
@@ -306,9 +313,8 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
             retryable=lambda exc: _http_status(exc) == 429,
         )
     except Exception as exc:
-        status = _http_status(exc)
-        if status is not None and 400 <= status < 500 and status != 408:
-            raise  # Exa turned the request down: nothing started
+        if _refused(exc):
+            raise  # nothing started
         raise RuntimeError(
             f"Exa agent run may have started and be billed: the request to create it failed ({type(exc).__name__}: {exc})"
         ) from exc
@@ -369,6 +375,135 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
         latency=time.monotonic() - started_at,
     )
     return output.structured, grounding
+
+
+# Monitors --------------------------------------------------------------------------------
+# A monitor is a search Exa runs by itself on an interval and keeps a history for: each run returns only pages its
+# earlier runs did not (https://exa.ai/docs/monitors/quickstart). Exa bills the runs ($0.002 each for up to 10
+# results), not the requests below, and none of its replies carries a cost: they count in cost_summary() as
+# requests at $0.
+
+MONITORS_PAGE = 20  # monitors or runs asked for per list request
+
+
+def _monitors(call, *, retryable=_is_retryable):
+    """call(the SDK's monitors client), with the retries and the tally every other request gets."""
+    response = _with_retries("monitors", lambda: call(get_client().monitors), retryable=retryable)
+    _record_cost("monitors", response)
+    return response
+
+
+def create_monitor(params):
+    """Creates a monitor from the API's request body ({"search", "trigger", "webhook", ...}) and returns it.
+
+    Exa wants a public HTTPS webhook URL on every monitor (it refuses localhost, private addresses and
+    example.com) and calls it for the events the body subscribes to. A monitor with a trigger runs, billed, until
+    it is deleted.
+
+    Like an agent run, a create is sent again only when Exa turns it down for rate (429): after a timeout, a
+    dropped connection or a 5xx the monitor may exist, and a second one would run next to it. That raises
+    RuntimeError saying so.
+    """
+    try:
+        return _monitors(lambda monitors: monitors.create(params), retryable=lambda exc: _http_status(exc) == 429)
+    except Exception as exc:
+        if _refused(exc):
+            raise  # nothing created
+        raise RuntimeError(
+            f"Exa monitor may have been created and be running: the request to create it failed ({type(exc).__name__}: {exc})"
+        ) from exc
+
+
+def get_monitor(monitor_id):
+    """The monitor (`status` "active", "paused" or "disabled"; `next_run_at`), or None when Exa has none with that id."""
+    try:
+        return _monitors(lambda monitors: monitors.get(monitor_id))
+    except ValueError as exc:
+        if _http_status(exc) == 404:
+            return None
+        raise
+
+
+def update_monitor(monitor_id, changes):
+    """Changes the given top-level fields of a monitor and returns it. Sending the trigger it already has leaves
+    its schedule alone; another period starts a new cycle from now."""
+    return _monitors(lambda monitors: monitors.update(monitor_id, changes))
+
+
+def delete_monitor(monitor_id):
+    """Deletes a monitor for good. False when Exa had none with that id."""
+    try:
+        _monitors(lambda monitors: monitors.delete(monitor_id))
+    except ValueError as exc:
+        if _http_status(exc) == 404:
+            return False
+        raise
+    return True
+
+
+def monitors():
+    """Every monitor on the account."""
+    found, cursor, asked = [], None, set()
+    while True:
+        page = _monitors(lambda monitors: monitors.list(cursor=cursor, limit=MONITORS_PAGE))
+        found += page.data
+        asked.add(cursor)
+        if not page.data or not page.has_more or not page.next_cursor or page.next_cursor in asked:
+            return found  # the last page, or a reply that would be asked for again and again
+        cursor = page.next_cursor
+
+
+def _monitor_get(path, params=None):
+    """Exa's JSON for a GET under /monitors, as it came. Runs are read this way and not through the SDK's models,
+    which refuse a whole run, or a whole page of them, for one grounding row without a confidence or a citation."""
+    return _monitors(lambda monitors: monitors.request(path, method="GET", params=params))
+
+
+def monitor_runs(monitor_id):
+    """A monitor's runs, newest first, asked for a page at a time as the caller goes through them: one that stops
+    early costs no further request. Each has `id`, `status` ("pending", "running", "completed", "failed",
+    "cancelled"), `fail_reason` and `empty`: True when the list itself says the run found nothing new, so that
+    monitor_run_output() is asked only for the others."""
+    params, cursor, asked = {"limit": str(MONITORS_PAGE)}, None, set()
+    while True:
+        page = _monitor_get(f"/{monitor_id}/runs", {**params, "cursor": cursor} if cursor else params)
+        for run in page["data"]:
+            output = run.get("output")
+            yield SimpleNamespace(id=run["id"], status=run["status"], fail_reason=run.get("failReason"),
+                                  empty=isinstance(output, dict) and output.get("results") == [])
+        asked.add(cursor)
+        if not page["data"] or not page.get("hasMore") or not page.get("nextCursor") or page["nextCursor"] in asked:
+            return  # the last page, or a reply that would be asked for again and again
+        cursor = page["nextCursor"]
+
+
+def monitor_run_output(monitor_id, run_id):
+    """What a completed run found: (content, grounding, pages).
+
+    content is the JSON the monitor's outputSchema asks for (None when the run wrote none), grounding is
+    {top-level field: {"confidence", "urls"}} as grounded_answer() gives it, pages are the new pages themselves
+    ({"url", "title", and the contents the monitor's search asks for}). As elsewhere, grounding is optional: a
+    row that is not one, or lacks its confidence or citations, costs neither the run nor the other rows.
+    """
+    output = _monitor_get(f"/{monitor_id}/runs/{run_id}").get("output")
+    if not isinstance(output, dict):
+        return None, {}, []
+
+    def listed(value):
+        return value if isinstance(value, list) else []
+
+    rows = [
+        SimpleNamespace(
+            field=row["field"],
+            confidence=row.get("confidence"),
+            citations=[SimpleNamespace(url=c["url"]) for c in listed(row.get("citations"))
+                       if isinstance(c, dict) and isinstance(c.get("url"), str)],
+        )
+        for row in listed(output.get("grounding"))
+        if isinstance(row, dict) and isinstance(row.get("field"), str)
+    ]
+    pages = [page for page in listed(output.get("results")) if isinstance(page, dict)]
+    return output.get("content"), _compact_grounding(rows), pages
 
 
 # Search-type wrappers. All forward to search(); latencies are approximate (Exa docs).

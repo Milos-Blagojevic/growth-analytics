@@ -19,7 +19,7 @@
       {% if run.errors %}<span class="badge v-error">{{ run.errors }} failed</span>{% endif %}
       {% if run.exa_dollars is not none %}<span class="muted small">Exa ${{ '%.3f' | format(run.exa_dollars) }}</span>{% endif %}
     </div>
-    <a class="link small" href="/inbox?days=7">See what's new in the inbox →</a>
+    <a class="link small" href="/?sort=recent">View results on the board →</a>
   </div>
   {% endif %}
 

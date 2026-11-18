@@ -1,5 +1,8 @@
 import argparse
+import fcntl
 import json
+import threading
+from datetime import datetime
 
 import pytest
 
@@ -136,9 +139,59 @@ def test_news_reports_a_failed_topic_and_keeps_the_rest(workdir, exa, fake_claud
     assert json.loads((workdir / "news_state.json").read_text()) == {"https://old.example.com/sent": "2026-10-10T08:00:00"}
 
 
-def test_news_needs_topics(workdir, http):
-    (workdir / "profile.toml").write_text(PROFILE_TOML.split("[news]")[0])
+def test_news_keeps_what_the_chat_bot_recorded_while_it_was_searching(workdir, exa, fake_claude, monkeypatch, http):
+    digested_in_chat = "https://chat.example.com/digested"
 
-    with pytest.raises(SystemExit, match=r"\[news\].topics is empty"):
+    def search(body):  # meanwhile the chat bot sends a digest of its own and records its articles
+        news.record("news_state.json", [{"url": digested_in_chat}])
+        return search_response([article(SHARED, "Analytics hiring rebounds")])
+
+    exa.on_search(search)
+    fake = fake_claude({"overview": "o", "picks": [{"number": 1, "takeaway": "t"}]})
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    http.post(TELEGRAM, json={"ok": True})
+
+    assert hunt.cmd_news(news_args()) == 0
+
+    state = json.loads((workdir / "news_state.json").read_text())
+    assert {digested_in_chat, SHARED} <= set(state)
+
+
+def test_record_waits_for_the_other_writer_and_keeps_its_entries(tmp_path):
+    state = tmp_path / "news_state.json"
+    state.write_text("{}")
+    with open(tmp_path / "news_state.json.lock", "a") as held:  # the other writer is replacing the file
+        fcntl.flock(held, fcntl.LOCK_EX)
+        writer = threading.Thread(target=news.record, args=(state, [{"url": "https://b.example.com/"}]))
+        writer.start()
+        writer.join(timeout=0.2)
+        assert writer.is_alive() and json.loads(state.read_text()) == {}
+        state.write_text(json.dumps({"https://a.example.com/": datetime.now().isoformat(timespec="seconds")}))
+    writer.join(timeout=5)
+
+    assert set(json.loads(state.read_text())) == {"https://a.example.com/", "https://b.example.com/"}
+
+
+NO_NEWS = PROFILE_TOML.split("[news]")[0]
+
+
+@pytest.mark.parametrize("profile, message", [(NO_NEWS, r"\[news\].topics is empty"),
+                                              (NO_NEWS + '[news]\ntopics = "growth"\n', "must be a list of strings"),
+                                              (NO_NEWS + '[news]\ntopics = ["growth", 1]\n', "must be a list of strings"),
+                                              ('news = "growth"\n' + NO_NEWS, "must be a list of strings")],
+                         ids=["none", "a-string", "not-all-strings", "not-a-table"])
+def test_news_needs_a_list_of_topics(workdir, http, profile, message):
+    (workdir / "profile.toml").write_text(profile)
+
+    with pytest.raises(SystemExit, match=message):
+        hunt.cmd_news(news_args())
+    assert len(http.calls) == 0
+
+
+@pytest.mark.parametrize("broken", ["[]", '{"https://a.example.com/": 1}'], ids=["a-list", "a-number-for-a-time"])
+def test_news_stops_on_a_state_file_it_could_not_record_in_before_any_paid_call(workdir, http, broken):
+    (workdir / "news_state.json").write_text(broken)
+
+    with pytest.raises(ValueError, match="does not map article URLs to times"):
         hunt.cmd_news(news_args())
     assert len(http.calls) == 0

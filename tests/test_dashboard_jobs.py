@@ -129,6 +129,20 @@ def test_run_on_selected_leads_runs_hunt_with_a_companies_file(root, app):
     assert "args: [" in page and f"{job_id}-companies.csv" in page and "done" in page  # the log is shown
 
 
+def test_finished_run_links_to_board_results(root, app):
+    write_run(root, "20260110-090000", [
+        result("Delta", "delta.ai", fit=fit(80, "apply", "Analytics Engineer", "https://delta.ai/jobs/1")),
+    ])
+    c = client(app)
+    job_id = started_job_id(c.post("/runs", data={"kind": "run", "mode": "dry_run"}))
+    assert finished(root, job_id)["status"] == "succeeded"
+
+    page = c.get(f"/runs/jobs/{job_id}").text
+    assert 'href="/?sort=recent"' in page
+    assert 'href="/inbox' not in page
+    assert "Analytics Engineer" in c.get("/?sort=recent").text
+
+
 def test_exit_code_decides_the_job_status(root, app, monkeypatch):
     c = client(app)
     monkeypatch.setenv("STUB_EXIT", "1")
@@ -167,6 +181,23 @@ def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, 
     assert "to Jev (TypeSafe, when TYPESAFE_API_KEY is set)" in preview
     job = finished(root, started_job_id(c.post("/runs", data={"kind": "mail", "dry_run": "1"})))
     assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])
+
+
+def test_the_monitor_jobs_run_their_commands_and_say_what_exa_bills(root, app):
+    c = client(app)
+
+    sync = c.post("/runs/preview", data={"kind": "monitor_sync"}).text
+    assert "python hunt.py monitor-sync" in sync
+    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.36 a month for each company" in sync
+    assert "Creates, updates and deletes monitors on your Exa account" in sync
+    check = c.post("/runs/preview", data={"kind": "monitor"}).text
+    assert "Sends the suitable new postings to Telegram" in check and "one call per new posting" in check
+    assert "Telegram" not in c.post("/runs/preview", data={"kind": "monitor", "dry_run": "1"}).text
+
+    synced = finished(root, started_job_id(c.post("/runs", data={"kind": "monitor_sync", "dry_run": "1"})))
+    assert synced["args"] == ["monitor-sync"]  # it has no dry run
+    checked = finished(root, started_job_id(c.post("/runs", data={"kind": "monitor", "dry_run": "1"})))
+    assert (checked["status"], checked["args"]) == ("succeeded", ["monitor", "--dry-run"])
 
 
 def test_one_command_at_a_time(root, app, monkeypatch):

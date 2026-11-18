@@ -9,10 +9,12 @@ from clients import exa_client
 from exa_mock import (
     AGENT_URL,
     CONTENTS_URL,
+    NEXT_RUN,
     agent_run,
     contents_response,
     error,
     grounded,
+    monitor_run,
     result,
     search_response,
     structured_response,
@@ -454,3 +456,161 @@ def test_agent_answer_passes_on_a_request_exa_rejected(exa):
     with pytest.raises(ValueError, match="status code 400"):  # nothing started: not a "may have started"
         exa_client.agent_answer("find companies", AGENT_SCHEMA)
     assert len(exa.requests(AGENT_URL)) == 1
+
+
+MONITOR = {
+    "search": {"query": "New job openings at Acme (acme.com)", "numResults": 10},
+    "trigger": {"type": "interval", "period": "4h"},
+    "webhook": {"url": "https://hunt.example.org", "events": ["monitor.deleted"]},
+}
+
+
+def test_a_monitor_is_created_as_asked_and_updated_field_by_field(exa):
+    account = exa.monitors()
+
+    created = exa_client.create_monitor(MONITOR)
+    assert account.calls("POST") == [MONITOR]
+    assert created.next_run_at is None  # Exa sets it a moment later
+    assert exa_client.get_monitor(created.id).next_run_at == NEXT_RUN
+
+    changed = exa_client.update_monitor(created.id, {"search": {"query": "New job openings at Acme"}})
+    assert (changed.search.query, changed.search.num_results) == ("New job openings at Acme", 10)
+    assert exa_client.cost_summary()["by_label"] == {"monitors": {"requests": 3, "dollars": 0.0}}  # Exa bills the runs
+
+
+def test_create_monitor_retries_a_create_that_exa_turned_down_for_rate(exa):
+    account = exa.monitors()
+    account.failures["create"] = [error(429)]
+
+    exa_client.create_monitor(MONITOR)
+
+    assert len(account.calls("POST")) == 2 and len(account.monitors) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [requests.Timeout("slow"), requests.ConnectionError("connection dropped"), error(503), error(408)],
+    ids=["timeout", "dropped-connection", "503", "408"],
+)
+def test_create_monitor_never_creates_a_second_monitor_when_the_first_may_exist(exa, failure):
+    # a second monitor would run, billed, next to the first, which nothing would know about
+    account = exa.monitors()
+    account.failures["create"] = [failure]
+
+    with pytest.raises(RuntimeError, match="may have been created"):
+        exa_client.create_monitor(MONITOR)
+    assert len(account.calls("POST")) == 1
+
+
+def test_create_monitor_passes_on_a_request_exa_rejected(exa):
+    account = exa.monitors()
+    account.failures["create"] = [error(400, "[webhook.url]: Webhook URL cannot point to localhost")]
+
+    with pytest.raises(ValueError, match="cannot point to localhost"):  # nothing created: not a "may have been"
+        exa_client.create_monitor(MONITOR)
+    assert len(account.calls("POST")) == 1
+
+
+def test_a_monitor_exa_no_longer_has_is_none_to_read_and_nothing_to_delete(exa):
+    account = exa.monitors()
+    created = exa_client.create_monitor(MONITOR)
+
+    assert exa_client.delete_monitor(created.id) is True and account.monitors == {}
+    assert exa_client.get_monitor(created.id) is None
+    assert exa_client.delete_monitor(created.id) is False
+
+
+def test_monitors_and_their_runs_are_read_page_by_page_and_only_as_far_as_asked(exa, http):
+    account = exa.monitors()
+    ids = [exa_client.create_monitor(MONITOR).id for _ in range(exa_client.MONITORS_PAGE + 1)]
+    for n in range(2 * exa_client.MONITORS_PAGE + 5):
+        account.add_run(ids[0], monitor_run(f"run_{n}"))
+
+    assert [m.id for m in exa_client.monitors()] == ids
+
+    before = len(http.calls)
+    runs = exa_client.monitor_runs(ids[0])
+    assert next(runs).id == "run_44"  # newest first
+    assert len(http.calls) == before + 1  # the caller stopped: the other pages are never asked for
+    assert [run.id for run in runs][-1] == "run_0"
+    assert len(http.calls) == before + 3
+
+
+def test_monitor_run_output_is_what_a_run_found_and_nothing_for_a_run_that_found_nothing(exa):
+    account = exa.monitors()
+    monitor_id = exa_client.create_monitor(MONITOR).id
+    role = {"title": "Analytics Engineer", "url": "https://jobs.ashbyhq.com/acme/1"}
+    account.add_run(monitor_id, monitor_run("run_1"))
+    account.add_run(monitor_id, monitor_run(
+        "run_2",
+        results=[result(role["url"], title="Analytics Engineer at Acme", text="dbt, Snowflake.")],
+        content={"open_roles": [role]},
+        grounding=[grounded("open_roles[0].title", role["url"]), grounded("open_roles[0].url", role["url"], confidence="low")],
+    ))
+    account.add_run(monitor_id, monitor_run("run_3", status="failed", fail_reason="insufficient_credits"))
+
+    listed = list(exa_client.monitor_runs(monitor_id))
+    assert [(run.id, run.status, run.fail_reason, run.empty) for run in listed] == [
+        ("run_3", "failed", "insufficient_credits", False), ("run_2", "completed", None, False),
+        ("run_1", "completed", None, True)]  # only run_2 is worth reading
+
+    content, grounding, pages = exa_client.monitor_run_output(monitor_id, "run_2")
+    assert content == {"open_roles": [role]}
+    assert grounding == {"open_roles": {"confidence": "low", "urls": [role["url"]]}}
+    assert [(page["url"], page["text"]) for page in pages] == [(role["url"], "dbt, Snowflake.")]
+    assert exa_client.monitor_run_output(monitor_id, "run_1") == (None, {}, [])
+    assert exa_client.monitor_run_output(monitor_id, "run_3") == (None, {}, [])
+
+
+def test_a_run_is_not_lost_for_grounding_that_is_missing_or_unusual(exa):
+    # grounding is optional in Exa's replies, as with a search's: the SDK's own run model refuses all of these
+    account = exa.monitors()
+    monitor_id = exa_client.create_monitor(MONITOR).id
+    role = {"title": "Analytics Engineer", "url": "https://jobs.ashbyhq.com/acme/1"}
+    odd = [
+        {"field": "open_roles[0].url", "citations": [{"url": role["url"]}, {"title": "no link"}, "junk"]},  # no confidence
+        {"field": "open_roles[0].title", "confidence": "high"},  # no citations
+        {"field": "open_roles[0].location", "citations": 5},  # citations that are no list
+        {"citations": []},  # no field
+        "junk",
+    ]
+    page = result(role["url"], text="dbt, Snowflake.")
+    account.add_run(monitor_id, monitor_run("run_1", results=[page], content={"open_roles": [role]}, grounding=odd))
+    without = monitor_run("run_2", results=[page, "junk"], content={"open_roles": [role]})
+    without["output"]["grounding"] = None
+    account.add_run(monitor_id, without)
+    no_lists = monitor_run("run_3", results=[page], content={"open_roles": [role]})
+    no_lists["output"] |= {"grounding": 5, "results": 5}
+    account.add_run(monitor_id, no_lists)
+
+    assert [run.id for run in exa_client.monitor_runs(monitor_id)] == ["run_3", "run_2", "run_1"]
+    content, grounding, pages = exa_client.monitor_run_output(monitor_id, "run_1")
+    assert content == {"open_roles": [role]} and pages == [page]
+    assert grounding == {"open_roles": {"confidence": "high", "urls": [role["url"]]}}
+    assert exa_client.monitor_run_output(monitor_id, "run_2") == ({"open_roles": [role]}, {}, [page])
+    assert exa_client.monitor_run_output(monitor_id, "run_3") == ({"open_roles": [role]}, {}, [])
+
+
+def test_a_list_of_runs_that_never_ends_is_not_asked_for_again_and_again(exa, http):
+    account = exa.monitors()
+    monitor_id = exa_client.create_monitor(MONITOR).id
+    before = len(http.calls)
+
+    account.failures["runs"] = [(200, {"data": [], "hasMore": True, "nextCursor": "0"})] * 3  # more, it says, and gives none
+    assert list(exa_client.monitor_runs(monitor_id)) == [] and len(http.calls) == before + 1
+
+    run = {**monitor_run("run_1"), "monitorId": monitor_id}
+    account.failures["runs"] = [(200, {"data": [run], "hasMore": True, "nextCursor": "7"})] * 3  # the same page again
+    assert [r.id for r in exa_client.monitor_runs(monitor_id)] == ["run_1", "run_1"] and len(http.calls) == before + 3
+
+
+def test_a_list_of_monitors_that_never_ends_is_not_asked_for_again_and_again(exa, http):
+    account = exa.monitors()
+    one = account.monitors[exa_client.create_monitor(MONITOR).id]
+    before = len(http.calls)
+
+    account.failures["list"] = [(200, {"data": [], "hasMore": True, "nextCursor": "0"})] * 3  # more, it says, and gives none
+    assert exa_client.monitors() == [] and len(http.calls) == before + 1
+
+    account.failures["list"] = [(200, {"data": [one], "hasMore": True, "nextCursor": cursor}) for cursor in "abab"]
+    assert len(exa_client.monitors()) == 3 and len(http.calls) == before + 4  # stopped where the cursors come round

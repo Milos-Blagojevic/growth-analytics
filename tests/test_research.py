@@ -100,6 +100,31 @@ def test_description_fetch_failure_keeps_roles(exa, http, profile):
     assert out["content"]["open_roles"] == [{**live, "link_status": "live"}]
 
 
+def test_an_ambiguous_link_stays_unverified_without_a_fetch_when_it_is_not_to_be_settled(exa, http):
+    blocked = role("Senior BI Engineer", "https://apply.workable.com/acme/j/555")
+    gone = role("Senior Data Engineer", "https://job-boards.greenhouse.io/acme/jobs/333")
+    http.get(blocked["url"], status=403)
+    http.get(gone["url"], status=404)
+
+    usable, dead = research.verify_roles([blocked, gone], settle=False)
+
+    assert usable == [{**blocked, "link_status": "unverified"}]  # not dead for a fetch that failed: none is made
+    assert dead == [{"title": gone["title"], "url": gone["url"]}]
+    assert exa.requests(CONTENTS_URL) == []
+
+
+def test_every_live_role_is_described_when_no_limit_is_given(exa):
+    roles = [{**role(f"Analytics Engineer {n}", f"https://jobs.ashbyhq.com/acme/{n}"), "link_status": "live"}
+             for n in range(research.MAX_DESCRIBED_ROLES + 2)]
+    exa.on_contents(lambda body: contents_response([result(url, text=f"Text of {url}") for url in body["urls"]]))
+
+    capped = research.attach_descriptions(roles)
+    every = research.attach_descriptions(roles, limit=None)
+
+    assert ["description" in r for r in capped] == [True] * research.MAX_DESCRIBED_ROLES + [False, False]
+    assert [r["description"] for r in every] == [f"Text of {r['url']}" for r in roles]
+
+
 def test_ats_fallback_when_main_search_has_no_live_roles(exa, http, profile):
     stale = role("Senior Data Engineer", "https://job-boards.greenhouse.io/acme/jobs/333")
     found = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")

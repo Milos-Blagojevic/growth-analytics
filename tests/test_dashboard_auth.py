@@ -26,8 +26,8 @@ def log_in(client, password=PASSWORD, next="/"):
 def test_pages_and_actions_need_the_login(client):
     page = client.get("/runs?x=1", follow_redirects=False)
     assert (page.status_code, page.headers["location"]) == (303, "/login?next=/runs%3Fx%3D1")
-    htmx = client.get("/inbox", headers={"HX-Request": "true"})
-    assert (htmx.status_code, htmx.headers["HX-Redirect"]) == (401, "/login?next=/inbox")
+    htmx = client.get("/pipeline", headers={"HX-Request": "true"})
+    assert (htmx.status_code, htmx.headers["HX-Redirect"]) == (401, "/login?next=/pipeline")
     # A valid CSRF token is not enough: a POST without the session cookie starts nothing.
     assert client.post("/runs", data={"kind": "watch", "dry_run": "1"}).status_code == 401
     assert client.get("/static/app.css").status_code == 200
