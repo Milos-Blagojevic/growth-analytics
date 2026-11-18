@@ -2,7 +2,7 @@
 
 import importlib.util
 import json
-import re
+from html.parser import HTMLParser
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +14,35 @@ SCRIPTS = REPO / ".claude" / "skills" / "visualize-changes" / "scripts"
 spec = importlib.util.spec_from_file_location("change_report", SCRIPTS / "report.py")
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
+
+
+class ReportPage(HTMLParser):
+    """Inspect consumer-facing text and links, without pinning the report's layout or wording."""
+
+    def __init__(self, source):
+        super().__init__()
+        self.ids, self.links, self.text, self.scripts = [], [], [], []
+        self.raw = None
+        self.feed(source)
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if "id" in attrs:
+            self.ids.append(attrs["id"])
+        if tag == "a":
+            self.links.append(attrs.get("href", ""))
+        if tag in ("script", "style"):
+            self.raw = tag
+
+    def handle_endtag(self, tag):
+        if tag == self.raw:
+            self.raw = None
+
+    def handle_data(self, data):
+        if self.raw == "script":
+            self.scripts.append(data)
+        elif not self.raw:
+            self.text.append(data)
 
 
 def git(*args, cwd):
@@ -68,9 +97,8 @@ def test_report_explains_without_showing_file_contents(repo):
     page = report.build("HEAD", notes, None, None)
 
     assert "secret_marker" not in page and "b = 2" not in page
-    assert '<span class="chip">keep.py</span>' in page
-    assert '<span class="chip missing" title="not among the changed files">not/changed.py</span>' in page
-    assert ">+1 −1<" in page  # keep.py's line counts in the map of where the change lands
+    text = "".join(ReportPage(page).text)
+    assert "keep.py" in text and "not/changed.py" in text
 
 
 def test_commit_subjects_with_line_break_characters(repo):
@@ -79,7 +107,7 @@ def test_commit_subjects_with_line_break_characters(repo):
 
     page = report.build("HEAD~1", {"title": "T", "summary": "S"}, None, None)
 
-    assert re.search(r"<li><code>[0-9a-f]+</code>Fix &lt;b&gt;scores&lt;/b&gt;\rand\fmore</li>", page)
+    assert "Fix <b>scores</b>\rand\fmore" in "".join(ReportPage(page).text)
 
 
 def test_untracked_files_are_counted_but_symlinks_are_not_followed(repo, tmp_path_factory):
@@ -131,6 +159,55 @@ def test_notes_with_the_wrong_shape_are_rejected(tmp_path, notes, message):
 
     with pytest.raises(SystemExit, match=message):
         report.load_notes(path)
+
+
+@pytest.mark.parametrize(("sections", "connections", "message"), [
+    ([{"id": "a", "title": "A"}, {"id": "a", "title": "B"}], [], "duplicate section id"),
+    ([{"id": "section-2", "title": "A"}, {"title": "B"}], [], "duplicate section id"),
+    ([{"id": 'a" onclick="bad', "title": "A"}], [], "id must use lowercase"),
+    ([{"id": "a", "title": "A"}], "a", "connections must be a list"),
+    ([{"id": "a", "title": "A"}], [None], "connections must be a list"),
+    ([{"id": "a", "title": "A"}], [{"from": "a", "to": "missing"}], "to must name a section id"),
+    ([{"id": "a", "title": "A"}], [{"from": 0, "to": "a"}], "from must name a section id"),
+    ([{"id": "a", "title": "A"}], [{"from": "a", "to": "a"}], "must join two different sections"),
+    ([{"id": "a", "title": "A"}, {"id": "b", "title": "B"}],
+     [{"from": "a", "to": "b", "label": ["wrong"]}], "label must be text"),
+])
+def test_invalid_map_relationships_are_rejected(tmp_path, sections, connections, message):
+    path = tmp_path / "notes.json"
+    path.write_text(json.dumps({"title": "T", "summary": "S", "sections": sections, "connections": connections}))
+
+    with pytest.raises(SystemExit, match=message):
+        report.load_notes(path)
+
+
+def test_map_relationships_resolve_with_repeated_titles_and_html_text(repo):
+    (repo / "keep.py").write_text("private_source_marker = 123\n")
+    hostile = '</script><script>window.stolen = true</script>'
+    notes = {
+        "title": "A useful takeaway",
+        "summary": "Owner-facing explanation.",
+        "sections": [
+            {"id": "research", "title": "Repeated <heading>", "body": "Research explanation.",
+             "before": "Aggregator role.", "after": "Lead only.", "files": ["keep.py"]},
+            {"id": "scoring", "title": "Repeated <heading>", "body": "Scoring explanation."},
+        ],
+        "connections": [{"from": "research", "to": "scoring", "label": hostile}],
+    }
+    path = repo / "notes.json"
+    path.write_text(json.dumps(notes))
+
+    page = ReportPage(report.build("HEAD", report.load_notes(path), None, None))
+
+    # Labels must be readable, never executable; each area remains reachable with JavaScript disabled.
+    text = "".join(page.text)
+    assert hostile in text
+    assert "Research explanation." in text and "Scoring explanation." in text
+    assert "Aggregator role." in text and "Lead only." in text
+    assert "private_source_marker" not in text
+    assert all("window.stolen" not in script for script in page.scripts)
+    assert len(page.ids) == len(set(page.ids))
+    assert all(link[1:] in page.ids for link in page.links if link.startswith("#"))
 
 
 @pytest.mark.parametrize("svg", [

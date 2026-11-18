@@ -8,25 +8,33 @@ untracked), and where the changes land. The report shows no file contents and no
 NOTES.json, written by whoever describes it:
 
     {
-      "title": "One-line name of the change",
-      "summary": "What changed and why, for someone who has not seen the work.",
-      "sections": [                                  # one per area or behavior, in reading order
+      "title": "One-line takeaway",
+      "summary": "What changed for the owner, why, and anything they must do.",
+      "sections": [                                  # selectable areas, in reading order
         {
-          "title": "Short heading",
-          "body": "Explanation.",
-          "before": "Behavior before (optional)",    # before/after are shown side by side
+          "id": "research",                         # optional; needed to reference this area in connections
+          "title": "Short area or behavior heading",
+          "body": "Brief explanation.",
+          "before": "Behavior before (optional)",
           "after": "Behavior after (optional)",
-          "files": ["path/of/a/changed/file.py"],   # optional; shown as file chips
-          "diagram": "<svg viewBox=...>...</svg>"   # optional; drawing elements only (see diagram())
-        }
+          "files": ["path/of/a/changed/file.py"],
+          "diagram": "<svg viewBox=...>...</svg>"    # optional; drawing elements only (see diagram())
+        },
+        {"id": "scoring", "title": "Score eligible roles"}
       ],
-      "page_notes": {"/runs": "What to look at on this page"},   # optional, for --before/--after pages
-      "review_notes": "Risks, open questions, how to try it."     # optional
+      "connections": [                              # optional; only relationships supported by the code
+        {"from": "research", "to": "scoring", "label": "Eligible roles"}
+      ],
+      "page_notes": {"/runs": "What to look at on this page"},
+      "review_notes": "Risks, checks actually run, open questions."
     }
 
 Text fields are plain text: blank lines separate paragraphs, lines starting with "- " form a list, `code` and
-**bold** are formatted. --before and --after are snapshot.py output folders (old and new code); their pages are
-shown side by side. The report goes to --out (default .change-reports/<branch>-<commit>.html, git-ignored).
+**bold** are formatted. The briefing leads with the takeaway; selecting a map area shows its before/after,
+explanation, related files and connections. Without JavaScript all areas remain readable as ordinary sections.
+Existing notes without ids or connections still work; their map has no invented arrows. --before and --after
+are snapshot.py output folders. Their sandboxed pages, git facts and review notes are disclosures below the map.
+CSS and JavaScript are inlined: the report is one offline HTML file, default .change-reports/<branch>-<commit>.html.
 """
 
 import argparse
@@ -248,6 +256,7 @@ def load_notes(path):
     sections = notes.get("sections") or []
     if not isinstance(sections, list) or not all(isinstance(s, dict) for s in sections):
         sys.exit(f"{path}: sections must be a list of objects")
+    ids = []
     for n, section in enumerate(sections):
         text(section.get("title"), f"sections[{n}].title", required=True)
         for key in ("body", "before", "after", "diagram"):
@@ -255,6 +264,22 @@ def load_notes(path):
         files = section.get("files", [])
         if not isinstance(files, list) or not all(isinstance(p, str) for p in files):
             sys.exit(f"{path}: sections[{n}].files must be a list of paths")
+        section_id = section.get("id", f"section-{n + 1}")
+        if not isinstance(section_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", section_id):
+            sys.exit(f"{path}: sections[{n}].id must use lowercase letters, digits and hyphens, starting with a letter")
+        if section_id in ids:
+            sys.exit(f"{path}: duplicate section id {section_id!r}")
+        ids.append(section_id)
+    connections = notes.get("connections", [])
+    if not isinstance(connections, list) or not all(isinstance(edge, dict) for edge in connections):
+        sys.exit(f"{path}: connections must be a list of objects")
+    for n, edge in enumerate(connections):
+        for key in ("from", "to"):
+            if not isinstance(edge.get(key), str) or edge[key] not in ids:
+                sys.exit(f"{path}: connections[{n}].{key} must name a section id")
+        if edge["from"] == edge["to"]:
+            sys.exit(f"{path}: connections[{n}] must join two different sections")
+        text(edge.get("label"), f"connections[{n}].label")
     page_notes = notes.get("page_notes") or {}
     if not isinstance(page_notes, dict) or not all(isinstance(v, str) for v in page_notes.values()):
         sys.exit(f"{path}: page_notes must map page paths to text")
@@ -269,37 +294,78 @@ def file_chips(paths, changed):
     return f'<div class="chips">{"".join(chips)}</div>' if chips else ""
 
 
-def render_section(n, section, changed):
+def render_section(n, section, changed, relations=""):
     compare = ""
     if section.get("before") or section.get("after"):
-        compare = (f'<div class="compare"><div><h4>Before</h4>{fmt(section.get("before", "")) or "<p>—</p>"}</div>'
-                   f'<div><h4>After</h4>{fmt(section.get("after", "")) or "<p>—</p>"}</div></div>')
-    return (f'<section class="card"><h3>{inline(section["title"])}</h3>{fmt(section.get("body", ""))}{compare}'
-            f'{diagram(section.get("diagram"), f"d{n}-")}{file_chips(section.get("files"), changed)}</section>')
+        compare = (f'<div class="compare"><div class="before"><h4>Before</h4>'
+                   f'{fmt(section.get("before")) or "<p>Not described.</p>"}</div>'
+                   f'<div class="after"><h4>After</h4>{fmt(section.get("after")) or "<p>Not described.</p>"}'
+                   f'</div></div>')
+    return (f'<section class="change-panel" id="change-{n}" data-panel>'
+            f'<div class="panel-top"><span class="eyebrow">Area {n + 1:02d}</span>'
+            f'<span>Behavior, not a diff</span></div><h3>{inline(section["title"])}</h3>'
+            f'<div class="panel-body">{fmt(section.get("body"))}</div>{compare}'
+            f'{diagram(section.get("diagram"), f"d{n}-")}{file_chips(section.get("files"), changed)}'
+            f'{relations}</section>')
+
+
+def render_system(sections, connections, changed):
+    """Area navigation and explicit relationships; without JS, links reach every visible area."""
+    if not sections:
+        return '<p class="no-areas">No behavior areas supplied. The briefing and changed files are below.</p>'
+    ids = {section.get("id", f"section-{n + 1}"): n for n, section in enumerate(sections)}
+    nodes = "".join(
+        f'<a class="map-node" id="map-node-{n}" href="#change-{n}" data-map-node data-select="{n}">'
+        f'<span class="map-number">{n + 1:02d}</span><span class="node-title">{inline(section["title"])}</span></a>'
+        for n, section in enumerate(sections)
+    )
+    relations = [[] for _ in sections]
+    edges = []
+    for edge in connections:
+        source, target = ids[edge["from"]], ids[edge["to"]]
+        label = html.escape(edge.get("label") or "Connects to")
+        edges.append(f'<path class="map-edge" data-edge data-from="{source}" data-to="{target}" '
+                     f'marker-end="url(#map-arrow)"><title>{label}</title></path>')
+        relations[source].append(
+            f'<span class="relation"><span>{label} →</span><a href="#change-{target}" data-select="{target}">'
+            f'{inline(sections[target]["title"])}</a></span>')
+        relations[target].append(
+            f'<span class="relation"><span>From</span><a href="#change-{source}" data-select="{source}">'
+            f'{inline(sections[source]["title"])}</a><span>· {label}</span></span>')
+    panels = "".join(
+        render_section(n, section, changed,
+                       f'<nav class="relations" aria-label="Area relationships">{"".join(relations[n])}</nav>'
+                       if relations[n] else "")
+        for n, section in enumerate(sections)
+    )
+    wires = (
+        '<svg class="map-wires" id="map-wires" aria-hidden="true"><defs>'
+        '<marker id="map-arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="5" markerHeight="5" '
+        'orient="auto"><path class="map-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>'
+        f'{"".join(edges)}</svg>'
+    ) if edges else ""
+    return (f'<div class="system"><div class="map-overview" id="map-overview">{wires}'
+            f'<nav class="map-nodes" id="map-nodes" data-count="{len(sections)}" aria-label="Change areas">'
+            f'{nodes}</nav></div>{panels}</div>')
 
 
 def render_areas(files):
-    stats = [(f, *count(f)) for f in files]
-    biggest = max([a + d for _, a, d in stats] + [1])
     groups = {}
-    for f, a, d in stats:
-        groups.setdefault(area(f["path"]), []).append((f, a, d))
+    for f in files:
+        groups.setdefault(area(f["path"]), []).append(f)
     out = []
-    for name, rows in sorted(groups.items(), key=lambda g: -sum(a + d for _, a, d in g[1])):
-        total_a, total_d = sum(a for _, a, _ in rows), sum(d for _, _, d in rows)
+    for name, rows in sorted(groups.items()):
         items = []
-        for f, a, d in sorted(rows, key=lambda r: -(r[1] + r[2])):
-            label = next((name for name in ("symlink", "binary", "large") if f.get(name)), f"+{a} −{d}")
+        for f in sorted(rows, key=lambda row: row["path"]):
+            a, d = count(f)
+            label = next((kind for kind in ("symlink", "binary", "large") if f.get(kind)), f"+{a} −{d}")
             title = f'{f["old_path"]} → {f["path"]}' if f.get("old_path") else f["path"]
+            status = "untracked" if f.get("untracked") else f["status"]
             items.append(
                 f'<li><span class="name" title="{html.escape(title)}">{html.escape(Path(f["path"]).name)}</span>'
-                f'<span class="status {f["status"]}" title="{f["status"]}{" (untracked)" if f.get("untracked") else ""}">'
-                f'{"U" if f.get("untracked") else f["status"][0].upper()}</span>'
-                f'<span class="bar"><span class="a" style="width:{100 * a / biggest:.1f}%"></span>'
-                f'<span class="d" style="width:{100 * d / biggest:.1f}%"></span></span>'
-                f'<span class="num">{label}</span></li>')
-        out.append(f'<div class="area"><h4>{html.escape(name)} <span class="num">+{total_a} −{total_d}</span></h4>'
-                   f'<ul class="files">{"".join(items)}</ul></div>')
+                f'<span class="status">{status}</span><span class="num">{label}</span></li>')
+        out.append(f'<section class="area"><h4>{html.escape(name)}</h4>'
+                   f'<ul class="files">{"".join(items)}</ul></section>')
     return "".join(out)
 
 
@@ -328,50 +394,9 @@ def render_pages(before_dir, after_dir, page_notes):
     return "".join(out)
 
 
-CSS = """
-:root { --bg:#fbfbfa; --fg:#1d1d1f; --muted:#6b6b70; --border:#e3e3e0; --surface:#fff; --accent:#3b5bdb;
-  --add:#1a7f37; --add-bg:#e6f4ea; --del:#c62828; --del-bg:#fdecea; --hunk:#eef1fb; }
-@media (prefers-color-scheme: dark) { :root { --bg:#141416; --fg:#e8e8ea; --muted:#9a9aa2; --border:#2c2c31;
-  --surface:#1c1c20; --accent:#8ea4ff; --add:#56d364; --add-bg:#12261a; --del:#ff7b72; --del-bg:#2d1517; --hunk:#1d2236; } }
-* { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-main { max-width:1180px; margin:0 auto; padding:40px 24px 80px; }
-h1 { font-size:28px; margin:0 0 6px; } h2 { font-size:19px; margin:44px 0 14px; border-bottom:1px solid var(--border); padding-bottom:6px; }
-h3 { font-size:16px; margin:0 0 8px; } h4 { font-size:13px; margin:0 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-code { font:13px ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--hunk); padding:1px 4px; border-radius:4px; }
-a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
-.meta { color:var(--muted); font-size:14px; }
-.stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin:24px 0; }
-.stat { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
-.stat b { display:block; font-size:24px; } .stat span { color:var(--muted); font-size:13px; }
-.stat.add b { color:var(--add); } .stat.del b { color:var(--del); }
-.card, .area, .page { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; margin:0 0 14px; }
-.compare { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:12px 0; }
-.compare > div { border:1px solid var(--border); border-radius:8px; padding:10px 14px; }
-.compare > div:first-child { border-left:3px solid var(--del); } .compare > div:last-child { border-left:3px solid var(--add); }
-.diagram { margin:14px 0; padding:12px; border:1px dashed var(--border); border-radius:8px; overflow-x:auto; color:var(--fg); }
-.diagram svg { max-width:100%; height:auto; }
-.chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
-.chip { font:12px ui-monospace, Menlo, monospace; border:1px solid var(--border); border-radius:999px; padding:2px 9px; }
-.chip.missing { color:var(--muted); text-decoration:line-through; }
-.areas { display:grid; grid-template-columns:repeat(auto-fill, minmax(420px, 1fr)); gap:14px; }
-.area h4 { display:flex; justify-content:space-between; }
-.files { list-style:none; margin:0; padding:0; }
-.files li { display:grid; grid-template-columns:minmax(0, 1fr) 22px 90px 76px; gap:8px; align-items:center; padding:3px 0; font-size:13px; }
-.files .status { margin:0; text-align:center; padding:1px 0; }
-.files li .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.bar { display:flex; height:8px; background:var(--hunk); border-radius:4px; overflow:hidden; }
-.bar .a { background:var(--add); } .bar .d { background:var(--del); }
-.num { font:12px ui-monospace, Menlo, monospace; color:var(--muted); text-align:right; }
-.status { font-size:11px; border-radius:4px; padding:1px 6px; background:var(--hunk); color:var(--muted); margin-left:8px; }
-.status.added { color:var(--add); background:var(--add-bg); } .status.deleted { color:var(--del); background:var(--del-bg); }
-.frames { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-@media (max-width:1100px) { .frames, .compare { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2, 1fr); } }
-.frame iframe { width:100%; height:640px; border:1px solid var(--border); border-radius:8px; background:#fff; }
-.empty { color:var(--muted); padding:20px; border:1px dashed var(--border); border-radius:8px; text-align:center; }
-.commits { list-style:none; padding:0; } .commits li { padding:3px 0; } .commits code { margin-right:8px; }
-nav.toc { font-size:14px; margin-top:10px; } nav.toc a { margin-right:14px; }
-"""
+ASSETS = Path(__file__).resolve().parent
+CSS = (ASSETS / "report.css").read_text()
+SCRIPT = (ASSETS / "report.js").read_text()
 
 
 def changed_files(base):
@@ -394,35 +419,35 @@ def build(base, notes, before_dir, after_dir):
     head = git("rev-parse", "--short", "HEAD").strip()
     base_short = git("rev-parse", "--short", base).strip()
     dirty = bool(git("status", "--porcelain").strip())
-    sections = "".join(render_section(n, s, changed) for n, s in enumerate(notes.get("sections") or []))
+    system = render_system(notes.get("sections") or [], notes.get("connections") or [], changed)
     pages = render_pages(before_dir, after_dir, notes.get("page_notes") or {}) if before_dir else ""
     commit_items = "".join(f"<li><code>{html.escape(h)}</code>{inline(s)}</li>" for h, s in commits)
-    toc = ["<a href='#summary'>Summary</a>", "<a href='#where'>Where</a>"]
-    toc += ["<a href='#pages'>Pages</a>"] if pages else []
-    toc += ["<a href='#review'>Review notes</a>"] if notes.get("review_notes") else []
+    toc = ['<a href="#changes">Explore</a>', '<a href="#facts">Files & commits</a>']
+    if pages:
+        toc.append('<a href="#pages">Pages</a>')
+    if notes.get("review_notes"):
+        toc.append('<a href="#review">Review</a>')
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(notes["title"])}</title><style>{CSS}</style></head>
 <body><main>
-<h1>{inline(notes["title"])}</h1>
-<div class="meta"><code>{html.escape(branch)}</code> · <code>{base_short}</code> → <code>{head}</code>{" + uncommitted changes" if dirty else ""}
- · generated {datetime.now():%Y-%m-%d %H:%M}</div>
-<nav class="toc">{"".join(toc)}</nav>
-<div class="stats">
-  <div class="stat"><b>{len(files)}</b><span>files changed</span></div>
-  <div class="stat add"><b>+{added}</b><span>lines added</span></div>
-  <div class="stat del"><b>−{removed}</b><span>lines removed</span></div>
-  <div class="stat"><b>{len(commits)}</b><span>commits{" + working tree" if dirty else ""}</span></div>
-</div>
-<h2 id="summary">Summary</h2>
-<section class="card">{fmt(notes["summary"])}</section>
-{sections}
-<h2 id="where">Where the change lands</h2>
-<div class="areas">{render_areas(files)}</div>
-{f'<h2 id="pages">Dashboard pages, before and after</h2>{pages}' if pages else ""}
-{f'<h2 id="review">Review notes</h2><section class="card">{fmt(notes["review_notes"])}</section>' if notes.get("review_notes") else ""}
-{f'<h2>Commits</h2><ul class="commits">{commit_items}</ul>' if commits else ""}
-</main></body></html>
+<header class="topbar"><span class="eyebrow">Change briefing</span><nav aria-label="Report">{"".join(toc)}</nav></header>
+<section class="hero" id="summary"><div><span class="eyebrow">The takeaway</span><h1>{inline(notes["title"])}</h1>
+<p class="meta"><code>{html.escape(branch)}</code><br><code>{base_short}</code> → <code>{head}</code>
+{" + uncommitted changes" if dirty else ""} · {datetime.now():%Y-%m-%d %H:%M}</p></div>
+<div class="summary">{fmt(notes["summary"])}</div></section>
+<div class="section-heading" id="changes"><h2>Where behavior changes.</h2>
+<p>Select an area for its before and after. Arrows show only explicitly described relationships.</p></div>
+{system}
+<div class="disclosures">
+{f'<details id="pages"><summary>Dashboard, before and after<small>Identical sample data · captured pages</small></summary><div class="disclosure-body">{pages}</div></details>' if pages else ""}
+{f'<details id="review"><summary>Review & rollout<small>Risks, checks and how to try it</small></summary><div class="disclosure-body">{fmt(notes["review_notes"])}</div></details>' if notes.get("review_notes") else ""}
+<details id="facts"><summary>Changed files & commits<small>Supporting facts from git</small></summary>
+<div class="disclosure-body"><div class="stats"><span><strong>{len(files)}</strong> files</span>
+<span><strong>+{added} −{removed}</strong> lines</span><span><strong>{len(commits)}</strong> commits{" + working tree" if dirty else ""}</span></div>
+<div class="areas">{render_areas(files)}</div>{f'<ul class="commits">{commit_items}</ul>' if commits else ""}</div></details>
+</div><footer>No diff or source contents. Explanations supplied by the report author; file facts supplied by git.</footer>
+</main><script>{SCRIPT}</script></body></html>
 """
 
 
