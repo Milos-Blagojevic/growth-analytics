@@ -13,6 +13,8 @@ import time
 
 import requests
 
+from clients import posthog_client
+
 logger = logging.getLogger("jev")
 
 API_URL = "https://api.typesafe.ai/v1/systemone"
@@ -97,6 +99,7 @@ def ask(state, questions):
     if _down.is_set():
         raise JevError("TypeSafe was unavailable earlier in this run")
     body = {"model": model(), "state": state, "questions": questions}
+    started = time.monotonic()
     for attempt in range(1, MAX_ATTEMPTS + 1):
         rate_limited = False
         try:
@@ -130,6 +133,7 @@ def ask(state, questions):
     with _usage_lock:  # an answered request is billed, whatever its answers look like
         _usage["requests"] += 1
         _usage["input_tokens"] += tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else 0
+    posthog_client.generation("typesafe", body["model"], input_tokens=tokens, latency=time.monotonic() - started)
     answers = data.get("answers")
     if not isinstance(answers, dict):
         answers = {}

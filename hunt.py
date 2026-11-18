@@ -32,7 +32,7 @@ from pathlib import Path
 
 import logfire
 
-from clients import exa_client, jev, telegram
+from clients import exa_client, jev, posthog_client, telegram
 from inbox import chat, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
 from pipeline import monitor, news, research, runs, scoring, watch
@@ -984,23 +984,28 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    if args.func is cmd_outlook_login:  # interactive, up to 15 minutes; writes only the token file, so no lock
-        if runs.is_locked():  # a running `mail` could overwrite the new sign-in with the token it refreshed
-            sys.exit("Another hunt.py command is running here; sign in when it finishes.")
-        sys.exit(args.func(args))
-    if args.func in (cmd_gmail_login, cmd_chat):
-        # gmail-login writes only gmail_token.json, which nothing else rewrites (Google keeps the refresh token).
-        # chat runs for hours, so it cannot hold the lock. It shares two files with the other commands:
-        # outlook_token.json, which it and `mail` replace atomically with tokens that are both valid, and
-        # news_state.json, which it and `news` write through news.record, under a file lock of its own.
-        sys.exit(args.func(args))
-    # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state files.
-    try:
-        with runs.lock():
-            code = args.func(args)
-    except runs.Busy:
-        sys.exit(f"Another hunt.py command is running here (lock: {runs.LOCK_FILE}); try again when it finishes.")
-    sys.exit(code)
+    # PostHog, when POSTHOG_PROJECT_TOKEN and POSTHOG_HOST are set: a record when the command starts and one when
+    # it ends (exit code, seconds), next to the generation each model call reports (clients/posthog_client.py).
+    posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"), service="hunt")
+    with posthog_client.command(args.command):
+        if args.func is cmd_outlook_login:  # interactive, up to 15 minutes; writes only the token file, so no lock
+            if runs.is_locked():  # a running `mail` could overwrite the new sign-in with the token it refreshed
+                sys.exit("Another hunt.py command is running here; sign in when it finishes.")
+            sys.exit(args.func(args))
+        if args.func in (cmd_gmail_login, cmd_chat):
+            # gmail-login writes only gmail_token.json, which nothing else rewrites (Google keeps the refresh token).
+            # chat runs for hours, so it cannot hold the lock. It shares two files with the other commands:
+            # outlook_token.json, which it and `mail` replace atomically with tokens that are both valid, and
+            # news_state.json, which it and `news` write through news.record, under a file lock of its own.
+            sys.exit(args.func(args))
+        # One command at a time (shell, cron or dashboard): two runs would mix costs in out/ and race on the state
+        # files.
+        try:
+            with runs.lock():
+                code = args.func(args)
+        except runs.Busy:
+            sys.exit(f"Another hunt.py command is running here (lock: {runs.LOCK_FILE}); try again when it finishes.")
+        sys.exit(code)
 
 
 if __name__ == "__main__":

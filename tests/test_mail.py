@@ -381,6 +381,21 @@ def test_mail_labels_survive_bad_numbers_from_claude(fake_claude):
     assert usage == {"input_tokens": 1200, "output_tokens": 300} and problems == [] and unanswered == []
 
 
+def test_posthog_gets_the_batches_of_one_check_as_one_trace_and_none_of_the_mail(fake_claude, posthog_api):
+    messages = [{"id": f"<{n}>", "received_at": "2026-10-18T09:00:00", "from_name": "PRIVATE-SENDER",
+                 "from_address": "a@b.io", "subject": "PRIVATE-SUBJECT", "body": "PRIVATE-BODY", "web_link": ""}
+                for n in range(mail_labels.BATCH + 1)]
+    fake = fake_claude({"emails": []})
+
+    mail_labels.label(messages, client=fake)  # two batches
+    mail_labels.label(messages[:1], client=fake)  # the next check
+
+    first, second, later = (event["properties"] for event in posthog_api.events("$ai_generation"))
+    assert first["$ai_trace_id"] == second["$ai_trace_id"] != later["$ai_trace_id"]
+    assert (first["$ai_provider"], first["$ai_input_tokens"], first["$ai_output_tokens"]) == ("anthropic", 1200, 300)
+    assert "PRIVATE" not in json.dumps(posthog_api.events())
+
+
 @pytest.mark.parametrize(
     ("remove", "message"),
     [("OUTLOOK_CLIENT_ID", "OUTLOOK_CLIENT_ID is not set"), ("token", "outlook-login")],

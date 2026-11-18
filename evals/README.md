@@ -55,6 +55,8 @@ python -m evals roles --live --output evals/results/baseline
 
 The existing `JEV_MODEL` override applies; otherwise the client pins `jev-1.14.0`. The report records the requested model, not an independently verified provider deployment. Cost uses the existing client's $0.042 per million reported input tokens; missing usage or failed requests can leave uncounted charges. It is an estimate, not a hard spending cap.
 
+PostHog, optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` exported as well, a live run tells your PostHog project that it started and how it ended (`evals_command_started`, then `evals_command_finished` with the exit code and seconds) and reports each answered Jev request as a generation (model, input tokens, seconds). No posting, question or answer is sent, and the reports the run writes are the same with or without it. The free check reports nothing and stays off the network. See [PostHog](../clients/README.md#posthog).
+
 Exit codes:
 
 | Code | Meaning |

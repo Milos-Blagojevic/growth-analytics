@@ -8,6 +8,8 @@ By default it serves the current directory on 127.0.0.1 only, without a login. A
   CHAT_BOT               1/true/yes keeps `hunt.py chat` (the Telegram chat bot) running alongside the dashboard
   RAILWAY_PUBLIC_DOMAIN  set by Railway; accepted as Host name, like the host of DASHBOARD_URL
   PORT                   default for --port (set by Railway)
+  POSTHOG_PROJECT_TOKEN  with POSTHOG_HOST, reports your actions, errors and a start record to PostHog (optional)
+  POSTHOG_HOST           the project's ingestion host, e.g. https://eu.i.posthog.com
 """
 
 import argparse
@@ -18,6 +20,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 
+from clients import posthog_client
 from dashboard import schedule
 from dashboard.app import LOOPBACK_HOSTS, create_app
 
@@ -49,6 +52,8 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"),
+                             service="dashboard", exceptions=True)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

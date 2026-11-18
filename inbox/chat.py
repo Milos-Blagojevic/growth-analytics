@@ -18,7 +18,10 @@ tools hand out, so the model never has to repeat provider ids.
 
 The agent emits OpenTelemetry traces without content (`build_agent`): timings, token counts, tool names and error
 types, never the text of a message, email, search, draft or answer. `hunt.py chat` sends them to Pydantic Logfire
-when LOGFIRE_TOKEN is set; otherwise they go nowhere.
+when LOGFIRE_TOKEN is set; otherwise they go nowhere. With PostHog configured (clients/posthog_client.py) each
+answer is also a trace there, under the same rule: the answer's model calls as one generation with their token
+counts, a span per tool call with its name and seconds, the Jev and Claude calls of a news digest in the same
+trace, and a session per conversation.
 """
 
 import logging
@@ -35,7 +38,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.usage import UsageLimits
 
-from clients import jev, telegram
+from clients import jev, posthog_client, telegram
 from inbox import gmail, outlook
 from pipeline import news, scoring
 
@@ -325,7 +328,9 @@ def build_agent(model=None):
         name="chat",
         deps_type=Mailboxes,
         instructions=INSTRUCTIONS,
-        tools=[list_emails, read_email, draft_email, draft_reply, news_digest],
+        # PostHog: a span per tool call inside an answer's trace (the tool's name and seconds, nothing it read).
+        tools=[posthog_client.instrument_tool(tool)
+               for tool in (list_emails, read_email, draft_email, draft_reply, news_digest)],
         retries=2,
     )
     # Set on the agent, so it wins over any global Agent.instrument_all / logfire.instrument_pydantic_ai default.
@@ -368,19 +373,26 @@ class Conversation:
         self.agent = agent
         self.deps = deps
         self.history = []
+        self.session_id = posthog_client.new_session_id()  # PostHog: a conversation is one session
         self.digested = []
 
     def reset(self):
         self.history = []
         self.deps.reset()
+        self.session_id = posthog_client.new_session_id()
 
     def answer(self, text):
         self.deps.news.begin()
-        result = self.agent.run_sync(text, deps=self.deps, message_history=self.history,
-                                     usage_limits=UsageLimits(request_limit=MAX_REQUESTS))
+        started = time.monotonic()
+        with posthog_client.agent_turn(self.session_id):  # PostHog: the answer is one trace
+            result = self.agent.run_sync(text, deps=self.deps, message_history=self.history,
+                                         usage_limits=UsageLimits(request_limit=MAX_REQUESTS))
+            usage = result.usage
+            posthog_client.generation(self.agent.model.system, self.agent.model.model_name,
+                                      input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                                      latency=time.monotonic() - started)
         self.digested = self.deps.news.considered  # only now: the digests of a failed answer never reach the owner
         self.history = trim(result.all_messages())
-        usage = result.usage
         logger.info("answered with %d model call(s), %d tool call(s), %d in / %d out tokens", usage.requests,
                     usage.tool_calls, usage.input_tokens, usage.output_tokens)
         return result.output
