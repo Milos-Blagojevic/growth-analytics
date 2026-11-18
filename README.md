@@ -78,7 +78,7 @@ python -m clients.exa_client
 | `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see [Verify in CI](tests/README.md#verify-in-ci)) |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
 | `.claude/skills/verify/` | `verify` skill: a separate agent tests and adversarially reviews each change before it ships (agents run it themselves; you can run `/verify <what the change should do>`); `scripts/sandbox.py` serves the dashboard on sample files with a fake `hunt.py`; `scripts/ci.py` runs the skill in CI (see [Verify in CI](tests/README.md#verify-in-ci)) |
-| `.claude/skills/visualize-changes/` | `/visualize-changes` skill, run only when you ask: an HTML report that explains the branch's changes (short descriptions, before/after, diagrams, old and new dashboard pages side by side, where the change lands; no diff), saved in `.change-reports/` (git-ignored) |
+| `.claude/skills/visualize-changes/` | `/visualize-changes`, run only when you ask: an offline HTML briefing with the takeaway first, a selectable system map, before/after behavior and related files; explicit relationships, dashboard captures, review notes and git facts (no diff), saved in `.change-reports/` (git-ignored) |
 | `docs/specs/` | Specs handed to coding agents: `gtm-attribution-model.md` (public attribution, CAC and payback model) and `fee-verification-engine.md` (public payment fee verification engine on synthetic data) |
 | `docs/parked-ideas.md` | Ideas not built yet |
 | `.env.example` | Template for required environment variables |
