@@ -7,7 +7,7 @@ The web dashboard (`python -m dashboard`): results, your tracking, interviews an
 | File | Purpose |
 |---|---|
 | `__main__.py` | Entry point and environment settings |
-| `app.py` | FastAPI app and request guard |
+| `app.py` | FastAPI app, request guard and what goes to PostHog (an event per action, unhandled errors) |
 | `auth.py` | Password login |
 | `schedule.py` | `HUNT_SCHEDULE` parsing and scheduler |
 | `db.py` | SQLite schema and user migrations |
@@ -31,7 +31,7 @@ python -m dashboard --root ~/hunt-data   # data folder other than the current di
 
 Run it from the project directory, or point `--root` at the folder holding `profile.toml`, `companies.csv`, `out/` and the other data files (jobs then run `hunt.py` with that folder as working directory). By default it listens on `127.0.0.1` only and has no login, so every request must name a loopback host. Every change (status, notes, projects, starting a job) must carry a token from the page and come from the dashboard's own origin, so another website open in your browser cannot start a paid run. The origin is read from the `Origin` header, which browsers send with every such request; a request without it (a script) is refused, even with the token. If the dashboard restarts, open pages hold an old token: changes then show "This page is out of date… Reload it".
 
-With `DASHBOARD_PASSWORD` set (at least 12 characters), every page asks for that password first, and a session lasts 30 days on that browser; **Log out** ends it. Changing the password logs every browser out. After 10 wrong passwords in 15 minutes, logins are refused for everyone, you included, until the 15 minutes pass. Serving beyond this machine (`--host` other than loopback) refuses to start without a password. Besides loopback, the dashboard accepts the host names in `RAILWAY_PUBLIC_DOMAIN` and `DASHBOARD_URL`. The dashboard reads `DASHBOARD_PASSWORD`, `HUNT_SCHEDULE`, `DASHBOARD_URL`, `RAILWAY_PUBLIC_DOMAIN` and `PORT` from the shell environment only, never from `.env` (`export DASHBOARD_PASSWORD=…`, or `DASHBOARD_PASSWORD=… python -m dashboard`); the `hunt.py` jobs it starts load `.env` as usual.
+With `DASHBOARD_PASSWORD` set (at least 12 characters), every page asks for that password first, and a session lasts 30 days on that browser; **Log out** ends it. Changing the password logs every browser out. After 10 wrong passwords in 15 minutes, logins are refused for everyone, you included, until the 15 minutes pass. Serving beyond this machine (`--host` other than loopback) refuses to start without a password. Besides loopback, the dashboard accepts the host names in `RAILWAY_PUBLIC_DOMAIN` and `DASHBOARD_URL`. The dashboard reads `DASHBOARD_PASSWORD`, `HUNT_SCHEDULE`, `DASHBOARD_URL`, `RAILWAY_PUBLIC_DOMAIN`, `PORT`, `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` from the shell environment only, never from `.env` (`export DASHBOARD_PASSWORD=…`, or `DASHBOARD_PASSWORD=… python -m dashboard`); the `hunt.py` jobs it starts load `.env` as usual.
 
 Reading pages costs nothing. Only jobs you start on Runs, or with "Re-run" or "Run selected", and the commands in `HUNT_SCHEDULE` call Exa, Claude or Telegram. Jobs you start ask for confirmation first.
 
@@ -54,6 +54,25 @@ The former Inbox page and `/inbox` route are removed. Use Board for scored roles
 
 The dashboard copies the pipeline files into `hunt.db` (SQLite, git-ignored) and copies them again whenever one of them changes, so a finished run shows up on the next page load. A run directory that cannot be read (for example while a run is still writing it) is skipped with a warning banner and read again once it changes; the banner also reports a `watch_state.json`, `discovered.csv` or `companies.csv` that cannot be read, and the pages keep working without it (with `companies.csv` unreadable, Runs counts no companies, a full run cannot be started and **Add to companies.csv** is refused until the file is fixed; Leads still lists every company, none marked as queued). Companies are keyed by their domain as `run` spells it (`runs.normalize_domain`: lower-case, without `https://`, `www.` or a path), so results saved under an older spelling such as `www.Acme.com` and new ones under `acme.com` make one card, and a check-careers status or note saved under the older spelling follows it (a one-time migration of `hunt.db` on the first start). Runs saved before `_run.json` existed show no mode or cost. `hunt.db` also holds your statuses, notes, side projects, job history, answers to email suggestions and the applications you added from email, which exist nowhere else: back it up if they matter, and do not delete it. The database is in SQLite's WAL mode, so the newest changes sit in `hunt.db-wal` and `hunt.db-shm` next to it until a checkpoint: copy or back up `hunt.db` only while the dashboard is stopped, or the copy misses them. The copied pipeline data is rebuilt automatically when needed; your own data is never touched by that.
 
+## PostHog events
+
+Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's environment (see [PostHog](../clients/README.md#posthog) for what they are and everything else that is sent), each action of yours that succeeds is reported as one event. Events have no person (PostHog gets a new random id with each) and name nothing of yours: no company, posting, note, title or id, and nothing about the request.
+
+| Event | When | Properties |
+|---|---|---|
+| `pipeline_status_updated` | You set a status on a card (Board, a company's details, Pipeline). Saving notes sends nothing | `status` |
+| `leads_queued` | Leads are added to `companies.csv` | `lead_count` |
+| `email_update_decided` | An email update is confirmed, added to the pipeline or dismissed | |
+| `project_created`, `project_updated`, `project_deleted` | A side project is created, saved (moving it to another column included) or deleted | |
+| `project_suggestion_decided` | A suggested project is added to ideas or dismissed | `decision`: `accepted` or `dismissed` |
+| `interview_created`, `interview_updated` | An interview is created, or its details are saved | |
+| `interview_transcript_saved` | A transcript is uploaded or pasted | `source`: `file` or `pasted` |
+| `interview_speaker_selected` | You choose which speaker is you | |
+| `hunt_run_started` | A job starts | `kind` (as on the Runs page: `run`, `discover`, `watch`, `monitor`, `monitor_sync`, `mail`, `news`, `send`, `interview_prep`, `interview_review`) and `trigger`: `button` or `schedule` |
+| `hunt_run_cancelled` | You stop a running job | |
+
+An action that is refused (a 400, a 409) sends nothing, and neither do reading pages, signing in and out, or the preview of a job before you confirm it. An exception no page handled is reported by its type and stack with the route as it is declared (`/c/{domain}`) and its method, never with its message. The dashboard also writes one log record, `dashboard_started`. The job itself reports its own start, end and model calls as `hunt.py` does everywhere (see [PostHog](../clients/README.md#posthog)).
+
 ## Deploy to Railway
 
 Runs the dashboard on [Railway](https://railway.com), so you can open it from your phone and have it start `discover`, `run` (with its Telegram notification), `watch`, `monitor`, `mail` and `news` on a schedule. Railway builds the `Dockerfile`: the code lives in `/app`, and your data (the same files as in the project folder) on a volume mounted at `/data`. Railway bills the always-on service and the volume; scheduled commands cost the same Exa and Claude money as from the laptop.
@@ -74,6 +93,7 @@ Railway's own cron services cannot share a volume with the dashboard, so the das
    | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` | Only for the chat bot's Gmail access: as in your `.env` (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
    | `CHAT_BOT` | `1` keeps the Telegram chat bot (`hunt.py chat`) running alongside the dashboard (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). A news digest you ask it for uses `EXA_API_KEY` and the volume's `profile.toml` and `news_state.json`, and costs Exa and Claude money each time. |
    | `LOGFIRE_TOKEN` | Optional, with `CHAT_BOT=1`: traces of the bot's answers in Pydantic Logfire, without their text (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
+   | `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | Optional, both or neither: your PostHog project token and its ingestion host (`https://eu.i.posthog.com` or `https://us.i.posthog.com`). The dashboard then reports your actions and its errors, and the jobs and the chat bot it starts report their commands and model calls, none of it with text (see [PostHog events](#posthog-events)). |
    | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
 
 4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.

@@ -4,11 +4,14 @@ import time
 from datetime import datetime, timedelta
 
 import pytest
+import uvicorn
 
-from dashboard import db
+from dashboard import __main__ as entry
+from dashboard import db, jobs, projects, queries, schedule
 from dashboard.app import create_app
+from dashboard_data import INTERVIEW_TURNS, fit, mail_update, result, wispr, write_mail, write_run
 from dashboard_data import client as make_client
-from dashboard_data import fit, result, write_run
+from test_dashboard_jobs import STUB, finished, started_job_id
 
 
 def stamp(days_ago):
@@ -244,3 +247,136 @@ def test_runs_page_shows_the_chat_bot_it_keeps_running(tmp_path, monkeypatch):
         assert 'id="chat-log">chat stub chat\n' in partial.text
     assert not app.state.bot.status()["running"]  # stopped with the app
     assert (tmp_path / "jobs" / "chat.log").read_text() == "chat stub chat\n"
+
+
+# PostHog ----------------------------------------------------------------------------------------
+
+
+def own(event):
+    """An event's name and the properties the dashboard gave it (the SDK adds the $-ones)."""
+    return event["event"], {k: v for k, v in event["properties"].items() if not k.startswith("$") and k != "service"}
+
+
+def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothing_of_theirs(root, posthog_api,
+                                                                                         monkeypatch):
+    monkeypatch.delenv("STUB_SLEEP", raising=False)
+    monkeypatch.delenv("STUB_EXIT", raising=False)
+    (root / "stub_hunt.py").write_text(STUB)
+    (root / "companies.csv").write_text("# name,domain\nAcme,acme.com\n")
+    (root / "discovered.csv").write_text("discovered_at,name,domain,why,focus\n2026-01-01T08:00:00,Delta,delta.ai,PRIVATE-WHY,\n")
+    update = mail_update(1, "rejected", "PRIVATE-EMPLOYER")
+    write_mail(root, "20261015-090000", [update])
+    app = create_app(root, hunt_command=[sys.executable, str(root / "stub_hunt.py")],
+                     schedule_entries=schedule.parse("* * * * * monitor-sync"))
+    c = make_client(app)  # without the lifespan: the scheduler's own thread stays off, and this test ticks it
+    acme = {"kind": "company", "ref": "acme.com"}
+
+    # Each action once, next to what does not count: the notes, which save as they are typed, and every refusal.
+    assert c.post("/track", data=acme | {"status": "applied"}).status_code == 200
+    assert c.post("/track", data=acme | {"notes": "PRIVATE-NOTE"}).status_code == 200
+    assert c.post("/track", data=acme | {"status": "nonsense"}).status_code == 400
+    assert c.post("/leads/queue", data={"domains": ["delta.ai"]}).status_code == 204
+    assert c.post("/leads/queue", data={"domains": ["nope.com"]}).status_code == 400
+    assert c.post("/mail/decide", data={"update": update["id"], "action": "dismiss"}).status_code == 204
+    assert c.post("/mail/decide", data={"update": update["id"], "action": "dismiss"}).status_code == 409
+    assert c.post("/projects", data={"title": "PRIVATE-PROJECT"}).status_code == 204
+    assert c.post("/projects", data={"title": "  "}).status_code == 400
+    conn = db.connect(root)
+    (project,), (idea,) = projects.board(conn)["idea"], projects.suggestions(conn)
+    conn.close()
+    assert c.post(f"/projects/{project['id']}", data={"status": "active"}).status_code == 204
+    assert c.post(f"/projects/{project['id']}/delete").status_code == 204
+    assert c.post(f"/projects/{project['id']}/delete").status_code == 404
+    assert c.post(f"/projects/suggestions/{idea['key']}", data={"action": "dismiss"}).status_code == 204
+    interview = {"company": "PRIVATE-EMPLOYER", "role": "PRIVATE-ROLE", "stage": "hr", "language": "English"}
+    page = c.post("/interviews", data=interview).headers["HX-Redirect"]
+    assert c.post("/interviews", data=interview | {"company": ""}).status_code == 400
+    assert c.post(page, data=interview | {"role": "PRIVATE-NEW-ROLE"}).status_code == 204
+    assert c.post(page + "/transcript", data={"text": ""}).status_code == 400
+    assert c.post(page + "/transcript", files={"file": ("refined.ndjson", wispr(*INTERVIEW_TURNS).encode())}).status_code == 204
+    assert c.post(page + "/me", data={"me": "9"}).status_code == 400
+    assert c.post(page + "/me", data={"me": "2"}).status_code == 204
+    assert c.post("/runs/preview", data={"kind": "monitor"}).status_code == 200  # a preview starts nothing
+    finished(root, started_job_id(c.post("/runs", data={"kind": "monitor", "dry_run": "1"})))
+    app.state.scheduler.tick(datetime.now() + timedelta(minutes=1))
+    conn = db.connect(root)
+    finished(root, jobs.recent(conn, 1)[0]["id"])
+    conn.close()
+    monkeypatch.setenv("STUB_SLEEP", "30")
+    running = started_job_id(c.post("/runs", data={"kind": "watch", "dry_run": "1"}))
+    assert c.post("/runs", data={"kind": "watch"}).status_code == 409
+    assert c.post(f"/runs/jobs/{running}/cancel").status_code == 204
+    finished(root, running)
+    assert c.post(f"/runs/jobs/{running}/cancel").status_code == 409
+    assert c.get("/c/acme.com").status_code == 200  # looking at a page is not an event
+
+    events = posthog_api.events()
+    assert [own(event) for event in events] == [
+        ("pipeline_status_updated", {"status": "applied"}),
+        ("leads_queued", {"lead_count": 1}),
+        ("email_update_decided", {}),
+        ("project_created", {}),
+        ("project_updated", {}),
+        ("project_deleted", {}),
+        ("project_suggestion_decided", {"decision": "dismissed"}),
+        ("interview_created", {}),
+        ("interview_updated", {}),
+        ("interview_transcript_saved", {"source": "file"}),
+        ("interview_speaker_selected", {}),
+        ("hunt_run_started", {"kind": "monitor", "trigger": "button"}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "schedule"}),
+        ("hunt_run_started", {"kind": "watch", "trigger": "button"}),
+        ("hunt_run_cancelled", {}),
+    ]
+    assert len({event["distinct_id"] for event in events}) == len(events)  # no person to tie them to
+    told = json.dumps(events).lower()
+    for private in ("acme", "delta", "private", "127.0.0.1", "$ip", "$current_url", "$request_path"):
+        assert private not in told
+
+
+def test_an_exception_no_page_handles_reaches_posthog_by_type_stack_and_route_without_what_it_says(root, posthog_api,
+                                                                                                 monkeypatch):
+    def unwritable(conn, domain):  # what Python says about a file names the file, and the file names the interview
+        raise PermissionError(13, "Permission denied", "/data/interviews/20261020-acme-senior-analyst/transcript.json")
+
+    monkeypatch.setattr(queries, "company", unwritable)
+    c = make_client(create_app(root))
+
+    with pytest.raises(PermissionError):  # the test client raises what a browser gets a 500 for
+        c.get("/c/acme.com")
+    assert c.get("/interviews/no-such-interview").status_code == 404  # an answer, not an exception
+    assert c.get("/", headers={"Host": "evil.example"}).status_code == 400  # refused by the guard: nothing reported
+
+    (reported,) = posthog_api.events("$exception")
+    properties = reported["properties"]
+    assert own(reported)[1] == {"route": "/c/{domain}", "method": "GET"}
+    assert [(raised["type"], raised["value"]) for raised in properties["$exception_list"]] == [("PermissionError", "")]
+    frames = [frame for raised in properties["$exception_list"] for frame in raised["stacktrace"]["frames"]]
+    assert "unwritable" in {frame["function"] for frame in frames} and not any("abs_path" in frame for frame in frames)
+    for frame in frames:  # a frame quotes the source around its line: code, and here this test's own
+        for key in ("pre_context", "context_line", "post_context"):
+            frame.pop(key, None)
+    told = json.dumps(reported)
+    assert "acme" not in told and "/data" not in told and "Permission denied" not in told
+
+
+def test_the_dashboard_takes_posthog_from_its_environment_and_works_the_same_without_it(tmp_path, posthog_api,
+                                                                                       monkeypatch):
+    served = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.append(app))
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--root", str(tmp_path)])
+    monkeypatch.delenv("HUNT_SCHEDULE", raising=False)
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+
+    entry.main()  # POSTHOG_PROJECT_TOKEN and POSTHOG_HOST are set, as on Railway
+    with make_client(served[0]) as c:  # started and stopped, as uvicorn does
+        assert c.post("/projects", data={"title": "dbt package"}).status_code == 204
+    (event,) = posthog_api.events()
+    assert (event["event"], event["properties"]["service"]) == ("project_created", "dashboard")
+    assert posthog_api.records() == [{"name": "dashboard_started", "level": "INFO", "service": "dashboard"}]
+
+    monkeypatch.delenv("POSTHOG_HOST")
+    entry.main()
+    with make_client(served[1]) as c:
+        assert c.post("/projects", data={"title": "dbt tests"}).status_code == 204
+    assert len(posthog_api.events()) == 1 and len(posthog_api.records()) == 1

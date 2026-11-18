@@ -5,15 +5,17 @@ import pytest
 import requests
 import responses
 
-from clients import exa_client, jev
+from clients import exa_client, jev, posthog_client
 from exa_mock import ExaMock
 from jev_mock import JevMock
 from pipeline import research, scoring
+from posthog_mock import PostHogMock
 
 
 @pytest.fixture(autouse=True)
 def http():
-    """Intercepts every HTTP request made through `requests` (Exa SDK, Ashby, posting checks, Telegram, TypeSafe).
+    """Intercepts every HTTP request made through `requests` (Exa SDK, Ashby, posting checks, Telegram, TypeSafe,
+    PostHog).
 
     Nothing reaches the network. A request with no registered mock fails the test, even when the code
     under test swallows the resulting ConnectionError.
@@ -30,12 +32,13 @@ def http():
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch):
-    """Fake Exa key, no other credentials (a local .env must not leak in), no retry sleeps, fresh caches."""
+def _isolate(monkeypatch, http):
+    """Fake Exa key, no other credentials (a local .env must not leak in), no retry sleeps, fresh caches, PostHog
+    off. `http` is asked for so that it is still intercepting when this fixture ends."""
     monkeypatch.setenv("EXA_API_KEY", "test-exa-key")
     for var in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SCORING_MODEL", "DASHBOARD_URL",
                 "RAILWAY_PUBLIC_DOMAIN", "OUTLOOK_CLIENT_ID", "OUTLOOK_TENANT", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET",
-                "TYPESAFE_API_KEY", "JEV_MODEL", "CHAT_BOT", "LOGFIRE_TOKEN"):
+                "TYPESAFE_API_KEY", "JEV_MODEL", "CHAT_BOT", "LOGFIRE_TOKEN", "POSTHOG_PROJECT_TOKEN", "POSTHOG_HOST"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(exa_client, "BACKOFF_BASE_SECONDS", 0)
     monkeypatch.setattr(exa_client, "AGENT_POLL_SECONDS", 0)
@@ -44,6 +47,8 @@ def _isolate(monkeypatch):
     exa_client.reset_costs()
     jev.reset()
     research._ashby_board.cache_clear()
+    yield
+    posthog_client.shutdown()  # a test that turned PostHog on: what it queued is sent here, into the mock
 
 
 @pytest.fixture
@@ -55,6 +60,12 @@ def exa(http):
 def jev_api(http, monkeypatch):
     """Sets TYPESAFE_API_KEY and answers Jev requests: jev_api.on(lambda state, key, question: ...)."""
     return JevMock(http, monkeypatch)
+
+
+@pytest.fixture
+def posthog_api(http, monkeypatch):
+    """Turns PostHog on and collects what is sent to it: posthog_api.events(), posthog_api.records()."""
+    return PostHogMock(http, monkeypatch)
 
 
 @pytest.fixture

@@ -17,7 +17,7 @@ from exa_py import Exa
 import exa_py.api
 import requests
 
-from pipeline import ai_observability
+from clients import posthog_client
 
 load_dotenv()
 
@@ -191,7 +191,7 @@ def search_structured(
     Schema limits: max nesting depth 2, max 10 total properties. Do not add
     citation/confidence fields -- grounding is returned automatically.
     """
-    started_at = time.monotonic()
+    started = time.monotonic()
     response = _call(
         f"search_structured:{type}",
         "search",
@@ -202,15 +202,8 @@ def search_structured(
         contents=_contents_or_default(contents, max_age_hours),
         **kwargs,
     )
-    output = getattr(response, "output", None)
-    if output is not None:
-        ai_observability.capture_manual_generation(
-            "exa",
-            f"search-{type}",
-            {"query": query, "system_prompt": system_prompt, "output_schema": output_schema},
-            getattr(output, "content", None),
-            latency=time.monotonic() - started_at,
-        )
+    if getattr(response, "output", None) is not None:  # an answer Exa's model wrote: a generation, without its text
+        posthog_client.generation("exa", f"search-{type}", latency=time.monotonic() - started)
     return response
 
 
@@ -296,7 +289,7 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
         raise ValueError(f"effort must be one of {', '.join(AGENT_EFFORTS)}, not {effort!r}")
     if _stop.is_set():
         raise RuntimeError("Exa agent run not started: the program is stopping")
-    started_at = time.monotonic()
+    started = time.monotonic()
     runs = get_client().agent.runs
     label = f"agent:{effort}"
     try:
@@ -360,21 +353,8 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
     output = run.output
     if output is None or not isinstance(output.structured, dict):
         raise RuntimeError(f"Exa agent returned no structured output for query: {query[:80]}")
-    grounding = _compact_grounding(output.grounding, prefix="structured.")
-    ai_observability.capture_manual_generation(
-        "exa",
-        f"agent-{effort}",
-        {
-            "query": query,
-            "system_prompt": system_prompt,
-            "output_schema": output_schema,
-            "data_sources": list(data_sources),
-            "exclude": exclude,
-        },
-        {"structured": output.structured, "grounding": grounding},
-        latency=time.monotonic() - started_at,
-    )
-    return output.structured, grounding
+    posthog_client.generation("exa", f"agent-{effort}", latency=time.monotonic() - started)
+    return output.structured, _compact_grounding(output.grounding, prefix="structured.")
 
 
 # Monitors --------------------------------------------------------------------------------

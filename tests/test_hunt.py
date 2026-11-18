@@ -522,6 +522,51 @@ def test_chat_and_gmail_login_run_without_the_lock(workdir, monkeypatch):
         hunt.main()
 
 
+def test_posthog_gets_a_command_and_its_model_calls_and_nothing_they_read_or_wrote(exa, http, workdir, monkeypatch, claude,
+                                                                                  jev_api, posthog_api, capsys):
+    """With POSTHOG_PROJECT_TOKEN and POSTHOG_HOST set, a command says that it ran and how it ended, and each model
+    call says who answered, with how many tokens and how fast. Companies, postings and the profile stay here."""
+    acme_role = research_exa(exa, http)
+    jev_api.on(lambda state, key, question: [0, 0.05, 0.9, 0.05] if key == "seniority" else 0.5)
+    fake = claude(score=82, verdict="apply", best_role_title=acme_role["title"], best_role_url=acme_role["url"])
+    monkeypatch.setattr(scoring, "_client", lambda: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setattr("sys.argv", ["hunt.py", "run", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        hunt.main()
+
+    assert exit_info.value.code == 1 and "[82] APPLY: Acme" in capsys.readouterr().out  # Beta's research failed
+    started, ended = posthog_api.records()
+    assert started == {"name": "hunt_command_started", "level": "INFO", "service": "hunt", "command": "run"}
+    assert ended.pop("seconds") >= 0
+    assert ended == {"name": "hunt_command_finished", "level": "ERROR", "service": "hunt", "command": "run", "exit_code": 1}
+    events = posthog_api.events()
+    assert {event["event"] for event in events} == {"$ai_generation"}
+    calls = {e["properties"]["$ai_provider"]: e["properties"] for e in events}
+    assert {provider: p["$ai_model"] for provider, p in calls.items()} == {
+        "exa": "search-auto", "typesafe": jev.DEFAULT_MODEL, "anthropic": scoring.DEFAULT_MODEL}
+    assert (calls["anthropic"]["$ai_input_tokens"], calls["anthropic"]["$ai_output_tokens"]) == (1200, 300)
+    assert calls["typesafe"]["$ai_input_tokens"] == 500 and "$ai_input_tokens" not in calls["exa"]
+    assert len({p["$ai_session_id"] for p in calls.values()}) == 1 and all(p["service"] == "hunt" for p in calls.values())
+    told = json.dumps([events, posthog_api.records()])
+    for private in ("Acme", "acme", "Beta", "Analytics Engineer", "dbt", "Snowflake", "Belgrade", "remote"):
+        assert private not in told
+
+
+def test_posthog_refusing_everything_changes_nothing_about_a_command(exa, http, workdir, monkeypatch, posthog_api, capsys):
+    research_exa(exa, http)
+    posthog_api.status = 400
+    monkeypatch.setattr("sys.argv", ["hunt.py", "run", "--research-only"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        hunt.main()
+
+    assert exit_info.value.code == 1  # as without PostHog: Acme researched and saved, Beta failed
+    assert "Acme (acme.com) verified=True" in capsys.readouterr().out
+    assert saved_results(workdir)["_run.json"]["companies"] == 2
+
+
 def chat_args(**overrides):
     return argparse.Namespace(**{"profile": "profile.toml", "outlook_token": "outlook_token.json",
                                  "gmail_token": "gmail_token.json", "news_state": "news_state.json", **overrides})

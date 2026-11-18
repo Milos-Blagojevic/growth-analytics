@@ -590,6 +590,42 @@ def test_neither_the_log_nor_the_traces_carry_the_text_of_a_news_digest(mailboxe
     assert "news digest: 1 topic(s), 2 article(s), 1 pick(s), 1200 in / 300 out tokens" in caplog.text
 
 
+def test_posthog_gets_an_answer_as_one_trace_and_a_conversation_as_one_session_without_any_text(
+        mailboxes, newsroom, jev_api, posthog_api, monkeypatch):
+    """PostHog gets no more than the Logfire traces hold: the model calls of an answer as one generation, a span per
+    tool call, and the Jev and Claude calls a news digest made, all in the answer's trace."""
+    monkeypatch.setattr(outlook, "search", lambda *a, **k: [message(1, subject="PRIVATE-SUBJECT", from_name="PRIVATE-SENDER")])
+    jev_api.on(lambda state, key, question: 0.9)
+    model, _ = scripted([("list_emails", {"account": "outlook", "query": "PRIVATE-QUERY"}),
+                         ("news_digest", {"topics": ["PRIVATE-TOPIC"]})], "PRIVATE-ANSWER", "PRIVATE-SECOND", "PRIVATE-THIRD")
+    conversation = chat.Conversation(chat.build_agent(model), mailboxes)
+
+    assert chat.handle(conversation, "PRIVATE-QUESTION") == "PRIVATE-ANSWER"
+    assert chat.handle(conversation, "and?") == "PRIVATE-SECOND"
+    chat.handle(conversation, "/new")
+    assert chat.handle(conversation, "again") == "PRIVATE-THIRD"
+
+    events = posthog_api.events()
+    traces = {}
+    for event in events:
+        properties = event["properties"]
+        traces.setdefault((properties["$ai_session_id"], properties["$ai_trace_id"]), []).append(
+            (event["event"], properties.get("$ai_provider") or properties["$ai_span_name"]))
+    (first_session, _), (second_session, _), (third_session, _) = traces  # an answer is a trace
+    assert first_session == second_session != third_session  # a conversation is a session: /new starts another
+    first, second, third = traces.values()
+    assert sorted(first) == [("$ai_generation", "anthropic"),  # the digest's picks
+                             ("$ai_generation", "function"),  # the answer's own model calls, here the scripted model
+                             ("$ai_generation", "typesafe"), ("$ai_generation", "typesafe"),  # the digest's two articles
+                             ("$ai_span", "list_emails"), ("$ai_span", "news_digest")]
+    assert second == third == [("$ai_generation", "function")]
+    answered = next(e["properties"] for e in events if e["properties"].get("$ai_provider") == "function")
+    assert answered["$ai_input_tokens"] > 0 and answered["$ai_output_tokens"] > 0 and answered["$ai_latency"] >= 0
+    told = json.dumps(events)
+    for text in ("PRIVATE", "Analytics hiring rebounds", "Already sent", "Demand for your roles", HIRING, "ana@acme.com"):
+        assert text not in told
+
+
 def test_a_typesafe_outage_during_one_digest_does_not_end_the_screen_for_later_ones(mailboxes, newsroom, jev_api):
     outage = [True]
 

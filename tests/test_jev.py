@@ -38,6 +38,24 @@ def test_a_rejected_request_fails_at_once(http):
     assert jev.usage_summary()["requests"] == 0
 
 
+def test_posthog_gets_every_request_typesafe_answered_and_billed_and_none_of_what_was_asked(http, posthog_api):
+    http.post(jev.API_URL, json=OK)
+    http.post(jev.API_URL, json=OK | {"answers": {"relevant": {"type": "noul", "noul": "PRIVATE-NONSENSE"}}})
+    http.post(jev.API_URL, status=401, json={"detail": "invalid key"})
+
+    jev.ask("PRIVATE-STATE", {"relevant": jev.noul("PRIVATE-QUESTION")})
+    for refused in ("no usable answer", "HTTP 401"):
+        with pytest.raises(jev.JevError, match=refused):
+            jev.ask("PRIVATE-STATE", QUESTIONS)
+
+    usable, unusable = (event["properties"] for event in posthog_api.events())  # the two that count in the tally
+    assert jev.usage_summary()["requests"] == 2
+    for generation in (usable, unusable):
+        assert (generation["$ai_provider"], generation["$ai_model"]) == ("typesafe", jev.DEFAULT_MODEL)
+        assert generation["$ai_input_tokens"] == 1_000_000 and generation["$ai_latency"] >= 0
+    assert "PRIVATE" not in json.dumps(posthog_api.events())
+
+
 @pytest.mark.parametrize("failure", [{"status": 503}, {"body": requests.ConnectionError("refused")},
                                      {"body": requests.ReadTimeout("slow")}], ids=["503", "connection", "timeout"])
 def test_after_an_outage_later_requests_skip_typesafe(http, failure):

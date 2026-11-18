@@ -15,8 +15,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from clients import exa_client, jev
-from pipeline import ai_observability, scoring
+from clients import exa_client, jev, posthog_client
+from pipeline import scoring
 
 logger = logging.getLogger("news")
 
@@ -142,7 +142,7 @@ def digest(articles, profile, topics, *, client=None, model=None):
             for n, a in enumerate(articles, 1)
         )
     )
-    response = ai_observability.parse_anthropic(
+    response = posthog_client.parse_anthropic(
         client,
         model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
         max_tokens=4000,

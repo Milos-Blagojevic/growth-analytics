@@ -13,9 +13,9 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel
 
-from clients import jev
+from clients import jev, posthog_client
 from inbox import mail
-from pipeline import ai_observability, scoring
+from pipeline import scoring
 
 logger = logging.getLogger("mail_labels")
 
@@ -97,20 +97,20 @@ def label(messages, *, client=None, model=None):
     answer about without a usable label (an answer that does not parse or validate, or an email missing from it) are
     billed, so they are retried at most mail.MAX_TRIES times."""
     client = client or scoring._client()
-    trace_id = ai_observability.new_trace_id()
+    trace_id = posthog_client.new_trace_id()  # PostHog: the batches of one check are one trace
     events, usage, problems, unanswered = [], {"input_tokens": 0, "output_tokens": 0}, [], []
     for start in range(0, len(messages), BATCH):
         batch = messages[start:start + BATCH]
         where = f"emails {start + 1}-{start + len(batch)} of {len(messages)}"
         try:
-            response = ai_observability.parse_anthropic(
+            response = posthog_client.parse_anthropic(
                 client,
                 model=model or os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
                 max_tokens=4000,
                 system=PROMPT,
                 messages=[{"role": "user", "content": "\n\n".join(_render(n, m) for n, m in enumerate(batch, 1))}],
                 output_format=Labels,
-                posthog_trace_id=trace_id,
+                trace_id=trace_id,
             )
         except anthropic.APIError as exc:  # no answer (connection, timeout, 4xx/5xx/429): the batch is asked again
             logger.warning("Claude failed on %s: %s", where, exc)

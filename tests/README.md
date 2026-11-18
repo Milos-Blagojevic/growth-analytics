@@ -9,6 +9,7 @@ The test suite, flat in this folder. It needs no keys and makes no network calls
 | `test_*.py` | Tests, one file per module or feature |
 | `exa_mock.py` | The Exa API mock |
 | `jev_mock.py` | The TypeSafe (Jev) API mock |
+| `posthog_mock.py` | The PostHog ingestion mock: events and log records |
 | `dashboard_data.py` | Writes pipeline files to a temporary directory for dashboard tests |
 | `prospect_data.py` | Sample `prospects.toml`, Exa replies, research and saved runs for the prospects tests |
 
@@ -20,6 +21,8 @@ python -m pytest
 ```
 
 Tests need no keys and make no network calls. Every HTTP request made through `requests` is intercepted with [`responses`](https://github.com/getsentry/responses); a request without a registered mock fails the test. Exa is mocked at the HTTP level with payloads in Exa's wire format (`tests/exa_mock.py`, which also holds an in-memory fake of Exa's Monitors API), so the real `exa-py` SDK builds the requests and parses the responses. Ashby, posting pages, Telegram, Microsoft Graph and the Gmail API are mocked the same way, and TypeSafe in its wire format (`tests/jev_mock.py`); Claude is replaced by a fake client, and the chat bot's model by a scripted Pydantic AI `FunctionModel`. Dashboard tests write pipeline files to a temporary directory (`tests/dashboard_data.py`) and call the app in-process with FastAPI's `TestClient`; job and chat-bot tests replace `hunt.py` with a small stub script, so no paid command runs.
+
+PostHog is off in every test unless the test asks for the `posthog_api` fixture, which turns it on against `tests/posthog_mock.py` (the SDK's `/batch/` endpoint and the OTLP logs endpoint in their wire formats) and returns what was sent: `posthog_api.events()` and `posthog_api.records()`. A test of something that reports to PostHog checks there that none of the text it handled was sent.
 
 CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
 

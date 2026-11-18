@@ -8,8 +8,8 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel
 
-from clients import jev
-from pipeline import ai_observability, research as postings  # "research" is one company's result throughout this module
+from clients import jev, posthog_client
+from pipeline import research as postings  # "research" is one company's result throughout this module
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 
@@ -221,7 +221,7 @@ def score_company(research, profile, *, screen=None, model=None, client=None):
         + "\n\nCompany research (with source grounding):\n"
         + json.dumps(evidence, indent=2)
     )
-    response = ai_observability.parse_anthropic(
+    response = posthog_client.parse_anthropic(
         client,
         model=model or os.environ.get("SCORING_MODEL", DEFAULT_MODEL),
         max_tokens=8000,
