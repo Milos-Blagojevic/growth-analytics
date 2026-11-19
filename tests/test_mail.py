@@ -393,6 +393,13 @@ def test_local_filter_reads_the_same_text_the_models_get():
     assert "unfortunately" in mail.excerpt(body).lower()
 
 
+@pytest.mark.parametrize("subject", ["Application received", "Application submitted: Data Analyst"])
+def test_local_filter_keeps_a_confirmation_sent_from_the_company_itself(subject):
+    # Not an ATS sender, and no other application wording: only the confirmation phrase lets it reach the models.
+    message = {"from_address": "careers@delta.io", "subject": subject, "body": "Thanks, we will be in touch."}
+    assert mail.likely(message) is True
+
+
 def test_mail_labels_survive_bad_numbers_from_claude(fake_claude):
     messages = [{"id": f"<{n}>", "received_at": "2026-10-18T09:00:00", "from_name": "", "from_address": "a@b.io",
                  "subject": "s", "body": "b", "web_link": ""} for n in range(2)]

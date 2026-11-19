@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7  # 7: mail_updates can hold "applied"; a rollback to 6 rebuilds them without those rows
 
 DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
 
