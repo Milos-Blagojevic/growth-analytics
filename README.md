@@ -58,7 +58,7 @@ python -m clients.exa_client
 | `python hunt.py monitor-sync` | Creates, updates and deletes the Exa monitors to match `monitors.csv` | None by itself; Exa then bills each monitor's runs ($0.002 a run, six a day) | No | [Monitors](pipeline/README.md#monitors) |
 | `python hunt.py monitor` | Suitable new postings the monitors found since the last check | Jev, Claude (Exa only for an unclear link or a missing posting text) | Yes, unless `--dry-run` | [Monitors](pipeline/README.md#monitors) |
 | `python hunt.py outlook-login` | Signs in to Outlook once | No | No | [Email updates](inbox/README.md#email-updates) |
-| `python hunt.py mail` | Rejections and interview invites in new email | Jev, Claude | Yes, unless `--dry-run` | [Email updates](inbox/README.md#email-updates) |
+| `python hunt.py mail` | Application confirmations, rejections and interview invites in new email | Jev, Claude | Yes, unless `--dry-run` | [Email updates](inbox/README.md#email-updates) |
 | `python hunt.py news` | News digest on your `[news].topics` | Exa, Jev, Claude | Yes, unless `--dry-run` | [News digest](pipeline/README.md#news-digest) |
 | `python hunt.py interview-prep` | Prep brief for one interview | Claude (and Exa for the posting) | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
@@ -104,7 +104,7 @@ python -m clients.exa_client
 | `hunt.db` | Dashboard database: copies of the files above plus your statuses, notes, side projects, job history, answers to email suggestions and the applications you added from email (git-ignored; back it up with the dashboard stopped, since its `hunt.db-wal` and `hunt.db-shm` sidecars hold the newest changes until a checkpoint) |
 | `outlook_token.json` | Your Outlook sign-in, from `outlook-login` (git-ignored; gives read access to your mail and lets drafts be created) |
 | `gmail_token.json` | Your Gmail sign-in, from `gmail-login` (git-ignored; same access) |
-| `mail/` | Rejections and interview invites `mail` found, one file per check that found some (git-ignored) |
+| `mail/` | Application confirmations, rejections and interview invites `mail` found, one file per check that found some (git-ignored) |
 | `mail_state.json` | When mail was last checked and the emails already labelled (git-ignored) |
 | `news_state.json` | Articles the news digest has already considered; the empty `news_state.json.lock` next to it is what its two writers, `news` and the chat bot, lock while they update it (git-ignored) |
 | `jobs/` | Logs and company lists of jobs started from the dashboard (git-ignored) |

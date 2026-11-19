@@ -25,7 +25,7 @@ python hunt.py send                            # send the latest saved run's not
 python hunt.py monitor-sync                    # keep one Exa monitor per company in monitors.csv (Exa runs them every 4 hours)
 python hunt.py monitor                         # send the suitable new postings the monitors found to Telegram (Claude)
 python hunt.py outlook-login                   # sign in to Outlook once (read, create drafts), for `mail` and `chat`
-python hunt.py mail                            # rejections and interview invites in new email: Telegram + dashboard suggestions (Claude)
+python hunt.py mail                            # application confirmations, rejections and interview invites in new email: Telegram + dashboard suggestions (Claude)
 python hunt.py news                            # news digest on your [news].topics to Telegram (Exa + Claude)
 python hunt.py interview-prep interviews/<id>  # prep brief for one interview (Claude; see interview/README.md)
 python hunt.py interview-review interviews/<id> # review one interview's transcript (Claude; see interview/README.md)

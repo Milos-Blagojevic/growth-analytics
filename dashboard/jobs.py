@@ -139,8 +139,8 @@ def build(conn, root, form):
                     "like an application email to Jev (TypeSafe, when TYPESAFE_API_KEY is set) and, unless Jev rules "
                     "it out, to Claude."]
         if not dry:
-            warnings.append("Sends rejections and interview invites to Telegram and records the checked mail in "
-                            f"{mail.STATE}.")
+            warnings.append("Sends application confirmations, rejections and interview invites to Telegram and records "
+                            f"the checked mail in {mail.STATE}.")
         return Spec("mail", ["mail"] + (["--dry-run"] if dry else []), "Check email" + (" (dry run)" if dry else ""),
                     {"kind": kind, "dry_run": "1" if dry else ""}, estimate=[MAIL_ESTIMATE], warnings=warnings,
                     options={"dry_run": dry})

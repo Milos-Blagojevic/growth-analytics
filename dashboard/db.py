@@ -186,7 +186,7 @@ CREATE TABLE mail_updates (
     from_address TEXT NOT NULL,
     subject TEXT NOT NULL,
     web_link TEXT,
-    outcome TEXT NOT NULL,        -- mail.SUGGESTED_STATUS keys: rejected | interview
+    outcome TEXT NOT NULL,        -- mail.SUGGESTED_STATUS keys: applied | rejected | interview
     company TEXT NOT NULL,        -- as the email names it; "" if it does not
     role TEXT NOT NULL,
     summary TEXT NOT NULL

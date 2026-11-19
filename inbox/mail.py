@@ -3,9 +3,9 @@
 Shared by hunt.py (the `mail` command) and the dashboard (which suggests status changes from the saved updates);
 no paid clients here. The labelling itself is in mail_labels.py.
 
-mail/<%Y%m%d-%H%M%S>.json holds the rejections and interview invites one check found (only checks that found
-some write a file). STATE (mail_state.json) holds when mail was last checked and the emails already labelled or
-screened out by Jev.
+mail/<%Y%m%d-%H%M%S>.json holds the application confirmations, rejections and interview invites one check found
+(only checks that found some write a file). STATE (mail_state.json) holds when mail was last checked and the emails
+already labelled or screened out by Jev.
 """
 
 import json
@@ -14,9 +14,10 @@ from pathlib import Path
 
 DIR = "mail"
 STATE = "mail_state.json"
-OUTCOMES = ("rejected", "interview", "other")
-SUGGESTED_STATUS = {"rejected": "rejected", "interview": "interviewing"}  # outcomes that become a dashboard suggestion
-OUTCOME_LABELS = {"rejected": "Rejected", "interview": "Interview invite"}
+OUTCOMES = ("applied", "rejected", "interview", "other")
+# Outcomes that become a dashboard suggestion, and the status each suggests.
+SUGGESTED_STATUS = {"applied": "applied", "rejected": "rejected", "interview": "interviewing"}
+OUTCOME_LABELS = {"applied": "Application received", "rejected": "Rejected", "interview": "Interview invite"}
 LOOKBACK_DAYS = 14  # the first check reads this far back
 OVERLAP = timedelta(hours=1)  # re-read the hour before the last check, for mail that arrives late
 SEEN_DAYS = 30  # how long labelled and screened-out emails are remembered (they only need to cover OVERLAP)
@@ -31,9 +32,10 @@ ATS_DOMAINS = (
 )
 # Phrases (case-insensitive, in the subject or the start of the text) of emails about an application.
 KEYWORDS = (
-    "your application", "application for", "application to", "applying", "applied for", "candidacy",
-    "interview", "not to move forward", "not moving forward", "move forward with other", "other candidates",
-    "decided to pursue", "regret to inform", "unfortunately", "next steps", "hiring team", "recruiter",
+    "your application", "application for", "application to", "application received", "application submitted",
+    "applying", "applied for", "candidacy", "interview", "not to move forward", "not moving forward",
+    "move forward with other", "other candidates", "decided to pursue", "regret to inform", "unfortunately",
+    "next steps", "hiring team", "recruiter",
 )
 # Outlook's own daily agenda ("Today: Interview with Rho" from no-reply@microsoft.com) repeats interviews already on
 # the calendar, so it is skipped here. Only that sender with that subject: other mail from the address still counts,
