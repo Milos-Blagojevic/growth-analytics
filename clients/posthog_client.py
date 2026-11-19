@@ -11,10 +11,10 @@ PostHog is a third party, so what goes to it is limited here, by what these func
 as the owner's (`OWNER`: one fixed id that names no one, so PostHog can join the owner's events in funnels and
 retention) without a person profile (`_before_send`): no identify, no person or group properties.
 
-- `capture`: something the owner did on the dashboard, by name, with a few properties from fixed sets (a status, a
-  job kind, a count).
+- `capture`: something the owner did on the dashboard, by name, with a few properties that are values from fixed sets
+  (a status, a job kind, a run mode), booleans or counts.
 - `pageview`: a page of the dashboard the owner opened, by its route as it is declared (`/c/{domain}`), never the
-  address asked for or its query.
+  address asked for or its query, and the dashboard page it was opened from, by its declared route too.
 - `generation`, `parse_anthropic`, `agent_turn`, `instrument_tool`: a model call or a tool call as provider, model,
   token counts, seconds, trace and session. Never a prompt, an answer, a tool's arguments or what it returned: those
   hold the CV, emails, interview transcripts and pricing.
@@ -161,7 +161,8 @@ atexit.register(shutdown)
 # Product events and errors (the dashboard) ------------------------------------------------------------------
 
 def capture(event, properties=None):
-    """One thing the owner did, by name (`object_verb`: project_created), with properties from fixed sets only."""
+    """One thing the owner did, by name (`object_verb`: project_created), with properties that are values from fixed
+    sets, booleans or counts only."""
     if _client is None:
         return
     try:
@@ -170,10 +171,14 @@ def capture(event, properties=None):
         logger.warning("PostHog capture of %s failed", event, exc_info=True)
 
 
-def pageview(route):
+def pageview(route, previous=None):
     """A page of the dashboard the owner opened ($pageview), by its route as it is declared (`/c/{domain}`): the
-    address asked for names a company or an interview, and its query holds what was searched."""
-    capture("$pageview", {"$current_url": route, "$pathname": route})
+    address asked for names a company or an interview, and its query holds what was searched. `previous` is the page
+    of the dashboard it was opened from, by its declared route too (`previous_route`), when it was opened from one."""
+    properties = {"$current_url": route, "$pathname": route}
+    if previous:
+        properties["previous_route"] = previous
+    capture("$pageview", properties)
 
 
 def capture_exception(exc, properties=None):

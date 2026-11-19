@@ -68,6 +68,9 @@ class Spec:
     companies: list = None  # (name, domain) subset written to a CSV for --companies; None = companies.csv
     estimate: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    # How it was started, for PostHog (app.py sends it with hunt_run_started): values from fixed sets, booleans and
+    # counts. Never a field's text: a focus is reported as given or not, and no company, run or interview is named.
+    options: dict = field(default_factory=dict)
 
 
 def _now():
@@ -119,13 +122,14 @@ def build(conn, root, form):
         args = ["discover", "--limit", str(limit)] + ([focus] if focus else [])  # options first: focus is positional
         label = f"Discover{f' “{focus}”' if focus else ''} (limit {limit})"
         return Spec("discover", args, label, {"kind": kind, "focus": focus, "limit": str(limit)},
-                    estimate=[DISCOVER_ESTIMATE], warnings=["Appends new companies to discovered.csv."])
+                    estimate=[DISCOVER_ESTIMATE], warnings=["Appends new companies to discovered.csv."],
+                    options={"has_focus": bool(focus), "limit": limit})
     if kind == "watch":
         dry = form.get("dry_run") == "1"
         warnings = [] if dry else ["Sends new postings to Telegram and records them in watch_state.json."]
         return Spec("watch", ["watch"] + (["--dry-run"] if dry else []), "Watch list" + (" (dry run)" if dry else ""),
                     {"kind": kind, "dry_run": "1" if dry else ""}, estimate=["Free: Ashby's public API only."],
-                    warnings=warnings)
+                    warnings=warnings, options={"dry_run": dry})
     if kind == "mail":
         if not (Path(root) / outlook.TOKEN_FILE).exists():
             raise ValueError("Sign in to Outlook first: run `python hunt.py outlook-login` in the data folder "
@@ -138,19 +142,21 @@ def build(conn, root, form):
             warnings.append("Sends rejections and interview invites to Telegram and records the checked mail in "
                             f"{mail.STATE}.")
         return Spec("mail", ["mail"] + (["--dry-run"] if dry else []), "Check email" + (" (dry run)" if dry else ""),
-                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=[MAIL_ESTIMATE], warnings=warnings)
+                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=[MAIL_ESTIMATE], warnings=warnings,
+                    options={"dry_run": dry})
     if kind == "news":
         dry = form.get("dry_run") == "1"
         warnings = [] if dry else ["Sends the digest to Telegram and records the articles in news_state.json."]
         return Spec("news", ["news"] + (["--dry-run"] if dry else []), "News digest" + (" (dry run)" if dry else ""),
-                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=NEWS_ESTIMATE, warnings=warnings)
+                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=NEWS_ESTIMATE, warnings=warnings,
+                    options={"dry_run": dry})
     if kind == "monitor":
         dry = form.get("dry_run") == "1"
         warnings = [] if dry else ["Sends the suitable new postings to Telegram and records what was judged in "
                                    "monitor_state.json."]
         return Spec("monitor", ["monitor"] + (["--dry-run"] if dry else []),
                     "Check monitors" + (" (dry run)" if dry else ""), {"kind": kind, "dry_run": "1" if dry else ""},
-                    estimate=MONITOR_ESTIMATE, warnings=warnings)
+                    estimate=MONITOR_ESTIMATE, warnings=warnings, options={"dry_run": dry})
     if kind == "monitor_sync":
         return Spec("monitor_sync", ["monitor-sync"], "Sync monitors", {"kind": kind}, estimate=MONITOR_SYNC_ESTIMATE,
                     warnings=["Creates, updates and deletes monitors on your Exa account to match [monitor].companies "
@@ -243,7 +249,7 @@ def _build_run(conn, root, form):
     fields = {"kind": "run", "mode": mode, "fiber": "1" if fiber else "",
               "domains": [d for _, d in companies] if companies else []}
     return Spec("run", ["run", *flags], f"{name} · {target}", fields, companies=companies, estimate=estimate,
-                warnings=warnings)
+                warnings=warnings, options={"mode": mode, "fiber": fiber})
 
 
 class Runner:

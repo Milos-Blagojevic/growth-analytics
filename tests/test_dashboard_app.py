@@ -12,7 +12,7 @@ from clients import posthog_client
 from dashboard import __main__ as entry
 from dashboard import db, jobs, projects, queries, schedule
 from dashboard.app import create_app
-from dashboard_data import INTERVIEW_TURNS, fit, mail_update, result, wispr, write_mail, write_run
+from dashboard_data import BASE_URL, INTERVIEW_TURNS, fit, mail_update, result, wispr, write_mail, write_run
 from dashboard_data import client as make_client
 from test_dashboard_jobs import STUB, finished, started_job_id
 
@@ -304,15 +304,24 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     assert c.post(page + "/transcript", files={"file": ("refined.ndjson", wispr(*INTERVIEW_TURNS).encode())}).status_code == 204
     assert c.post(page + "/me", data={"me": "9"}).status_code == 400
     assert c.post(page + "/me", data={"me": "2"}).status_code == 204
-    assert c.post("/runs/preview", data={"kind": "monitor"}).status_code == 200  # a preview starts nothing
-    finished(root, started_job_id(c.post("/runs", data={"kind": "monitor", "dry_run": "1"})))
+    assert c.post("/runs/preview", data={"kind": "discover", "focus": "PRIVATE-FOCUS"}).status_code == 200  # starts nothing
+    # A job says how it was started: a run its mode and whether it asks Fiber, a discover whether it has a focus (never
+    # the focus) and its limit, a check whether it is a dry run.
+    for started in ({"kind": "run", "mode": "deliver", "fiber": "1"},
+                    {"kind": "run", "mode": "research_only", "domains": ["delta.ai"]},
+                    {"kind": "run"},
+                    {"kind": "discover", "focus": "PRIVATE-FOCUS", "limit": "7"},
+                    {"kind": "discover"},
+                    {"kind": "monitor", "dry_run": "1"}):
+        finished(root, started_job_id(c.post("/runs", data=started)))
+    assert c.post("/runs", data={"kind": "discover", "focus": "PRIVATE-FOCUS", "limit": "500"}).status_code == 400
     app.state.scheduler.tick(datetime.now() + timedelta(minutes=1))
     conn = db.connect(root)
     finished(root, jobs.recent(conn, 1)[0]["id"])
     conn.close()
     monkeypatch.setenv("STUB_SLEEP", "30")
-    running = started_job_id(c.post("/runs", data={"kind": "watch", "dry_run": "1"}))
-    assert c.post("/runs", data={"kind": "watch"}).status_code == 409
+    running = started_job_id(c.post("/runs", data={"kind": "watch"}))
+    assert c.post("/runs", data={"kind": "watch", "dry_run": "1"}).status_code == 409
     assert c.post(f"/runs/jobs/{running}/cancel").status_code == 204
     finished(root, running)
     assert c.post(f"/runs/jobs/{running}/cancel").status_code == 409
@@ -332,9 +341,14 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("interview_transcript_saved", {"source": "pasted"}),
         ("interview_transcript_saved", {"source": "file"}),
         ("interview_speaker_selected", {}),
-        ("hunt_run_started", {"kind": "monitor", "trigger": "button"}),
+        ("hunt_run_started", {"kind": "run", "trigger": "button", "mode": "deliver", "fiber": True}),
+        ("hunt_run_started", {"kind": "run", "trigger": "button", "mode": "research_only", "fiber": False}),
+        ("hunt_run_started", {"kind": "run", "trigger": "button", "mode": "dry_run", "fiber": False}),
+        ("hunt_run_started", {"kind": "discover", "trigger": "button", "has_focus": True, "limit": 7}),
+        ("hunt_run_started", {"kind": "discover", "trigger": "button", "has_focus": False, "limit": 15}),
+        ("hunt_run_started", {"kind": "monitor", "trigger": "button", "dry_run": True}),
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "schedule"}),
-        ("hunt_run_started", {"kind": "watch", "trigger": "button"}),
+        ("hunt_run_started", {"kind": "watch", "trigger": "button", "dry_run": False}),
         ("hunt_run_cancelled", {}),
     ]
     assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}  # one owner, no person profile
@@ -349,14 +363,23 @@ def test_each_page_the_owner_opens_reaches_posthog_as_a_pageview_of_its_route_an
     c = make_client(create_app(root, password="correct horse battery"))
     htmx = {"HX-Request": "true"}
 
+    def clicked_on(address, **more):
+        """What a browser sends with a click on a link of the page at `address`: that page's address, as Referer."""
+        return {"Referer": BASE_URL + address, **more}
+
     assert c.get("/?q=PRIVATE-SEARCH").status_code == 200  # not logged in: the guard sends the browser to /login
     assert c.post("/login", data={"password": "correct horse battery"}).status_code == 204
-    assert c.get("/?q=PRIVATE-SEARCH&verdict=stretch").status_code == 200
+    assert c.get("/?q=PRIVATE-SEARCH&verdict=stretch").status_code == 200  # a typed address: opened from no page
     assert c.get("/?q=PRIVATE-SEARCH", headers=htmx).status_code == 200  # the board's live filter: the same page
-    assert c.get("/c/acme.com").status_code == 200
+    assert c.get("/c/acme.com", headers=clicked_on("/?q=PRIVATE-SEARCH")).status_code == 200  # a card of the board
     assert c.get("/c/beta.io", headers=htmx).status_code == 200  # the slide-over panel over the board
     assert c.get("/projects/new", headers=htmx).status_code == 200  # a form in the panel
-    assert c.get("/leads").status_code == 200
+    assert c.get("/leads", headers=clicked_on("/c/acme.com")).status_code == 200  # the Leads tab, on a company's page
+    # Loaded again: the browser's reload button repeats the Referer the page was first opened with.
+    assert c.get("/leads", headers=clicked_on("/c/acme.com", **{"Cache-Control": "max-age=0"})).status_code == 200
+    assert c.get("/pipeline", headers={"Referer": "https://evil.example/c/acme.com"}).status_code == 200  # another site
+    assert c.get("/runs", headers=clicked_on("/PRIVATE-PATH")).status_code == 200  # an address that is no page
+    assert c.get("/projects", headers={"Referer": "http://[PRIVATE"}).status_code == 200  # nor an address at all
     assert c.get("/static/app.css").status_code == 200  # not a page
     assert c.get("/c/nope.com").status_code == 404  # an answer, not a page
     assert c.head("/leads").status_code == 405  # nothing was opened
@@ -364,8 +387,11 @@ def test_each_page_the_owner_opens_reaches_posthog_as_a_pageview_of_its_route_an
     assert c.get("/leads", headers={"Host": "evil.example"}).status_code == 400  # refused by the guard
 
     events = posthog_api.events()
-    assert [(event["event"], event["properties"]["$current_url"], event["properties"]["$pathname"])
-            for event in events] == [("$pageview", route, route) for route in ("/login", "/", "/c/{domain}", "/leads", "/")]
+    assert [(event["event"], event["properties"]["$current_url"], event["properties"]["$pathname"],
+             event["properties"].get("previous_route")) for event in events] == [
+        ("$pageview", route, route, previous) for route, previous in (
+            ("/login", None), ("/", None), ("/c/{domain}", "/"), ("/leads", "/c/{domain}"), ("/leads", "/leads"),
+            ("/pipeline", None), ("/runs", None), ("/projects", None), ("/", None))]
     assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}
     told = json.dumps(events).lower()
     for private in ("acme", "beta", "private", "stretch", "127.0.0.1", "evil", "$ip", "$referrer", "$host"):

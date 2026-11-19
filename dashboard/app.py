@@ -7,9 +7,10 @@ POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token hea
 websites open in the browser cannot start paid runs.
 
 With PostHog on (`python -m dashboard` turns it on from POSTHOG_PROJECT_TOKEN and POSTHOG_HOST), each action of
-yours that succeeds is reported as an event (`posthog_client.capture`: a name and a property or two from fixed sets,
-never a company, a note or an id), each page you open as a $pageview of its route as it is declared, and each
-exception nothing handled by its type, stack and route. All of them are the owner's, without a person profile.
+yours that succeeds is reported as an event (`posthog_client.capture`: a name and a few properties that are values
+from fixed sets, booleans or counts, never a company, a note or an id), each page you open as a $pageview of its
+route as it is declared, with the route of the page you opened it from, and each exception nothing handled by its
+type, stack and route. All of them are the owner's, without a person profile.
 """
 
 import hashlib
@@ -24,6 +25,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.datastructures import Headers
+from starlette.routing import Match, Route
 
 from clients import posthog_client
 from dashboard import auth, bot, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
@@ -89,7 +92,7 @@ def _safe_next(url):
 
 
 def _same_origin(origin, host):
-    """True when an Origin header names the host and port the request was sent to."""
+    """True when an Origin or Referer header names the host and port the request was sent to."""
     try:
         return urlparse(origin).netloc == host
     except ValueError:  # not a URL, such as "http://[x"
@@ -113,10 +116,30 @@ class _ReportErrors:
             raise
 
 
+def _previous_route(scope, route):
+    """The page of the dashboard the browser was showing when it asked for the page at `route`, by its route as it
+    is declared, or None when the page was opened from elsewhere (a typed address, a bookmark, a link in Telegram).
+    Referer holds the address of the page a link was clicked on: only the route that address matches is kept, never
+    the address, which names a company or an interview and holds what was searched. A page that is loaded again was
+    showing itself: browsers mark a reload with Cache-Control: max-age=0 (cache mode "no-cache" in the Fetch
+    standard), and their own reload button repeats the Referer the page was first opened with."""
+    headers = Headers(scope=scope)
+    if headers.get("cache-control") == "max-age=0":
+        return route
+    referer = headers.get("referer", "")
+    if not _same_origin(referer, headers.get("host", "")):
+        return None
+    asked = {"type": "http", "method": "GET", "path": urlparse(referer).path}
+    return next((r.path for r in scope["app"].router.routes
+                 if isinstance(r, Route) and r.matches(asked)[0] is Match.FULL), None)
+
+
 class _ReportPageviews:
     """ASGI middleware. PostHog: a page the browser loaded (a GET answered with a full HTML page and 200), as a
-    $pageview of its route as it is declared. What htmx asks for by itself (a company's slide-over panel, a form, the
-    board's live filter, the polls of a running job) is part of the page it was asked from, not a page of its own."""
+    $pageview of its route as it is declared, with the route of the dashboard page it was opened from
+    (`_previous_route`): a click on a tab says which page it led to and which page it was made on. What htmx asks for
+    by itself (a company's slide-over panel, a form, the board's live filter, the polls of a running job) is part of
+    the page it was asked from, not a page of its own."""
 
     def __init__(self, app):
         self.app = app
@@ -139,7 +162,7 @@ class _ReportPageviews:
         await self.app(scope, receive, watch)
         route = getattr(scope.get("route"), "path", "")
         if page and route:
-            posthog_client.pageview(route)
+            posthog_client.pageview(route, _previous_route(scope, route))
 
 
 def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
@@ -594,6 +617,11 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 {"spec": spec, "error": error, "busy": runner.busy(), "modes": jobs.RUN_MODES},
             )
 
+    def report_started(spec, trigger):
+        """PostHog: a job started, by its kind, what started it and the options it was started with (`Spec.options`:
+        a run's mode and whether it asks Fiber, whether a discover has a focus and its limit, a dry run)."""
+        posthog_client.capture("hunt_run_started", {"kind": spec.kind, "trigger": trigger, **spec.options})
+
     @app.post("/runs")
     async def run_start(request: Request):
         form = await request.form()
@@ -607,7 +635,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse("Another hunt.py command is running; wait for it to finish.", status_code=409)
             except OSError as exc:
                 return PlainTextResponse(f"Could not start hunt.py: {exc}", status_code=500)
-        posthog_client.capture("hunt_run_started", {"kind": spec.kind, "trigger": "button"})
+        report_started(spec, "button")
         return redirect(f"/runs/jobs/{job_id}")
 
     def job_or_404(conn, job_id):
@@ -647,7 +675,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             spec = jobs.build(conn, root, form)
             spec.label = f"Scheduled · {spec.label}"
             job_id = runner.start(conn, spec)
-        posthog_client.capture("hunt_run_started", {"kind": spec.kind, "trigger": "schedule"})
+        report_started(spec, "schedule")
         return job_id
 
     if schedule_entries:
