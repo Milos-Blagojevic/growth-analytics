@@ -122,7 +122,8 @@ def _previous_route(scope, route):
     Referer holds the address of the page a link was clicked on: only the route that address matches is kept, never
     the address, which names a company or an interview and holds what was searched. A page that is loaded again was
     showing itself: browsers mark a reload with Cache-Control: max-age=0 (cache mode "no-cache" in the Fetch
-    standard), and their own reload button repeats the Referer the page was first opened with."""
+    standard), and their own reload button repeats the Referer the page was first opened with. A forced reload is
+    marked no-cache instead and is not taken for one: so is every click while the developer tools keep the cache off."""
     headers = Headers(scope=scope)
     if headers.get("cache-control") == "max-age=0":
         return route

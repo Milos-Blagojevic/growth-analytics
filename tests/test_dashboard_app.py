@@ -272,7 +272,7 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     write_run(root, stamp(1)[0], [result("Epsilon", "epsilon.dev", fit=fit(
         71, "stretch", "Growth Engineer", "https://epsilon.dev/g", gap_note="1 year.", proof_ideas=["PRIVATE-IDEA"]))])
     app = create_app(root, hunt_command=[sys.executable, str(root / "stub_hunt.py")],
-                     schedule_entries=schedule.parse("* * * * * monitor-sync"))
+                     schedule_entries=schedule.parse("* * * * * discover PRIVATE-FOCUS --limit 9"))
     c = make_client(app)  # without the lifespan: the scheduler's own thread stays off, and this test ticks it
     acme = {"kind": "company", "ref": "acme.com"}
 
@@ -305,14 +305,18 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     assert c.post(page + "/me", data={"me": "9"}).status_code == 400
     assert c.post(page + "/me", data={"me": "2"}).status_code == 204
     assert c.post("/runs/preview", data={"kind": "discover", "focus": "PRIVATE-FOCUS"}).status_code == 200  # starts nothing
-    # A job says how it was started: a run its mode and whether it asks Fiber, a discover whether it has a focus (never
-    # the focus) and its limit, a check whether it is a dry run.
+    # A job says how it was started, from a button or the schedule: a run its mode and whether it asks Fiber, a discover
+    # whether it has a focus (never the focus) and its limit, a check whether it is a dry run.
+    (root / "outlook_token.json").write_text("{}")  # Check email starts only after the Outlook sign-in
     for started in ({"kind": "run", "mode": "deliver", "fiber": "1"},
                     {"kind": "run", "mode": "research_only", "domains": ["delta.ai"]},
                     {"kind": "run"},
                     {"kind": "discover", "focus": "PRIVATE-FOCUS", "limit": "7"},
                     {"kind": "discover"},
-                    {"kind": "monitor", "dry_run": "1"}):
+                    {"kind": "monitor", "dry_run": "1"},
+                    {"kind": "mail"},
+                    {"kind": "news", "dry_run": "1"},
+                    {"kind": "monitor_sync"}):
         finished(root, started_job_id(c.post("/runs", data=started)))
     assert c.post("/runs", data={"kind": "discover", "focus": "PRIVATE-FOCUS", "limit": "500"}).status_code == 400
     app.state.scheduler.tick(datetime.now() + timedelta(minutes=1))
@@ -347,7 +351,10 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("hunt_run_started", {"kind": "discover", "trigger": "button", "has_focus": True, "limit": 7}),
         ("hunt_run_started", {"kind": "discover", "trigger": "button", "has_focus": False, "limit": 15}),
         ("hunt_run_started", {"kind": "monitor", "trigger": "button", "dry_run": True}),
-        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "schedule"}),
+        ("hunt_run_started", {"kind": "mail", "trigger": "button", "dry_run": False}),
+        ("hunt_run_started", {"kind": "news", "trigger": "button", "dry_run": True}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
+        ("hunt_run_started", {"kind": "discover", "trigger": "schedule", "has_focus": True, "limit": 9}),
         ("hunt_run_started", {"kind": "watch", "trigger": "button", "dry_run": False}),
         ("hunt_run_cancelled", {}),
     ]

@@ -78,7 +78,7 @@ An action that is refused (a 400, a 409) sends nothing, and neither do signing i
 
 A click on a tab, or on any other link of the dashboard, is the page view of the page it leads to, and `previous_route` is the page the click was made on. **Interviews** clicked on the Board is a `$pageview` of `/interviews` with `previous_route` `/`; clicked on a company's page, one with `/c/{domain}`. The dashboard reads it off the `Referer` header the browser sends with the request and keeps only the route that address matches, never the address.
 
-- A page that is loaded again has its own route as `previous_route`: the reload or redirect that follows an action, and the browser's reload button. So the page views whose `previous_route` differs from `$pathname` are your moves from one page to another.
+- A page that is loaded again has its own route as `previous_route`: the reload or redirect that follows an action, and the browser's reload button, which the browser marks with `Cache-Control: max-age=0`. So the page views whose `previous_route` differs from `$pathname` are your moves from one page to another. Two reloads come out differently. A forced reload, the one that skips the browser's cache, is marked `no-cache` instead, like every request made while the developer tools keep the cache off, so it is not taken for a reload and repeats the page the page was first opened from. And a reload that ends on the login page, because the session ran out, says `/login` was opened from `/login`.
 - `previous_route` is absent when the page was opened from outside the dashboard: a typed address, a bookmark, a link in Telegram.
 - A page the browser shows again from its own copy, as Back and Forward usually do, asks the dashboard for nothing and is not a page view.
 
