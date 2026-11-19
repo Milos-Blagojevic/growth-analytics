@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "session_id": "real-postings-2026-11-18",
+  "state": "baseline_recorded",
+  "label_counts": {"total": 9, "keep": 4, "drop": 5},
+  "first_batch_split": "calibration",
+  "candidate": {
+    "location": "Belgrade, Serbia",
+    "target_roles": [
+      "analytics engineer",
+      "growth engineer"
+    ],
+    "seniority": "senior or above",
+    "foreign_office_policy": "Consider foreign on-site/hybrid roles if relocation support is offered"
+  },
+  "decision": {
+    "keep": "Pass to Claude for inspection, not recommend applying",
+    "drop": "Confidently fails a hard requirement",
+    "unclear": "Discuss or seek further source evidence; do not force a label"
+  },
+  "source_file": "sources.json",
+  "first_batch": [
+    {
+      "id": "r01_paddle_hubs",
+      "company": "Paddle",
+      "title": "Senior Analytics Engineer",
+      "source_url": "https://jobs.ashbyhq.com/paddle/938c6fbe-3167-4264-bca5-3b4ad104adee/",
+      "review_summary": {
+        "location": "Remote; role locations listed as UK, Portugal and Ireland. Company says hiring is focused within its hubs. No relocation offer is stated in the captured text.",
+        "seniority": "Senior title; complex data models, standards and mentoring.",
+        "function": "Snowflake/dbt data models, BI, data quality and data activation."
+      },
+      "exact_evidence": [
+        "Location: UK",
+        "Other locations: Portugal, Ireland",
+        "within our hub locations",
+        "we focus hiring within our hubs"
+      ],
+      "source_text_sha256": "b778480847ca28685bade1e8ecdccfc878bfb19b568ee1e652f6183379706295",
+      "label_status": "labeled",
+      "expected": "drop",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    },
+    {
+      "id": "r02_circle_member_growth",
+      "company": "Circle",
+      "title": "Lead Engineer, Member Growth",
+      "source_url": "https://jobs.ashbyhq.com/circle/194a7b5d-df8d-4bb2-936d-7344d4501e11/application",
+      "review_summary": {
+        "location": "Anywhere; EMEA listed; company describes a global, fully remote team.",
+        "seniority": "Lead, hands-on role with a small team; 7+ years of production software experience.",
+        "function": "Analytics/ClickHouse infrastructure, onboarding, activation, A/B tests; Ruby on Rails, React and TypeScript."
+      },
+      "exact_evidence": [
+        "Location: Anywhere",
+        "This is a hands-on role.",
+        "7+ years of experience shipping production software",
+        "Designing and overseeing A/B tests"
+      ],
+      "source_text_sha256": "a3fb12dbe2aa8b52359a3023742ec1c76e5e0ba75155dc05c405879ed3f8492b",
+      "label_status": "labeled",
+      "expected": "keep",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    },
+    {
+      "id": "r03_ostrom_power_trading",
+      "company": "Ostrom",
+      "title": "Analytics Engineer - Power Trading",
+      "source_url": "https://jobs.ashbyhq.com/ostrom/0e1820f2-157a-41d4-a168-131f0388e088",
+      "review_summary": {
+        "location": "Berlin / Remote; remote workplace. Flexible-work text mentions Sardinia; no explicit eligible-country list is stated.",
+        "seniority": "No senior title; requires 4+ years and ownership of ETL pipelines, infrastructure, orchestration and data quality.",
+        "function": "SQL/Python, AWS, data modelling with dbt/SQLMesh/Dataform, trading analytics and Python dashboards."
+      },
+      "exact_evidence": [
+        "Location: Berlin / Remote",
+        "4+ years of experience in analytics engineering",
+        "Build and own our ETL pipelines",
+        "you work where you work best."
+      ],
+      "source_text_sha256": "61ff66df3b2658ac0d7501511fded0f95366e757eaef3a48b70e02e1d29dd295",
+      "label_status": "labeled",
+      "expected": "keep",
+      "label_source": "owner confirmed conservative policy after discussion",
+      "label_reason": "Unknown seniority and employment-country eligibility are not enough for a confident hard-rule rejection.",
+      "recorded_before_model_execution": true,
+      "initial_owner_response": "Unclear — discuss",
+      "remaining_source_unknowns": [
+        "Does the ownership scope establish seniority, or is seniority still unknown?",
+        "Does Berlin / Remote permit a Serbia-based hire, or is country eligibility still unknown?"
+      ],
+      "link_status": "live"
+    }
+  ],
+  "next_batch_file": "batch-2.json",
+  "model_evaluation": "../../results/real-baseline/results.json",
+  "notes": [
+    "Human summaries are for review only. A future model exam must use the frozen source text, not these summaries.",
+    "The existing synthetic dataset and baseline are unchanged. No new model, prompt or threshold was selected."
+  ]
+}

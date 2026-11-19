@@ -1,0 +1,67 @@
+{
+  "checked_at": "2026-11-18T19:06:04.488757+00:00",
+  "method": "pipeline.research.verify_roles(settle=False): free HTTP checks, no Exa fetch",
+  "usable": [
+    {
+      "title": "Airalo - Senior Analytics Engineer, Finance",
+      "url": "https://jobs.lever.co/airalo/5cd064bf-0d97-45d3-920b-64efc9ed40bd/",
+      "link_status": "live"
+    },
+    {
+      "title": "Senior Analytics Engineer  @ Paddle",
+      "url": "https://jobs.ashbyhq.com/paddle/938c6fbe-3167-4264-bca5-3b4ad104adee/",
+      "link_status": "live"
+    },
+    {
+      "title": "Senior Analytics Engineer - UK (Remote) @ Immersive",
+      "url": "https://jobs.ashbyhq.com/immersivelabs/bfe3228b-cf95-4458-9aa6-f8c3246b6cb7",
+      "link_status": "live"
+    },
+    {
+      "title": "Senior Growth Engineer at Engine",
+      "url": "https://job-boards.greenhouse.io/engine/jobs/7997352003",
+      "link_status": "live"
+    },
+    {
+      "title": "Lead Engineer, Member Growth @ Circle",
+      "url": "https://jobs.ashbyhq.com/circle/194a7b5d-df8d-4bb2-936d-7344d4501e11/application",
+      "link_status": "live"
+    },
+    {
+      "title": "Lead Growth Engineer at Swordhealth",
+      "url": "https://job-boards.greenhouse.io/swordhealth/jobs/4425692009",
+      "link_status": "live"
+    },
+    {
+      "title": "Lead Engineer, Growth at Alt",
+      "url": "https://jobs.ashbyhq.com/alt/15d0c109-9401-493f-9038-7fc7659b58aa",
+      "link_status": "live"
+    },
+    {
+      "title": "Analytics Engineer (m/f/d) @ Statista",
+      "url": "https://jobs.ashbyhq.com/statista/27f98734-2ba5-439a-a5c0-df5060013761",
+      "link_status": "live"
+    },
+    {
+      "title": "Senior Analytics Engineer (m/f/d) at Autoscout24",
+      "url": "https://job-boards.greenhouse.io/autoscout24/jobs/8202620003",
+      "link_status": "live"
+    },
+    {
+      "title": "Analytics Engineer - Power Trading @ Ostrom",
+      "url": "https://jobs.ashbyhq.com/ostrom/0e1820f2-157a-41d4-a168-131f0388e088",
+      "link_status": "live"
+    },
+    {
+      "title": "Senior Analytics Engineer - Marketing & Growth  @ Pergolux",
+      "url": "https://jobs.ashbyhq.com/pergolux/29ebe347-f064-4154-aea3-8bc0aaef4a74/application",
+      "link_status": "live"
+    }
+  ],
+  "dead": [
+    {
+      "title": "Senior Analytics Engineer at Remotewoman",
+      "url": "https://job-boards.greenhouse.io/remotewoman/jobs/8659416002"
+    }
+  ]
+}

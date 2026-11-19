@@ -13,6 +13,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m evals", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     exam = commands.add_parser("roles", help="evaluate the production Jev keep/drop screen")
+    exam.add_argument("--dataset", type=Path, default=roles.DATASET, help="frozen exam JSON; default: bundled synthetic exam")
     exam.add_argument("--split", choices=("all", "calibration", "holdout"), default="all")
     exam.add_argument("--live", action="store_true", help="make paid TypeSafe calls; otherwise only check the exam")
     exam.add_argument("--output", type=Path, help="new directory for results.json and README.md; required with --live")
@@ -20,14 +21,14 @@ def main(argv=None):
     if args.live != (args.output is not None):
         parser.error("--live and --output must be supplied together")
     try:
-        dataset, digest = roles.load()
+        dataset, digest = roles.load(args.dataset)
         cases = roles.select(dataset, args.split)
     except (OSError, ValueError) as exc:
         print(f"Invalid exam: {exc}", file=sys.stderr)
         return 2
     if not args.live:
         keeps = sum(case.expected == "keep" for case in cases)
-        print(f"Validated {len(cases)} synthetic cases: {keeps} expected keeps, {len(cases) - keeps} expected drops.")
+        print(f"Validated {len(cases)} {dataset.kind} cases: {keeps} expected keeps, {len(cases) - keeps} expected drops.")
         for case in cases:
             print(f"  {case.id} [{case.split}]: {case.expected} — {case.label_reason}")
         print("No model calls made. No quality score measured. Use --live --output NEW_DIRECTORY to run the exam.")

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "session_id": "real-postings-2026-11-18",
+  "batch": 2,
+  "state": "labeled",
+  "split": "calibration",
+  "candidate_and_rules": "session.json",
+  "source_file": "sources.json",
+  "cases": [
+    {
+      "id": "r04_airalo_supported_locations",
+      "company": "Airalo",
+      "title": "Senior Analytics Engineer, Finance",
+      "source_url": "https://jobs.lever.co/airalo/5cd064bf-0d97-45d3-920b-64efc9ed40bd/",
+      "review_summary": {
+        "location": "The role header says remote anywhere in Spain or the UK. Later salary/location text also names Germany and refers to supported locations in Europe; Serbia is not named. No relocation offer is stated.",
+        "seniority": "Senior title; 5+ years and ownership of finance/revenue models.",
+        "function": "dbt, BigQuery, ELT, semantic layers, finance reconciliation and data quality."
+      },
+      "exact_evidence": [
+        "Location: Remote, anywhere in Spain or the UK.",
+        "This role is remote and open to candidates across our supported locations in Europe.",
+        "Germany: €76,000 - €114,000"
+      ],
+      "source_text_sha256": "72ed3eb47e3e0ae1f63fc438a634af950176745d584a20883cb9178ef8a2c720",
+      "label_status": "labeled",
+      "expected": "drop",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    },
+    {
+      "id": "r05_engine_us_growth",
+      "company": "Engine",
+      "title": "Senior Growth Engineer",
+      "source_url": "https://job-boards.greenhouse.io/engine/jobs/7997352003",
+      "review_summary": {
+        "location": "Remote - US. An application question asks whether immigration/work-permit sponsorship would be needed; the captured posting does not explicitly offer relocation.",
+        "seniority": "Senior title; 5+ years shipping production software.",
+        "function": "GTM tools, account sourcing, data pipelines/integrations, Salesforce, automation and experiments."
+      },
+      "exact_evidence": [
+        "Remote - US",
+        "5+ years of software engineering experience",
+        "GTM Tools & Automation",
+        "If you’ll require Engine to commence"
+      ],
+      "source_text_sha256": "d324cbe245ea3b8e96a4096f67ef79054fb331544e54defef9753158b40182e3",
+      "label_status": "labeled",
+      "expected": "drop",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    },
+    {
+      "id": "r06_pergolux_berlin_onsite",
+      "company": "PERGOLUX",
+      "title": "Senior Analytics Engineer - Marketing & Growth",
+      "source_url": "https://jobs.ashbyhq.com/pergolux/29ebe347-f064-4154-aea3-8bc0aaef4a74/application",
+      "review_summary": {
+        "location": "Berlin | Global Team; Workplace: OnSite. International-team benefits are described, but no relocation support is stated in the captured text.",
+        "seniority": "Senior title; minimum five years in analytics engineering.",
+        "function": "SQL/dbt/Snowflake, marketing attribution, CAC, ROAS and semantic modelling."
+      },
+      "exact_evidence": [
+        "Location: Berlin | Global Team",
+        "Workplace: OnSite",
+        "Minimum 5 years experience in analytics engineering roles",
+        "Expert proficiency in SQL, dbt, and data modeling"
+      ],
+      "source_text_sha256": "07c83051b230cf84447e9fa9755886fb42e80f7f5041c22bfb1e492406380a41",
+      "label_status": "labeled",
+      "expected": "drop",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    }
+  ],
+  "next_batch_file": "holdout.json",
+  "model_evaluation": "../../results/real-baseline/results.json"
+}

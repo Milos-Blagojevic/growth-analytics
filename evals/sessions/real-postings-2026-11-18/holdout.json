@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "session_id": "real-postings-2026-11-18",
+  "batch": 3,
+  "split": "holdout",
+  "state": "labeled",
+  "candidate_and_rules": "session.json",
+  "source_file": "sources.json",
+  "cases": [
+    {
+      "id": "r07_alt_remote_growth",
+      "company": "Alt",
+      "title": "Lead Engineer, Growth",
+      "source_url": "https://jobs.ashbyhq.com/alt/15d0c109-9401-493f-9038-7fc7659b58aa",
+      "review_summary": {
+        "location": "Remote; no eligible-country list or residency restriction appears in the captured text. Salary is USD and benefits include 401(k).",
+        "seniority": "Lead/founding growth engineer; 5+ years in engineering; owns a company growth metric.",
+        "function": "Funnel instrumentation, attribution, lifecycle infrastructure, experiments, product analytics and Python/backend/frontend work."
+      },
+      "exact_evidence": [
+        "Location: Remote",
+        "5+ years of engineering experience",
+        "401(k)",
+        "The data and attribution foundation."
+      ],
+      "source_text_sha256": "ffefb9234e42f9c09425b52401b780930794b688315aeb2607947a7269e9c994",
+      "label_status": "labeled",
+      "expected": "keep",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    },
+    {
+      "id": "r08_immersive_uk_remote",
+      "company": "Immersive",
+      "title": "Senior Analytics Engineer - UK (Remote)",
+      "source_url": "https://jobs.ashbyhq.com/immersivelabs/bfe3228b-cf95-4458-9aa6-f8c3246b6cb7",
+      "review_summary": {
+        "location": "United Kingdom; title explicitly says UK (Remote), and the role joins the established UK Engineering team. No relocation offer is stated.",
+        "seniority": "Senior title; leads data quality, observability, model optimization and mentoring.",
+        "function": "SQL/Snowflake/dbt data models and semantic layers for customer-facing reporting."
+      },
+      "exact_evidence": [
+        "Senior Analytics Engineer - UK (Remote)",
+        "Location: United Kingdom",
+        "established UK Engineering team",
+        "Experience with dbt for data transformation layer"
+      ],
+      "source_text_sha256": "2a95da51fcf18dc26f18e1b977e53ae19d51bf19846721137d7c18e2db807f0f",
+      "label_status": "labeled",
+      "expected": "drop",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    },
+    {
+      "id": "r09_sword_portugal_remote",
+      "company": "Sword",
+      "title": "Lead Growth Engineer",
+      "source_url": "https://job-boards.greenhouse.io/swordhealth/jobs/4425692009",
+      "review_summary": {
+        "location": "Header: Remote - Portugal. Later compensation boilerplate says pay is adjusted to the country where the candidate resides. No explicit relocation offer appears.",
+        "seniority": "Lead role; hires/manages or technically guides growth engineers.",
+        "function": "Acquisition, activation, retention, experimentation infrastructure, event data pipelines and TypeScript/web/mobile systems."
+      },
+      "exact_evidence": [
+        "Remote - Portugal",
+        "This role can sit remotely and the compensation range will be adjusted to accurately reflect the country in which the candidate resides",
+        "Lead Growth Engineer",
+        "Expertise in experimentation engines"
+      ],
+      "source_text_sha256": "62e51fd56a69055e31fc221b38f990e693a526554cabe6d515b3795d1f7a5c80",
+      "label_status": "labeled",
+      "expected": "keep",
+      "label_source": "owner interactive response",
+      "recorded_before_model_execution": true,
+      "link_status": "live"
+    }
+  ],
+  "model_evaluation": "../../results/real-baseline/results.json"
+}
