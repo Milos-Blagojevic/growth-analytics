@@ -29,7 +29,7 @@ from starlette.datastructures import Headers
 from starlette.routing import Match, Route
 
 from clients import posthog_client
-from dashboard import auth, bot, db, email_updates, ingest, jobs, projects, queries, schedule, tracking
+from dashboard import auth, bot, db, email_updates, ingest, jobs, monitors, projects, queries, schedule, tracking
 from interview import interviews
 from pipeline import runs
 
@@ -578,6 +578,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             companies = len(ingest.read_companies(root / ingest.COMPANIES))
         except ValueError:  # the ingest banner names the file; the run button is disabled
             companies = 0
+        monitored, monitors_error = monitors.listing(root)
         with connection() as conn:
             return render(
                 request,
@@ -589,6 +590,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 saved=queries.saved_runs(conn),
                 companies=companies,
                 modes=jobs.RUN_MODES,
+                monitored=monitored,
+                monitors_error=monitors_error,
                 schedules=scheduler.status() if scheduler else None,
                 chat=chat.status() if chat else None,
                 chat_log=chat.read_log() if chat else "",
@@ -636,6 +639,32 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 return PlainTextResponse("Another hunt.py command is running; wait for it to finish.", status_code=409)
             except OSError as exc:
                 return PlainTextResponse(f"Could not start hunt.py: {exc}", status_code=500)
+        report_started(spec, "button")
+        return redirect(f"/runs/jobs/{job_id}")
+
+    @app.get("/runs/monitors/new", response_class=HTMLResponse)
+    def monitor_new(request: Request):
+        return templates.TemplateResponse(request, "partials/monitor_form.html", {
+            "busy": runner.busy(), "estimate": jobs.MONITOR_SYNC_ESTIMATE, "warnings": jobs.MONITOR_SYNC_WARNINGS,
+            "file": runs.MONITORS,
+        })
+
+    @app.post("/runs/monitors")
+    async def monitor_add(request: Request):
+        """New under Monitors: adds a company to monitors.csv and starts the monitor-sync that creates its monitor."""
+        form = await request.form()
+        with connection() as conn:
+            try:
+                spec = monitors.new(root, form)
+                job_id = runner.start(conn, spec)
+            except ValueError as exc:
+                return PlainTextResponse(str(exc), status_code=400)
+            except runs.Busy:
+                return PlainTextResponse("Another hunt.py command is running; add the company when it finishes.",
+                                         status_code=409)
+            except OSError as exc:
+                return PlainTextResponse(f"Could not start hunt.py: {exc}", status_code=500)
+        posthog_client.capture("monitor_added")
         report_started(spec, "button")
         return redirect(f"/runs/jobs/{job_id}")
 

@@ -13,11 +13,11 @@ MONDAY = datetime(2026, 10, 12, 6, 59, 30)
 
 
 def test_parse_reads_lines_and_semicolons_and_skips_comments():
-    entries = schedule.parse("# weekly discovery\n0 7 * * 1 discover \"b2b saas\" --limit 20; 30 7 * * * run\n\n0 */6 * * * watch --dry-run")
+    entries = schedule.parse("# weekly discovery\n0 7 * * 1 discover \"b2b saas\" --limit 20; 30 7 * * * run\n\n0 */6 * * * monitor --dry-run")
     assert [e.form for e in entries] == [
         {"kind": "discover", "focus": "b2b saas", "limit": "20"},
         {"kind": "run", "mode": "deliver", "fiber": ""},
-        {"kind": "watch", "dry_run": "1"},
+        {"kind": "monitor", "dry_run": "1"},
     ]
     assert schedule.parse("0 8 * * * run --dry-run")[0].form == {"kind": "run", "mode": "dry_run", "fiber": ""}
     assert [e.form for e in schedule.parse("0 8 * * * run --fiber; 0 9 * * * run --research-only --fiber")] == [
@@ -38,6 +38,7 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
     [
         ("0 7 * * * mail --days 30", "unsupported command"),
         ("0 7 * * * send", "unsupported command"),
+        ("0 7 * * * watch", "unsupported command"),
         ("0 7 * * * run --dry-run --research-only", "unsupported command"),
         ("0 7 * * * run --fiber --fiber", "unsupported command"),
         ("0 7 * * * run --fiber=1", "unsupported command"),
@@ -53,7 +54,7 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
 )
 def test_parse_rejects_bad_entries_naming_the_line(line, message):
     with pytest.raises(ValueError, match=message) as error:
-        schedule.parse(f"0 6 * * * watch\n{line}")
+        schedule.parse(f"0 6 * * * news\n{line}")
     assert line in str(error.value)
 
 
@@ -61,14 +62,14 @@ def test_next_after_follows_cron_rules():
     def next_of(line, after=MONDAY):
         return schedule.parse(line)[0].next_after(after)
 
-    assert next_of("0 7 * * 1 watch") == datetime(2026, 10, 12, 7, 0)
-    assert next_of("0 7 * * 1 watch", datetime(2026, 10, 12, 7, 0)) == datetime(2026, 10, 19, 7, 0)
-    assert next_of("0 9 * * 7 watch") == datetime(2026, 10, 18, 9, 0)  # 7 is Sunday too
-    assert next_of("*/20 9-10 * * * watch", datetime(2026, 10, 12, 10, 41)) == datetime(2026, 10, 13, 9, 0)
+    assert next_of("0 7 * * 1 news") == datetime(2026, 10, 12, 7, 0)
+    assert next_of("0 7 * * 1 news", datetime(2026, 10, 12, 7, 0)) == datetime(2026, 10, 19, 7, 0)
+    assert next_of("0 9 * * 7 news") == datetime(2026, 10, 18, 9, 0)  # 7 is Sunday too
+    assert next_of("*/20 9-10 * * * news", datetime(2026, 10, 12, 10, 41)) == datetime(2026, 10, 13, 9, 0)
     # Both day fields restricted: either one matching is enough (the 15th, or any Friday).
-    assert next_of("0 7 15 * 5 watch") == datetime(2026, 10, 15, 7, 0)
-    assert next_of("0 7 15 * 5 watch", datetime(2026, 10, 15, 8, 0)) == datetime(2026, 10, 16, 7, 0)
-    assert next_of("0 0 29 2 * watch") == datetime(2028, 2, 29, 0, 0)
+    assert next_of("0 7 15 * 5 news") == datetime(2026, 10, 15, 7, 0)
+    assert next_of("0 7 15 * 5 news", datetime(2026, 10, 15, 8, 0)) == datetime(2026, 10, 16, 7, 0)
+    assert next_of("0 0 29 2 * news") == datetime(2028, 2, 29, 0, 0)
 
 
 class Starter:
@@ -88,7 +89,7 @@ class Starter:
 
 def test_due_commands_start_once_and_wait_while_another_runs():
     starter = Starter()
-    sched = schedule.Scheduler(schedule.parse("0 7 * * * run; 0 7 * * * watch"), starter, clock=lambda: MONDAY)
+    sched = schedule.Scheduler(schedule.parse("0 7 * * * run; 0 7 * * * news"), starter, clock=lambda: MONDAY)
 
     starter.busy = True  # e.g. a manual run still going at 07:00
     sched.tick(datetime(2026, 10, 12, 7, 0, 5))
@@ -96,9 +97,9 @@ def test_due_commands_start_once_and_wait_while_another_runs():
 
     starter.busy = False
     sched.tick(datetime(2026, 10, 12, 7, 3))
-    assert starter.started == ["run", "watch"]
+    assert starter.started == ["run", "news"]
     sched.tick(datetime(2026, 10, 12, 7, 4))
-    assert starter.started == ["run", "watch"]  # 07:00 is not due again
+    assert starter.started == ["run", "news"]  # 07:00 is not due again
 
     statuses = sched.status()
     assert [s["last"][1] for s in statuses] == [1, 2] and statuses[0]["next"] == datetime(2026, 10, 12, 7, 0)

@@ -5,8 +5,7 @@
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
     python hunt.py run --fiber               # also take open roles from Fiber's jobs database (paid agent runs)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
-    python hunt.py watch [--dry-run]         # check watched Ashby boards for new matching postings
-    python hunt.py monitor-sync              # keep one Exa monitor per [monitor].companies entry (Exa runs them)
+    python hunt.py monitor-sync              # keep one Exa monitor per company in monitors.csv (Exa runs them)
     python hunt.py monitor [--dry-run]       # send the suitable new postings the monitors found (Claude)
     python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
     python hunt.py mail [--dry-run]          # find rejections and interview invites in new email (Claude)
@@ -35,7 +34,7 @@ import logfire
 from clients import exa_client, jev, posthog_client, telegram
 from inbox import chat, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
-from pipeline import monitor, news, research, runs, scoring, watch
+from pipeline import monitor, news, research, runs, scoring
 
 logger = logging.getLogger("hunt")
 WORKERS = 4
@@ -494,42 +493,21 @@ def cmd_send(args):
     return 0
 
 
-def cmd_watch(args):
-    profile = load_profile(args.profile)
-    try:
-        boards, keywords, exclude = watch.load_config(profile)
-    except ValueError as exc:
-        sys.exit(f"{args.profile}: {exc}")
-    if not args.dry_run and not telegram.configured():
-        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
-
-    new_matches, problems, new_state = watch.check(boards, keywords, exclude, watch.load_state(args.state))
-    for problem in problems:
-        logger.warning("watch: %s", problem)
-    if not new_matches:
-        print(f"No new matching postings on {len(boards) - len(problems)}/{len(boards)} board(s).")
-    else:
-        message = watch.format_message(new_matches, problems)
-        if args.dry_run:
-            print(message)
-        else:
-            for part in telegram.pack_blocks([message]):
-                telegram.send(part)
-            print(f"Sent {len(new_matches)} new posting(s) to Telegram.")
-    if not args.dry_run:
-        watch.save_state(args.state, new_state)  # only after a successful send, so failures retry next run
-    return 1 if problems else 0
-
-
 def cmd_monitor_sync(args):
     profile = load_profile(args.profile)
-    try:
-        companies = monitor.load_config(profile)
-    except ValueError as exc:
-        sys.exit(f"{args.profile}: {exc}")
+    if profile.get("monitor", {}).get("companies"):  # a sync on monitors.csv alone would delete these monitors
+        sys.exit(f"{args.profile}: [monitor].companies is no longer read. Move each company to {args.companies} as a "
+                 "name,domain row, then delete the list from the profile. Nothing was changed on Exa.")
     state = _monitor_state(args.state)
+    if state["monitors"] and not Path(args.companies).exists():
+        sys.exit(f"{args.companies} not found, and {len(state['monitors'])} monitor(s) of this folder run on Exa: "
+                 "create it with a name,domain row per company to keep (an empty file deletes them all).")
+    try:
+        companies = runs.read_monitors(args.companies)
+    except ValueError as exc:
+        sys.exit(f"{args.companies}: {exc}")
     if not companies and not state["monitors"] and "folder" not in state:
-        sys.exit(f"{args.profile}: [monitor].companies is empty")
+        sys.exit(f"{args.companies}: no companies listed")
     # With nothing listed and a folder id, the sync still runs: a monitor whose create lost its reply may be left.
     try:
         webhook = monitor.webhook_url(dashboard_url()) if companies else None  # deleting the last ones needs none
@@ -546,7 +524,7 @@ def cmd_monitor_sync(args):
         print(f"\n{len(state['monitors'])} monitor(s). Exa runs each every {monitor.PERIOD} and bills "
               f"${monitor.RUN_DOLLARS} a run; `python hunt.py monitor` reads what they find.")
     else:
-        print(f"\nNo monitors: [monitor].companies in {args.profile} lists none.")
+        print(f"\nNo monitors: {args.companies} lists none.")
     return 1 if problems else 0
 
 
@@ -574,8 +552,8 @@ def cmd_monitor(args):
     profile = load_profile(args.profile)
     state = _monitor_state(args.state)
     if not state["monitors"]:
-        sys.exit(f"{args.state}: no monitors yet. List companies under [monitor] in {args.profile}, then run "
-                 "`python hunt.py monitor-sync`.")
+        sys.exit(f"{args.state}: no monitors yet. Add a company with New monitor on the dashboard's Runs page, or "
+                 f"list companies in {runs.MONITORS} and run `python hunt.py monitor-sync`.")
     _require_exa()
     _require_claude()
     if not args.dry_run and not telegram.configured():
@@ -931,12 +909,8 @@ def main():
     send.add_argument("run_dir", nargs="?", help="a directory under out/; default: the latest run")
     send.set_defaults(func=cmd_send)
 
-    watch_cmd = sub.add_parser("watch", help="check watched Ashby boards and send new matching postings to Telegram")
-    watch_cmd.add_argument("--state", default="watch_state.json", help="JSON file of postings already reported")
-    watch_cmd.add_argument("--dry-run", action="store_true", help="print new matches; do not send or save state")
-    watch_cmd.set_defaults(func=cmd_watch)
-
-    sync_cmd = sub.add_parser("monitor-sync", help="create, update and delete Exa monitors to match [monitor].companies")
+    sync_cmd = sub.add_parser("monitor-sync", help="create, update and delete Exa monitors to match monitors.csv")
+    sync_cmd.add_argument("--companies", default=runs.MONITORS, help="name,domain CSV of the companies to monitor")
     sync_cmd.add_argument("--state", default=monitor.STATE, help="JSON file of the monitors and the postings judged")
     sync_cmd.set_defaults(func=cmd_monitor_sync)
 

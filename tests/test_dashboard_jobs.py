@@ -1,3 +1,4 @@
+import json
 import re
 import sys
 import time
@@ -183,13 +184,13 @@ def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, 
     assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])
 
 
-def test_the_monitor_jobs_run_their_commands_and_say_what_exa_bills(root, app):
+def test_the_scheduled_monitor_jobs_run_their_commands_and_say_what_exa_bills(root, app):
     c = client(app)
 
     sync = c.post("/runs/preview", data={"kind": "monitor_sync"}).text
     assert "python hunt.py monitor-sync" in sync
-    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.36 a month for each company" in sync
-    assert "Creates, updates and deletes monitors on your Exa account" in sync
+    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.36 a month for each company in monitors.csv" in sync
+    assert "Creates, updates and deletes monitors on your Exa account to match monitors.csv" in sync
     check = c.post("/runs/preview", data={"kind": "monitor"}).text
     assert "Sends the suitable new postings to Telegram" in check and "one call per new posting" in check
     assert "Telegram" not in c.post("/runs/preview", data={"kind": "monitor", "dry_run": "1"}).text
@@ -200,16 +201,90 @@ def test_the_monitor_jobs_run_their_commands_and_say_what_exa_bills(root, app):
     assert (checked["status"], checked["args"]) == ("succeeded", ["monitor", "--dry-run"])
 
 
+def test_new_monitor_adds_the_company_and_syncs_and_runs_shows_which_have_a_monitor(root, app):
+    c = client(app)
+    (root / "monitors.csv").write_text("# name,domain\nAcme,acme.com")  # no newline at the end, as an editor may leave it
+    (root / "monitor_state.json").write_text(json.dumps(
+        {"folder": "f1", "monitors": {"acme.com": {"id": "mon_1", "name": "Acme", "params": {}, "created_at": "2026-11-02T08:00:00Z"}}}))
+
+    form = c.get("/runs/monitors/new").text
+    assert "python hunt.py monitor-sync" in form and "about $0.36 a month for each company" in form
+    job = finished(root, started_job_id(c.post("/runs/monitors", data={"name": " Beta  Labs ", "domain": "https://www.Beta.io/"})))
+
+    assert (job["kind"], job["args"], job["label"]) == ("monitor_sync", ["monitor-sync"], "New monitor: Beta Labs (beta.io)")
+    assert (root / "monitors.csv").read_text() == "# name,domain\nAcme,acme.com\nBeta Labs,beta.io\n"
+    assert runs.read_monitors(root / "monitors.csv") == [("Acme", "acme.com"), ("Beta Labs", "beta.io")]
+    page = c.get("/runs").text
+    assert "Check monitors" not in page and "Sync monitors" not in page and "Resend notification" not in page
+    assert re.search(r"Acme</td>\s*<td[^>]*>acme\.com</td>\s*<td[^>]*>on Exa since 2026-11-02</td>", page)
+    assert re.search(r"Beta Labs</td>\s*<td[^>]*>beta\.io</td>\s*<td[^>]*>not on Exa yet</td>", page)
+
+
+@pytest.mark.parametrize(
+    "company, message",
+    [
+        ({"name": "Acme EU", "domain": "www.acme.com"}, "acme.com is monitored already"),
+        ({"name": "", "domain": "gamma.dev"}, "needs a name and a domain"),
+        ({"name": "Gamma", "domain": "gamma.dev/careers"}, "needs a name and a domain"),
+        ({"name": "Gamma", "domain": "localhost"}, "needs a name and a domain"),
+        ({"name": "# Gamma", "domain": "gamma.dev"}, "needs a name and a domain"),  # monitors.csv would read a comment
+        ({"name": "Gamma", "domain": "gamma.dev,evil.com"}, "needs a name and a domain"),  # no host name
+        ({"name": "Gamma", "domain": "gam ma.dev"}, "needs a name and a domain"),
+        ({"name": "G" * 200_000, "domain": "gamma.dev"}, "the name at most 100 characters"),  # beyond csv's field limit
+    ],
+)
+def test_new_monitor_refuses_a_company_it_cannot_monitor_and_writes_nothing(root, app, company, message):
+    (root / "monitors.csv").write_text("Acme,acme.com\n")
+
+    response = client(app).post("/runs/monitors", data=company)
+
+    assert response.status_code == 400 and message in response.text
+    assert (root / "monitors.csv").read_text() == "Acme,acme.com\n"
+    conn = db.connect(root)
+    assert jobs.recent(conn) == []  # no sync started
+    conn.close()
+
+
+def test_new_monitor_adds_nothing_while_another_command_runs_or_while_monitors_csv_cannot_be_read(root, app):
+    c = client(app)
+    with runs.lock(root):  # a sync that cannot start must not leave a company listed without a monitor
+        assert c.post("/runs/monitors", data={"name": "Beta", "domain": "beta.io"}).status_code == 409
+    assert not (root / "monitors.csv").exists()
+
+    (root / "monitors.csv").write_text("Acme\n")  # a row monitor-sync would refuse
+    assert "monitors.csv: each company needs a name and a domain" in c.get("/runs").text
+    response = c.post("/runs/monitors", data={"name": "Beta", "domain": "beta.io"})
+    assert response.status_code == 400 and "monitors.csv: each company needs a name" in response.text
+    assert (root / "monitors.csv").read_text() == "Acme\n"
+
+
+def test_new_monitor_never_starts_a_list_that_would_make_its_sync_delete_the_monitors_running(root, app):
+    """monitor-sync deletes the monitor of every company monitors.csv leaves out: a list of the new company alone,
+    while monitor_state.json lists others, would delete them and forget the postings they judged."""
+    (root / "monitor_state.json").write_text(json.dumps({"folder": "f1", "monitors": {
+        "acme.com": {"id": "mon_1", "name": "Acme", "params": {}}, "beta.io": {"id": "mon_2", "name": "Beta", "params": {}}}}))
+    c = client(app)
+
+    assert "monitors.csv not found, and 2 monitor(s) of this folder run on Exa" in c.get("/runs").text
+    response = c.post("/runs/monitors", data={"name": "Gamma", "domain": "gamma.dev"})
+    assert response.status_code == 400 and "create it with a name,domain row per company to keep" in response.text
+    assert not (root / "monitors.csv").exists()
+
+    (root / "monitors.csv").write_text("Acme,acme.com\nBeta,beta.io\n")  # the list the sync keeps them for
+    finished(root, started_job_id(c.post("/runs/monitors", data={"name": "Gamma", "domain": "gamma.dev"})))
+    assert runs.read_monitors(root / "monitors.csv") == [("Acme", "acme.com"), ("Beta", "beta.io"), ("Gamma", "gamma.dev")]
+
+
 def test_one_command_at_a_time(root, app, monkeypatch):
     c = client(app)
-    with runs.lock(root):  # e.g. a cron `hunt.py watch`
-        response = c.post("/runs", data={"kind": "watch", "dry_run": "1"})
+    with runs.lock(root):  # e.g. a hunt.py command from a shell
+        response = c.post("/runs", data={"kind": "news", "dry_run": "1"})
         assert response.status_code == 409
         assert "A hunt.py command is running" in c.get("/runs").text
 
     monkeypatch.setenv("STUB_SLEEP", "30")
-    job_id = started_job_id(c.post("/runs", data={"kind": "watch", "dry_run": "1"}))
-    assert c.post("/runs", data={"kind": "watch"}).status_code == 409
+    job_id = started_job_id(c.post("/runs", data={"kind": "news", "dry_run": "1"}))
+    assert c.post("/runs", data={"kind": "news"}).status_code == 409
 
     assert c.post(f"/runs/jobs/{job_id}/cancel").status_code == 204
     assert finished(root, job_id)["status"] == "cancelled"
@@ -233,9 +308,11 @@ def test_jobs_left_running_by_a_previous_process_are_marked_interrupted(root):
 
 def test_requests_from_other_sites_are_refused(root, app):
     c = client(app)
-    form = {"kind": "watch", "dry_run": "1"}
+    form = {"kind": "news", "dry_run": "1"}
 
     assert c.post("/runs", data=form, headers={"X-CSRF-Token": "stale"}).status_code == 403
+    assert c.post("/runs/monitors", data={"name": "Beta", "domain": "beta.io"},
+                  headers={"Origin": "https://evil.example"}).status_code == 403
     assert c.post("/runs", data=form, headers={"Origin": "https://evil.example"}).status_code == 403
     assert c.post("/track", data={"kind": "company", "ref": "acme.com", "status": "saved"},
                   headers={"X-CSRF-Token": ""}).status_code == 403

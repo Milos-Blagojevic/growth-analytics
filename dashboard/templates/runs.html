@@ -5,7 +5,7 @@
   <h1>Runs</h1>
   {% if busy %}<span class="badge v-stretch"><span class="dot pulse"></span> A hunt.py command is running</span>{% endif %}
 </div>
-<p class="muted small">Starts <code>hunt.py</code> commands in this folder, one at a time (a cron <code>watch</code> or a shell command counts too). Paid commands and anything that sends to Telegram ask for confirmation first, with a cost estimate.</p>
+<p class="muted small">Starts <code>hunt.py</code> commands in this folder, one at a time (a cron job or a shell command counts too). Paid commands and anything that sends to Telegram ask for confirmation first, with a cost estimate.</p>
 
 <div class="launchers">
   <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
@@ -35,29 +35,6 @@
   </form>
 
   <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
-    <input type="hidden" name="kind" value="watch">
-    <h2>Check watch list</h2>
-    <p class="muted small">Polls your Ashby boards for new matching postings. Free.</p>
-    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
-    <button class="btn primary" type="submit">Review and start…</button>
-  </form>
-
-  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
-    <input type="hidden" name="kind" value="monitor">
-    <h2>Check monitors</h2>
-    <p class="muted small">Reads what your Exa monitors found since the last check and sends the postings that suit you to Telegram. Jev + Claude.</p>
-    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
-    <button class="btn primary" type="submit">Review and start…</button>
-  </form>
-
-  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
-    <input type="hidden" name="kind" value="monitor_sync">
-    <h2>Sync monitors</h2>
-    <p class="muted small">Creates, updates and deletes the Exa monitors to match <code>[monitor].companies</code> in <code>profile.toml</code>. Exa runs each one every 4 hours.</p>
-    <button class="btn primary" type="submit">Review and start…</button>
-  </form>
-
-  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
     <input type="hidden" name="kind" value="mail">
     <h2>Check email</h2>
     <p class="muted small">Finds rejections and interview invites in new Outlook mail and suggests status changes on <a class="link" href="/pipeline">Pipeline</a>. Jev + Claude.</p>
@@ -72,20 +49,32 @@
     <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
     <button class="btn primary" type="submit">Review and start…</button>
   </form>
-
-  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
-    <input type="hidden" name="kind" value="send">
-    <h2>Resend notification</h2>
-    <p class="muted small">Sends a saved run's short notification to Telegram again. Free.</p>
-    {% set scored = saved | selectattr('scored') | list %}
-    <label class="field">Run
-      <select name="run_id" {{ 'disabled' if not scored }}>
-        {% for r in scored %}<option value="{{ r.id }}">{{ r.saved_at[:16] | replace('T', ' ') }} · {{ r.scored }} scored</option>{% endfor %}
-      </select>
-    </label>
-    <button class="btn primary" type="submit" {{ 'disabled' if not scored }}>Review and start…</button>
-  </form>
 </div>
+
+<section class="block">
+  <h2>Monitors <span class="count">{{ monitored | length }}</span>
+    <button class="btn primary sm" type="button" hx-get="/runs/monitors/new" hx-target="#panel" {{ 'disabled' if monitors_error }}>New monitor</button>
+  </h2>
+  <p class="muted small">Exa searches each company's own site and job boards for new postings in your target roles every 4 hours, about $0.36 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>; a company removed there loses its monitor at the next <code>monitor-sync</code>.</p>
+  {% if monitors_error %}
+  <div class="note error">{{ monitors_error }}</div>
+  {% elif monitored %}
+  <table class="table">
+    <thead><tr><th>Company</th><th>Domain</th><th>Monitor</th></tr></thead>
+    <tbody>
+      {% for m in monitored %}
+      <tr>
+        <td>{{ m.name }}</td>
+        <td class="muted">{{ m.domain }}</td>
+        <td class="muted">{% if m.on_exa %}on Exa{% if m.since %} since {{ m.since[:10] }}{% endif %}{% else %}not on Exa yet{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty slim">No companies monitored yet.</div>
+  {% endif %}
+</section>
 
 <section class="block">
   <h2>Schedule <span class="count">{{ schedules | length if schedules else 0 }}</span></h2>

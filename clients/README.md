@@ -8,7 +8,7 @@ Thin clients for the outside services the other folders share: Exa search, TypeS
 |---|---|
 | `exa_client.py` | Exa client: the only place that talks to Exa, for search, contents, agent runs and monitors (retries, cost logging, cost tally) |
 | `jev.py` | TypeSafe's Jev decision model: the only place that calls TypeSafe (retries, usage tally, cost per token) |
-| `ashby.py` | Ashby public job-board API client (used by link checks and the watch list) |
+| `ashby.py` | Ashby public job-board API client (used by posting link checks) |
 | `telegram.py` | Telegram delivery and `getUpdates` polling for the chat bot |
 | `posthog_client.py` | PostHog: the only place that talks to PostHog, for the dashboard's events and errors, a generation per model call and the commands' log records (off without its two settings; never sends text) |
 
