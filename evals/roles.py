@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from clients import jev
 from pipeline import scoring
@@ -25,6 +25,14 @@ class Role(BaseModel):
     description: str = Field(min_length=1)
 
 
+class Source(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl
+    captured_at: datetime
+    text_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class Case(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -33,6 +41,7 @@ class Case(BaseModel):
     expected: Literal["keep", "drop"]
     label_reason: str = Field(min_length=1)
     role: Role
+    source: Source | None = None
 
 
 class Candidate(BaseModel):
@@ -47,7 +56,7 @@ class Dataset(BaseModel):
 
     schema_version: Literal[1]
     name: str
-    kind: Literal["synthetic"]
+    kind: Literal["synthetic", "real"]
     label_source: str
     candidate: Candidate
     cases: list[Case] = Field(min_length=1)
@@ -62,6 +71,11 @@ def load(path=DATASET):
         raise ValueError("The dataset contains duplicate case ids")
     if any(not role.strip() for role in dataset.candidate.target_roles):
         raise ValueError("Candidate target roles must not be blank")
+    for case in dataset.cases:
+        if dataset.kind == "real" and case.source is None:
+            raise ValueError(f"Real posting {case.id} must record source provenance")
+        if case.source and hashlib.sha256(case.role.description.encode()).hexdigest() != case.source.text_sha256:
+            raise ValueError(f"Source text hash mismatch for {case.id}")
     return dataset, hashlib.sha256(raw).hexdigest()
 
 
@@ -133,7 +147,7 @@ def run(dataset, dataset_sha256, cases):
         "model_requested": jev.model(),
         "python": platform.python_version(),
         "dataset_sha256": dataset_sha256,
-        "dataset": dataset.model_dump(),
+        "dataset": dataset.model_dump(mode="json"),
         "source_sha256": {
             name: hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
             for name, module in (("screen", scoring), ("client", jev))
@@ -151,7 +165,8 @@ def run(dataset, dataset_sha256, cases):
     encoded = json.dumps(report["screen_configuration"], sort_keys=True).encode()
     report["screen_configuration_sha256"] = hashlib.sha256(encoded).hexdigest()
     for case in cases:
-        posting = case.role.model_dump() | {"url": f"https://example.invalid/jobs/{case.id}"}
+        url = str(case.source.url) if case.source else f"https://example.invalid/jobs/{case.id}"
+        posting = case.role.model_dump() | {"url": url}
         row = {"id": case.id, "split": case.split, "expected": case.expected, "actual": None}
         try:
             result = scoring.screen_roles({"content": {"open_roles": [posting]}}, profile)["roles"][0]
@@ -182,8 +197,9 @@ def markdown(report):
         "# Jev role-screen evaluation", "",
         f"Status: **{report['status'].upper()}**. Requested model: `{report['model_requested']}`.",
         f"Started: {report['started_at']}. Finished: {report['finished_at']}.", "",
-        "Nine-case synthetic smoke exam (or the selected subset), labeled by the owner before execution. "
-        "This is not an estimate of real-world accuracy. Keep means inspect with Claude, not apply.", "",
+        f"Exam: **{report['dataset']['name']}**. "
+        f"{len(report['rows'])} selected {report['dataset']['kind']} cases, labeled before model execution. "
+        "This curated set is not an estimate of real-world accuracy. Keep means inspect with Claude, not apply.", "",
         "False drops are wanted inspections incorrectly discarded; false keeps are clear mismatches passed through. "
         "Errors are unanswered cases, never successful keeps. An incomplete run supports no overall quality claim.", "",
         "| Split | Cases | Evaluated | Correct | False drops | False keeps | Errors |",
@@ -199,9 +215,15 @@ def markdown(report):
         outcome = "ERROR" if row["actual"] is None else "PASS" if row["expected"] == row["actual"] else "FAIL"
         lines.append(f"| {row['id']} | {row['split']} | {row['expected']} | {row['actual'] or 'unanswered'} | {outcome} |")
     lines.extend(["", "## Decision evidence", ""])
-    labels = {case["id"]: case["label_reason"] for case in report["dataset"]["cases"]}
+    cases = {case["id"]: case for case in report["dataset"]["cases"]}
     for row in report["rows"]:
-        lines.extend([f"### {row['id']}", "", f"Label reason: {labels[row['id']]}", ""])
+        case = cases[row["id"]]
+        lines.extend([f"### {row['id']}", "", f"Label reason: {case['label_reason']}", ""])
+        if source := case.get("source"):
+            lines.extend([
+                f"Source: {source['url']}", "",
+                f"Snapshot: {source['captured_at']}; text SHA-256: `{source['text_sha256']}`.", "",
+            ])
         if row["actual"] is None:
             lines.extend([f"Error: {row['error']}. No decision or probability evidence is credited.", ""])
             continue
@@ -220,7 +242,8 @@ def markdown(report):
         f"- Dataset SHA-256: `{report['dataset_sha256']}`.",
         f"- Questions and thresholds SHA-256: `{report['screen_configuration_sha256']}`.",
         *(f"- {name.title()} source SHA-256: `{digest}`." for name, digest in report["source_sha256"].items()),
-        f"- Rerun: `python -m evals roles --live --split {split} --output NEW_DIRECTORY`.",
+        f"- Rerun with the matching frozen dataset file: "
+        f"`python -m evals roles --dataset DATASET_JSON --live --split {split} --output NEW_DIRECTORY`.",
         f"- Client-tallied responses: {report['usage']['requests']}; "
         f"reported input tokens: {report['usage']['input_tokens']}; "
         f"estimated cost: ${report['usage']['dollars']:.6f}.",

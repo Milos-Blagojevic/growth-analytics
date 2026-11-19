@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every
 
 ## Eval runner versus model quality
 
-`test_evals.py` checks grading, split isolation, explicit paid-call opt-in, error accounting, public-report safety and preservation of existing baselines using the HTTP-level Jev fake. A fresh-process probe rejects private configuration and network access from the free command; malformed and unsolicited provider fields exercise safe reporting. These software tests do not measure the real model's judgment. The separate [AI eval runner](../evals/README.md) uses public human-labeled cases; its default command is free, and only explicit `--live` calls TypeSafe. Do not run live evals as part of the ordinary test suite.
+`test_evals.py` checks grading, split isolation, explicit dataset selection, source-provenance/hash validation before spending, explicit paid-call opt-in, error accounting, public-report safety and preservation of existing baselines using the HTTP-level Jev fake. A fresh-process probe rejects private configuration and network access from the free command; malformed and unsolicited provider fields exercise safe reporting. These software tests do not measure the real model's judgment. The separate [AI eval runner](../evals/README.md) uses public human-labeled cases; its default command is free, and only explicit `--live` calls TypeSafe. Do not run live evals as part of the ordinary test suite.
 
 
 ## Independent verification

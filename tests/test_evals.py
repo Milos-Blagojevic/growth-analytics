@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -252,3 +253,64 @@ def test_unsolicited_provider_diagnostics_never_enter_public_evidence(http, monk
     assert "provider_diagnostic" not in raw
     assert "DO_NOT_PUBLISH" not in raw
     assert "DO_NOT_PUBLISH" not in (output / "README.md").read_text()
+
+
+@pytest.fixture
+def alternate_exam(tmp_path):
+    cases = []
+    for case_id, expected, title, description in (
+        ("inspect", "keep", "Senior Analytics Engineer", "Own SQL models, dbt testing, and analytics infrastructure."),
+        ("reject", "drop", "Office Manager", "Manage office supplies and travel bookings, with no engineering duties."),
+    ):
+        cases.append({
+            "id": case_id, "split": "calibration", "expected": expected, "label_reason": "Human-reviewed test case.",
+            "role": {"title": title, "location": "Remote worldwide", "remote_or_relocation": "Remote", "description": description},
+            "source": {
+                "url": f"https://example.com/jobs/{case_id}",
+                "captured_at": "2026-11-18T19:00:00+00:00",
+                "text_sha256": hashlib.sha256(description.encode()).hexdigest(),
+            },
+        })
+    fields = {
+        "schema_version": 1, "name": "Different answer key", "kind": "real", "label_source": "Test fixture",
+        "candidate": {"location": "Belgrade, Serbia", "target_roles": ["analytics engineer"]},
+        "cases": cases,
+    }
+    path = tmp_path / "alternate.json"
+    path.write_text(json.dumps(fields))
+    return path
+
+
+def test_explicit_exam_is_graded_instead_of_the_default_corpus(alternate_exam, jev_api, tmp_path):
+    jev_api.on(neutral)  # Keeping both is one mistake on this exam, not the default exam's five.
+    output = tmp_path / "alternate-results"
+
+    assert main(["roles", "--dataset", str(alternate_exam), "--live", "--output", str(output)]) == 1
+
+    report = json.loads((output / "results.json").read_text())
+    assert report["metrics"] == {
+        "cases": 2, "expected_keep": 1, "expected_drop": 1,
+        "evaluated": 2, "correct": 1, "false_drops": 0, "false_keeps": 1, "errors": 0,
+    }
+    assert len(jev_api.requests) == 2  # Never spend on a different, unselected exam.
+
+
+@pytest.mark.parametrize("problem", ["missing_source", "changed_description", "changed_hash", "unsafe_source_url"])
+def test_invalid_source_evidence_is_rejected_before_spending(alternate_exam, jev_api, tmp_path, problem):
+    fields = json.loads(alternate_exam.read_text())
+    case = fields["cases"][0]
+    if problem == "missing_source":
+        del case["source"]
+    elif problem == "changed_description":
+        case["role"]["description"] += " New evidence not present when the case was labeled."
+    elif problem == "changed_hash":
+        case["source"]["text_sha256"] = "0" * 64
+    else:
+        case["source"]["url"] = "javascript:alert(1)"
+    alternate_exam.write_text(json.dumps(fields))
+    output = tmp_path / "invalid-results"
+
+    assert main(["roles", "--dataset", str(alternate_exam), "--live", "--output", str(output)]) == 2
+
+    assert jev_api.requests == []
+    assert not output.exists()

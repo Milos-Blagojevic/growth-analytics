@@ -69,7 +69,7 @@ python -m clients.exa_client
 | `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
 | `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
 | `python -m dashboard` | Dashboard: results, tracking, starting jobs | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard) |
-| `python -m evals roles` | Validate the public Jev keep/drop exam; `--live --output NEW_DIRECTORY` runs it and saves reports | No by default; Jev with `--live` | No | [AI evaluations](evals/README.md) |
+| `python -m evals roles` | Validate the public Jev keep/drop exam; `--dataset FILE` selects a frozen exam, `--live --output NEW_DIRECTORY` scores it and saves reports | No by default; Jev with `--live` | No | [AI evaluations](evals/README.md) |
 | `python -m pytest` | Test suite, no keys and no network | No | No | [Tests](tests/README.md#run-the-tests) |
 
 ## Files
@@ -79,7 +79,7 @@ python -m clients.exa_client
 | `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic,logfire]` and `logfire` for the chat bot and its traces, `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard, `posthog` and the OpenTelemetry packages its log export uses (`opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`), and `duckdb` for the prospect warehouse) |
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`, `PyYAML` for the Verify workflow test) |
 | `pytest.ini` | pytest settings: test paths and options |
-| `evals/data/roles.json`, `evals/results/<run>/` | Public synthetic exam and owner-reviewed labels; selected live result directories can be committed with per-case evidence and a Markdown report |
+| `evals/data/roles*.json`, `evals/sessions/`, `evals/results/<run>/` | Public synthetic/real-posting exams, source-backed owner-labeling records, and selected live result directories with per-case evidence and Markdown reports |
 | `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see [Verify in CI](tests/README.md#verify-in-ci)) |
