@@ -37,16 +37,22 @@ def test_without_both_the_token_and_the_host_nothing_is_sent(caplog):
     assert not posthog_client.configured()
 
 
-def test_events_carry_no_person_and_name_the_service(posthog_api):
+def test_every_event_is_the_owners_and_makes_no_person(posthog_api):
+    """One fixed id joins the owner's events, so funnels and retention can follow them; none makes or changes a
+    person profile."""
     posthog_client.capture("project_created")
     posthog_client.capture("hunt_run_started", {"kind": "monitor", "trigger": "schedule"})
+    posthog_client.generation("exa", "search-auto", latency=1.5)
+    posthog_client.capture_exception(ValueError("boom"))
 
-    first, second = posthog_api.events()
-    assert (first["event"], second["event"]) == ("project_created", "hunt_run_started")
-    assert first["distinct_id"] != second["distinct_id"]  # a new random id each time: no two events are one person's
-    assert first["properties"]["$process_person_profile"] is False
-    assert first["properties"]["service"] == "tests"
-    assert second["properties"] | {"kind": "monitor", "trigger": "schedule"} == second["properties"]
+    events = posthog_api.events()
+    assert [event["event"] for event in events] == ["project_created", "hunt_run_started", "$ai_generation", "$exception"]
+    for event in events:
+        assert event["distinct_id"] == posthog_client.OWNER
+        assert event["options"]["process_person_profile"] is False
+        assert event["properties"]["service"] == "tests"
+        assert not event["properties"].keys() & {"$set", "$set_once", "$groups", "$process_person_profile"}
+    assert events[1]["properties"] | {"kind": "monitor", "trigger": "schedule"} == events[1]["properties"]
 
 
 def test_a_claude_call_is_a_generation_with_its_tokens_and_none_of_its_text(posthog_api, fake_claude):
@@ -163,6 +169,7 @@ def test_a_posthog_failure_is_logged_and_never_reaches_the_work_it_reports_on(po
         raise RuntimeError("queue is gone")
 
     monkeypatch.setattr(posthog_client._client, "capture", broken)
+    monkeypatch.setattr(posthog_client._client, "capture_ai", broken)
     monkeypatch.setattr(posthog_client._client, "capture_exception", broken)
     monkeypatch.setattr(posthog_client._records[1], "emit", broken)
 
@@ -186,7 +193,7 @@ def test_posthog_refusing_what_is_sent_is_survived_and_shutdown_turns_it_off(pos
     posthog_client.flush()  # both senders log the refusal; neither raises nor tries again
     posthog_client.shutdown()
 
-    assert sorted(path for path, _ in posthog_api.requests()) == ["/batch/", "/i/v1/logs"]
+    assert sorted(path for path, _ in posthog_api.requests()) == ["/i/v1/analytics/events", "/i/v1/logs"]
     assert not posthog_client.configured()
     posthog_client.capture("project_deleted")  # off again: nothing is queued, nothing is asked
     assert len(posthog_api.requests()) == 2
@@ -194,18 +201,21 @@ def test_posthog_refusing_what_is_sent_is_survived_and_shutdown_turns_it_off(pos
 
 def test_a_posthog_that_is_down_gets_seconds_and_one_more_try_then_what_is_left_is_dropped(posthog_api):
     """A command sends what is queued when it exits (`shutdown`). With PostHog down that may hold the exit, and a
-    dashboard job with it, only for a few seconds: every request has a short timeout and a batch one more try."""
+    dashboard job with it, only for a few seconds: every request has a short timeout and a batch one more try, on
+    the AI events' own lane too."""
     posthog_client.log("dashboard_started")
     posthog_client.flush()
     posthog_api.status = 503
     posthog_client.capture("project_created")
+    posthog_client.generation("anthropic", "claude-test", input_tokens=10)
 
     started = time.monotonic()
     posthog_client.shutdown()
 
     assert time.monotonic() - started < 10
     requests_made = posthog_api.requests()
-    assert [path for path, _ in requests_made] == ["/i/v1/logs"] + ["/batch/"] * (posthog_client.RETRIES + 1)
+    assert sorted(path for path, _ in requests_made) == sorted(
+        ["/i/v1/logs"] + ["/i/v1/analytics/events", "/i/v1/ai/events"] * (posthog_client.RETRIES + 1))
     assert all(0 < timeout <= posthog_client.TIMEOUT <= 5 for _, timeout in requests_made)
 
 
@@ -228,6 +238,7 @@ def test_an_exception_is_reported_by_its_type_and_stack_never_by_what_it_says(po
     thread.join()
 
     caught, uncaught = posthog_api.events("$exception")
+    assert caught["distinct_id"] == uncaught["distinct_id"] == posthog_client.OWNER  # the SDK's own capture too
     properties = caught["properties"]
     assert (properties["route"], properties["method"], properties["service"]) == ("/c/{domain}", "GET", "dashboard")
     for reported, kind, function in ((caught, "ValueError", "test_an_exception_is_reported_by_its_type_and_stack_"

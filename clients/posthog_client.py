@@ -7,10 +7,14 @@ queued and sent by background threads, and a failure is logged and never reaches
 still queued when a process exits is sent then, for a bounded time (TIMEOUT, RETRIES, FLUSH_MILLIS), and dropped
 after it.
 
-PostHog is a third party, so what goes to it is limited here, by what these functions take:
+PostHog is a third party, so what goes to it is limited here, by what these functions take, and every event leaves
+as the owner's (`OWNER`: one fixed id that names no one, so PostHog can join the owner's events in funnels and
+retention) without a person profile (`_before_send`): no identify, no person or group properties.
 
 - `capture`: something the owner did on the dashboard, by name, with a few properties from fixed sets (a status, a
-  job kind, a count). No person: PostHog gets a new random id with every event.
+  job kind, a count).
+- `pageview`: a page of the dashboard the owner opened, by its route as it is declared (`/c/{domain}`), never the
+  address asked for or its query.
 - `generation`, `parse_anthropic`, `agent_turn`, `instrument_tool`: a model call or a tool call as provider, model,
   token counts, seconds, trace and session. Never a prompt, an answer, a tool's arguments or what it returned: those
   hold the CV, emails, interview transcripts and pricing.
@@ -48,6 +52,10 @@ CODE = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep  # w
 TIMEOUT = 3  # seconds PostHog gets to answer one request
 RETRIES = 1  # of a batch of events that could not be sent; after it the batch is dropped
 FLUSH_MILLIS = 2_000  # how long a flush waits for the log records to be sent
+# The distinct id of every event: the dashboard has one owner and no accounts, and the commands, the chat bot and
+# the evals are the same person's. A fixed name that says nothing about who the owner is, and not a placeholder such
+# as "anonymous" or "guest", which PostHog takes for an id many people share. No person profile is behind it.
+OWNER = "growth-analytics-owner"
 
 _client = None  # the process's posthog.Posthog, once configured
 _records = None  # (LoggerProvider, its logger): log records go out through a provider of their own, never the global one
@@ -71,8 +79,10 @@ def configure(token, host, *, service, exceptions=False):
     host = host.rstrip("/")
     try:
         # privacy_mode: should one of the SDK's own model wrappers ever be used, it leaves prompts and answers out too.
-        client = Posthog(token, host=host, timeout=TIMEOUT, max_retries=RETRIES, privacy_mode=True,
-                         before_send=_without_messages, enable_exception_autocapture=exceptions,
+        # capture_ai_timeout: the AI events ($ai_generation, $ai_span) go out on a lane of their own, with a timeout
+        # of their own.
+        client = Posthog(token, host=host, timeout=TIMEOUT, capture_ai_timeout=TIMEOUT, max_retries=RETRIES,
+                         privacy_mode=True, before_send=_before_send, enable_exception_autocapture=exceptions,
                          super_properties={"service": service})
         provider = LoggerProvider(resource=Resource.create({"service.name": service}), shutdown_on_exit=False)
         provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(
@@ -85,10 +95,18 @@ def configure(token, host, *, service, exceptions=False):
     return True
 
 
+def _before_send(event):
+    """The SDK's last step before it queues an event (an event this raises on is dropped). Every event, the
+    exceptions the SDK catches by itself included, leaves as the owner's and without a person profile."""
+    event["distinct_id"] = OWNER
+    event.setdefault("options", {})["process_person_profile"] = False
+    return _without_messages(event)
+
+
 def _without_messages(event):
-    """The SDK's last step before it queues an event (an event this raises on is dropped). An exception keeps its
-    type and its stack and loses its message, and each frame says where its file is in the code, not on this
-    machine: the first can name a company or quote what was read, the second holds the home folder's name."""
+    """An exception keeps its type and its stack and loses its message, and each frame says where its file is in
+    the code, not on this machine: the first can name a company or quote what was read, the second holds the home
+    folder's name."""
     for raised in event["properties"].get("$exception_list") or []:
         raised["value"] = ""
         for frame in (raised.get("stacktrace") or {}).get("frames") or []:
@@ -152,6 +170,12 @@ def capture(event, properties=None):
         logger.warning("PostHog capture of %s failed", event, exc_info=True)
 
 
+def pageview(route):
+    """A page of the dashboard the owner opened ($pageview), by its route as it is declared (`/c/{domain}`): the
+    address asked for names a company or an interview, and its query holds what was searched."""
+    capture("$pageview", {"$current_url": route, "$pathname": route})
+
+
 def capture_exception(exc, properties=None):
     """An exception nothing handled: its type and stack (see `_without_messages`), plus `properties`."""
     if _client is None:
@@ -194,7 +218,7 @@ def generation(provider, model, *, input_tokens=None, output_tokens=None, latenc
                            ("$ai_latency", latency)):
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 properties[key] = value
-        _client.capture("$ai_generation", properties=properties)
+        _client.capture_ai("$ai_generation", properties=properties)
     except Exception:
         logger.warning("PostHog capture of a %s generation failed", provider, exc_info=True)
 
@@ -260,7 +284,7 @@ def _span(name, seconds, error):
                       "$ai_span_id": str(uuid4()), "$ai_span_name": name, "$ai_latency": seconds}
         if error:
             properties |= {"$ai_is_error": True, "$ai_error": error}
-        _client.capture("$ai_span", properties=properties)
+        _client.capture_ai("$ai_span", properties=properties)
     except Exception:
         logger.warning("PostHog capture of a %s span failed", name, exc_info=True)
 

@@ -1,7 +1,8 @@
-"""PostHog's ingestion endpoints in their wire format, for tests (registered on the `responses` mock): the SDK's
-POST /batch/ for events and OTLP's POST /i/v1/logs for log records."""
+"""PostHog's ingestion endpoints in their wire format, for tests (registered on the `responses` mock): capture v1's
+POST /i/v1/analytics/events and POST /i/v1/ai/events for events, and OTLP's POST /i/v1/logs for log records."""
 
 import json
+from datetime import datetime
 
 import responses
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
@@ -10,28 +11,39 @@ from clients import posthog_client
 
 HOST = "https://eu.i.posthog.com"
 TOKEN = "phc_test"
+EVENTS_PATH = "/i/v1/analytics/events"
+AI_EVENTS_PATH = "/i/v1/ai/events"
 
 
 class PostHogMock:
     """Turns PostHog on for the test (service "tests"; POSTHOG_PROJECT_TOKEN and POSTHOG_HOST are set too, for code
     that configures it from the environment) and collects what reaches it. `events()` and `records()` first send
-    what is queued. `status` is what both endpoints answer with, and only what got a 200 counts as received: 400 is
-    a refusal the senders do not retry, 503 an outage. `requests()` is every request made, answered or not."""
+    what is queued. `status` is what every endpoint answers with, and only what got a 200 counts as received: 400 is
+    a refusal the senders do not retry, 503 an outage. The AI endpoint drops an event that is not an AI event, as
+    PostHog does. `requests()` is every request made, answered or not."""
 
     def __init__(self, http, monkeypatch):
         monkeypatch.setenv("POSTHOG_PROJECT_TOKEN", TOKEN)
         monkeypatch.setenv("POSTHOG_HOST", HOST)
         self.status = 200
-        self._batches, self._exports, self._requests = [], [], []
-        http.add_callback(responses.POST, f"{HOST}/batch/", callback=self._batch, content_type="application/json")
+        self._events, self._exports, self._requests = [], [], []
+        for path in (EVENTS_PATH, AI_EVENTS_PATH):
+            http.add_callback(responses.POST, f"{HOST}{path}", callback=self._capture, content_type="application/json")
         http.add_callback(responses.POST, f"{HOST}{posthog_client.LOGS_PATH}", callback=self._logs)
         posthog_client.configure(TOKEN, HOST, service="tests")
 
-    def _batch(self, request):
+    def _capture(self, request):
         self._requests.append((request.path_url, request.req_kwargs.get("timeout")))
-        if self.status == 200:
-            self._batches.append(json.loads(request.body))
-        return self.status, {}, json.dumps({"status": 1})
+        if self.status != 200:
+            return self.status, {}, json.dumps({"error": "unavailable", "error_description": "answered by the test"})
+        results = {}
+        for event in json.loads(request.body)["batch"]:
+            if request.path_url == AI_EVENTS_PATH and not event["event"].startswith("$ai_"):
+                results[event["uuid"]] = {"result": "drop", "details": "misrouted_event"}
+            else:
+                results[event["uuid"]] = {"result": "ok"}
+                self._events.append((request.headers.get("Authorization"), request.path_url, event))
+        return 200, {}, json.dumps({"results": results})
 
     def _logs(self, request):
         self._requests.append((request.path_url, request.req_kwargs.get("timeout")))
@@ -44,11 +56,14 @@ class PostHogMock:
         return list(self._requests)
 
     def events(self, name=None):
-        """Every event received so far, oldest first (only those called `name`, when given): {"event",
-        "distinct_id", "properties", ...} as the SDK sent it."""
+        """Every event received so far, oldest first (only those called `name`, when given): {"event", "uuid",
+        "distinct_id", "timestamp", "options", "properties"} as the SDK sent it. AI events come through their own
+        endpoint, the others through the analytics one."""
         posthog_client.flush()
-        assert all(batch["api_key"] == TOKEN for batch in self._batches)
-        events = [event for batch in self._batches for event in batch["batch"]]
+        assert all(authorization == f"Bearer {TOKEN}" for authorization, _, _ in self._events)
+        assert all((path == AI_EVENTS_PATH) == event["event"].startswith("$ai_") for _, path, event in self._events)
+        # The two endpoints are sent to by threads of their own: the time each event was made puts them in order.
+        events = sorted((event for _, _, event in self._events), key=lambda e: datetime.fromisoformat(e["timestamp"]))
         return [event for event in events if name in (None, event["event"])]
 
     def records(self):

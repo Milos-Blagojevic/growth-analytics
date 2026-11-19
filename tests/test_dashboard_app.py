@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import uvicorn
 
+from clients import posthog_client
 from dashboard import __main__ as entry
 from dashboard import db, jobs, projects, queries, schedule
 from dashboard.app import create_app
@@ -315,7 +316,6 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     assert c.post(f"/runs/jobs/{running}/cancel").status_code == 204
     finished(root, running)
     assert c.post(f"/runs/jobs/{running}/cancel").status_code == 409
-    assert c.get("/c/acme.com").status_code == 200  # looking at a page is not an event
 
     events = posthog_api.events()
     assert [own(event) for event in events] == [
@@ -337,9 +337,38 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("hunt_run_started", {"kind": "watch", "trigger": "button"}),
         ("hunt_run_cancelled", {}),
     ]
-    assert len({event["distinct_id"] for event in events}) == len(events)  # no person to tie them to
+    assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}  # one owner, no person profile
+    assert all(event["options"]["process_person_profile"] is False for event in events)
     told = json.dumps(events).lower()
     for private in ("acme", "delta", "epsilon", "private", "127.0.0.1", "$ip", "$current_url", "$request_path"):
+        assert private not in told
+
+
+def test_each_page_the_owner_opens_reaches_posthog_as_a_pageview_of_its_route_and_nothing_they_asked_for(
+        root, posthog_api):
+    c = make_client(create_app(root, password="correct horse battery"))
+    htmx = {"HX-Request": "true"}
+
+    assert c.get("/?q=PRIVATE-SEARCH").status_code == 200  # not logged in: the guard sends the browser to /login
+    assert c.post("/login", data={"password": "correct horse battery"}).status_code == 204
+    assert c.get("/?q=PRIVATE-SEARCH&verdict=stretch").status_code == 200
+    assert c.get("/?q=PRIVATE-SEARCH", headers=htmx).status_code == 200  # the board's live filter: the same page
+    assert c.get("/c/acme.com").status_code == 200
+    assert c.get("/c/beta.io", headers=htmx).status_code == 200  # the slide-over panel over the board
+    assert c.get("/projects/new", headers=htmx).status_code == 200  # a form in the panel
+    assert c.get("/leads").status_code == 200
+    assert c.get("/static/app.css").status_code == 200  # not a page
+    assert c.get("/c/nope.com").status_code == 404  # an answer, not a page
+    assert c.head("/leads").status_code == 405  # nothing was opened
+    assert c.get("/login").status_code == 200  # logged in already: sent on to the board
+    assert c.get("/leads", headers={"Host": "evil.example"}).status_code == 400  # refused by the guard
+
+    events = posthog_api.events()
+    assert [(event["event"], event["properties"]["$current_url"], event["properties"]["$pathname"])
+            for event in events] == [("$pageview", route, route) for route in ("/login", "/", "/c/{domain}", "/leads", "/")]
+    assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}
+    told = json.dumps(events).lower()
+    for private in ("acme", "beta", "private", "stretch", "127.0.0.1", "evil", "$ip", "$referrer", "$host"):
         assert private not in told
 
 
