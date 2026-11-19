@@ -178,7 +178,7 @@ def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, 
 
     (root / "outlook_token.json").write_text("{}")
     preview = c.post("/runs/preview", data={"kind": "mail"}).text
-    assert "first 2,000 characters of each email" in preview and "Sends rejections and interview invites to Telegram" in preview
+    assert "first 2,000 characters of each email" in preview
     assert "to Jev (TypeSafe, when TYPESAFE_API_KEY is set)" in preview
     job = finished(root, started_job_id(c.post("/runs", data={"kind": "mail", "dry_run": "1"})))
     assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])

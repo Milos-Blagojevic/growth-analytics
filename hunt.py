@@ -8,7 +8,7 @@
     python hunt.py monitor-sync              # keep one Exa monitor per company in monitors.csv (Exa runs them)
     python hunt.py monitor [--dry-run]       # send the suitable new postings the monitors found (Claude)
     python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
-    python hunt.py mail [--dry-run]          # find rejections and interview invites in new email (Claude)
+    python hunt.py mail [--dry-run]          # find application confirmations, rejections and interview invites in new email (Claude)
     python hunt.py news [--dry-run]          # news digest on your [news].topics (Exa + Claude)
     python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
     python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
@@ -923,7 +923,8 @@ def main():
     login_cmd.add_argument("--token", default=outlook.TOKEN_FILE, help="where the sign-in is saved")
     login_cmd.set_defaults(func=cmd_outlook_login)
 
-    mail_cmd = sub.add_parser("mail", help="find rejections and interview invites in new Outlook email (Claude)")
+    mail_cmd = sub.add_parser("mail", help="find application confirmations, rejections and interview invites in new "
+                                           "Outlook email (Claude)")
     mail_cmd.add_argument("--token", default=outlook.TOKEN_FILE, help="the sign-in saved by outlook-login")
     mail_cmd.add_argument("--state", default=mail.STATE, help="JSON file of what was already checked")
     mail_cmd.add_argument("--days", type=int, default=mail.LOOKBACK_DAYS, help="how far back the first check reads")

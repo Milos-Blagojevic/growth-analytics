@@ -283,17 +283,20 @@ def test_mail_dry_run_prints_labels_only(workdir, mailbox, fake, capsys):
 
 
 RECEIVED = graph_message(5, "no-reply@greenhouse-mail.io", "Thanks for applying to Gamma",
-                         "We received your application and will review it.")
+                         "We received your application for Data Analyst and will review it.")
+ALERT = graph_message(6, "jobs-noreply@linkedin.com", "12 new jobs for Data Analyst",
+                      "Recruiters are hiring for roles that match your search.")
 JEV_SORTS = {  # subject -> Jev's (outcome, confidence)
     "Your application to Acme": ("rejected", 0.9),
-    "Thanks for applying to Gamma": ("other", 0.95),  # clear: dropped before Claude
+    "Thanks for applying to Gamma": ("applied", 0.95),  # a confirmation is an update: Claude labels it
+    "12 new jobs for Data Analyst": ("other", 0.95),  # clear: dropped before Claude
     "Next steps at Beta": ("other", 0.6),  # not sure enough: Claude decides
 }
 
 
 def test_jev_drops_clear_non_updates_and_claude_labels_the_rest(workdir, fake, http, jev_api):
     http.post(TOKEN_URL, json={"access_token": "at", "refresh_token": "rt-2"})
-    http.get(INBOX, json={"value": [REJECTION, INVITE, RECEIVED]})
+    http.get(INBOX, json={"value": [REJECTION, INVITE, ALERT]})
     http.get(JUNK, json={"value": []})
     http.post(TELEGRAM, json={"ok": True})
     jev_api.on(lambda state, key, question: JEV_SORTS[state["subject"]])
@@ -303,12 +306,33 @@ def test_jev_drops_clear_non_updates_and_claude_labels_the_rest(workdir, fake, h
     assert len(jev_api.requests) == 3
     sent_to_claude = fake.calls[0]["messages"][0]["content"]
     assert "Your application to Acme" in sent_to_claude and "Next steps at Beta" in sent_to_claude
-    assert "Thanks for applying to Gamma" not in sent_to_claude
+    assert "12 new jobs for Data Analyst" not in sent_to_claude
     (saved,) = mail.update_files(workdir)
     assert json.loads(saved.read_text())["screened_out"] == 1
     # The dropped email counts as checked: neither Jev nor Claude reads it again.
     assert set(json.loads((workdir / "mail_state.json").read_text())["seen"]) == {
-        "<m1@mail.example>", "<m3@mail.example>", "<m5@mail.example>"}
+        "<m1@mail.example>", "<m3@mail.example>", "<m6@mail.example>"}
+
+
+def test_an_application_confirmation_is_an_update_to_mark_applied(workdir, fake_claude, monkeypatch, http, jev_api):
+    http.post(TOKEN_URL, json={"access_token": "at", "refresh_token": "rt-2"})
+    http.get(INBOX, json={"value": [RECEIVED, ALERT]})
+    http.get(JUNK, json={"value": []})
+    telegram_api = http.post(TELEGRAM, json={"ok": True})
+    jev_api.on(lambda state, key, question: JEV_SORTS[state["subject"]])
+    claude = fake_claude({"emails": [{"number": 1, "outcome": "applied", "company": "Gamma", "role": "Data Analyst",
+                                      "summary": "Gamma received the application."}]})
+    monkeypatch.setattr(scoring, "_client", lambda: claude)
+
+    assert hunt.cmd_mail(mail_args()) == 0
+
+    sent_to_claude = claude.calls[0]["messages"][0]["content"]
+    assert "Thanks for applying to Gamma" in sent_to_claude and "12 new jobs" not in sent_to_claude
+    (text,) = [json.loads(c.request.body)["text"] for c in telegram_api.calls]
+    assert "Application received: Gamma · Data Analyst\nGamma received the application." in text
+    (saved,) = mail.update_files(workdir)
+    assert [(u["id"], u["outcome"], u["company"], u["role"]) for u in json.loads(saved.read_text())["updates"]] == [
+        ("<m5@mail.example>", "applied", "Gamma", "Data Analyst")]
 
 
 def test_mail_sends_every_application_email_to_claude_when_jev_is_down(workdir, mailbox, fake, http, monkeypatch):
@@ -367,6 +391,13 @@ def test_local_filter_reads_the_same_text_the_models_get():
 
     assert mail.likely(message) is True
     assert "unfortunately" in mail.excerpt(body).lower()
+
+
+@pytest.mark.parametrize("subject", ["Application received", "Application submitted: Data Analyst"])
+def test_local_filter_keeps_a_confirmation_sent_from_the_company_itself(subject):
+    # Not an ATS sender, and no other application wording: only the confirmation phrase lets it reach the models.
+    message = {"from_address": "careers@delta.io", "subject": subject, "body": "Thanks, we will be in touch."}
+    assert mail.likely(message) is True
 
 
 def test_mail_labels_survive_bad_numbers_from_claude(fake_claude):

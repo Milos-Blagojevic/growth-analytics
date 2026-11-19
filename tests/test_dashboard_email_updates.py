@@ -15,6 +15,9 @@ REJECTED_GAMMA = mail_update(3, "rejected", "Gamma")
 REJECTED_ZETA = mail_update(4, "rejected", "Zeta Labs")
 INVITE_ETA = mail_update(5, "interview", "Eta", role="Data Analyst")  # applied to outside the pipeline files
 REJECTED_ETA = mail_update(6, "rejected", "Eta GmbH", role="Data Analyst")
+APPLIED_BETA = mail_update(8, "applied", "Beta", role="Data Engineer")  # confirms an application you saved
+APPLIED_IOTA = mail_update(9, "applied", "Iota", role="Growth Analyst")  # sent outside the board
+APPLIED_ACME = mail_update(10, "applied", "Acme", received_at="2026-10-19T09:00:00")  # Acme is marked applied already
 
 
 @pytest.fixture
@@ -115,6 +118,28 @@ def test_a_later_email_from_the_company_moves_the_added_application(root, app_cl
     assert ("Eta GmbH", "rejected", ["Data Analyst"]) in suggested(root)
     assert decide(app_client, REJECTED_ETA, "apply", kind="email", ref=INVITE_ETA["id"]).status_code == 204
     assert cards(root, "interviewing") == [] and "Eta" in [card[2] for card in cards(root, "rejected")]
+
+
+def test_an_application_confirmation_suggests_marking_applied(root, app_client):
+    app_client.post("/track", data={"kind": "posting", "ref": BETA_URL, "status": "saved"})
+    write_mail(root, "20261017-090000", [APPLIED_BETA, APPLIED_IOTA, APPLIED_ACME])
+
+    page = app_client.get("/pipeline").text
+
+    assert [s for s in suggested(root) if s[1] == "applied"] == [
+        ("Iota", "applied", []),  # nothing tracked matches: to add to the pipeline as applied
+        ("Beta", "applied", ["Data Engineer"]),
+    ]  # Acme is marked applied already: its confirmation needs nothing from you
+    assert page.count('<span class="tag status s-applied">Application received</span>') == 2
+    assert page.count(">Mark applied</button>") == 1 and page.count("Add to pipeline as applied") == 1
+
+    assert decide(app_client, APPLIED_BETA, "apply", kind="posting", ref=BETA_URL).status_code == 204
+    assert decide(app_client, APPLIED_IOTA, "add").status_code == 204
+
+    applied = cards(root, "applied")
+    assert ("posting", "Data Engineer", "Beta", BETA_URL) in applied
+    assert ("email", "Growth Analyst", "Iota", "https://outlook.live.com/9") in applied
+    assert [s for s in suggested(root) if s[1] == "applied"] == []
 
 
 def test_an_added_application_keeps_its_card_without_the_mail_file(root, app_client):

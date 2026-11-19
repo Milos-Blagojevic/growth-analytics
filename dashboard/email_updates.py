@@ -14,7 +14,8 @@ from inbox import mail
 from dashboard import tracking
 
 # The statuses an update may move an item from, per suggested status: an update never moves an item backwards.
-MOVES_FROM = {"rejected": ("saved", "applied", "interviewing", "offer"), "interviewing": ("saved", "applied")}
+MOVES_FROM = {"applied": ("saved",), "rejected": ("saved", "applied", "interviewing", "offer"),
+              "interviewing": ("saved", "applied")}
 IGNORED_WORDS = {"inc", "llc", "ltd", "limited", "gmbh", "ag", "bv", "sa", "plc", "corp", "corporation", "co", "the",
                  "hq", "group", "team", "careers", "jobs", "talent"}
 ACTIONS = ("apply", "add", "dismiss")
@@ -50,9 +51,9 @@ def _role_overlap(role, title):
 
 
 def suggestions(conn):
-    """Unhandled updates, newest first, each with the status it suggests ("status") and the tracked items it could
-    apply to ("targets", best role match first; empty when no tracked application matches). Updates whose matching
-    items all have that status already, or a later one, are left out."""
+    """Unhandled updates, newest first, each with the status it suggests ("status"), its outcome as the page shows it
+    ("label") and the tracked items it could apply to ("targets", best role match first; empty when no tracked
+    application matches). Updates whose matching items all have that status already, or a later one, are left out."""
     rows = conn.execute(
         "SELECT u.* FROM mail_updates u LEFT JOIN mail_decisions d ON d.update_id = u.id"
         " WHERE d.update_id IS NULL ORDER BY u.received_at DESC"
@@ -69,7 +70,7 @@ def suggestions(conn):
         if matches and not targets:
             continue
         targets.sort(key=lambda i: -_role_overlap(update["role"], i["title"]))
-        result.append(update | {"status": status, "targets": targets})
+        result.append(update | {"status": status, "label": mail.OUTCOME_LABELS[update["outcome"]], "targets": targets})
     return result
 
 

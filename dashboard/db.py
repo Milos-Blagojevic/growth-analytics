@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7  # 7: mail_updates can hold "applied"; a rollback to 6 rebuilds them without those rows
 
 DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
 
@@ -186,7 +186,7 @@ CREATE TABLE mail_updates (
     from_address TEXT NOT NULL,
     subject TEXT NOT NULL,
     web_link TEXT,
-    outcome TEXT NOT NULL,        -- mail.SUGGESTED_STATUS keys: rejected | interview
+    outcome TEXT NOT NULL,        -- mail.SUGGESTED_STATUS keys: applied | rejected | interview
     company TEXT NOT NULL,        -- as the email names it; "" if it does not
     role TEXT NOT NULL,
     summary TEXT NOT NULL
