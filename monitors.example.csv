@@ -1,0 +1,6 @@
+# Copy to monitors.csv (git-ignored), or add companies with New under Monitors on the dashboard's Runs page.
+# One company per line: name,domain. `python hunt.py monitor-sync` keeps one Exa monitor per company: Exa searches
+# its own site and job boards for new postings in your [search].roles every 4 hours ($0.002 a run, about $0.36 a
+# month per company), and `python hunt.py monitor` sends the ones that suit you to Telegram. A company removed here
+# loses its monitor at the next monitor-sync. Lines starting with # are ignored. See pipeline/README.md, Monitors.
+# Acme,acme.com

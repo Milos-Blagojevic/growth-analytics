@@ -54,7 +54,10 @@ MONITOR_ESTIMATE = ["Exa: reading the monitors' runs is free; about $0.001 for a
                     f"Claude: one call per new posting Jev does not rule out, about ${CLAUDE_DOLLARS_PER_COMPANY:.3f} "
                     "each (the same call as a company's in a run); none when nothing is new."]
 MONITOR_SYNC_ESTIMATE = ["Free by itself. Exa then bills every monitor $0.002 a run, six runs a day: about $0.36 a "
-                         "month for each company in [monitor].companies."]
+                         f"month for each company in {runs.MONITORS}."]
+MONITOR_SYNC_WARNINGS = [f"Creates, updates and deletes monitors on your Exa account to match {runs.MONITORS}, and "
+                         "records them in monitor_state.json.",
+                         "A new monitor runs, billed, every 4 hours until a later sync deletes it."]
 
 
 @dataclass
@@ -71,6 +74,9 @@ class Spec:
     # How it was started, for PostHog (app.py sends it with hunt_run_started): values from fixed sets, booleans and
     # counts. Never a field's text: a focus is reported as given or not, and no company, run or interview is named.
     options: dict = field(default_factory=dict)
+    # Called by Runner.start once no other command runs, before the job starts: New on Runs adds its company to
+    # monitors.csv here, so a sync that is refused leaves the list as it was. Raises ValueError to refuse the job.
+    prepare: object = None
 
 
 def _now():
@@ -124,12 +130,6 @@ def build(conn, root, form):
         return Spec("discover", args, label, {"kind": kind, "focus": focus, "limit": str(limit)},
                     estimate=[DISCOVER_ESTIMATE], warnings=["Appends new companies to discovered.csv."],
                     options={"has_focus": bool(focus), "limit": limit})
-    if kind == "watch":
-        dry = form.get("dry_run") == "1"
-        warnings = [] if dry else ["Sends new postings to Telegram and records them in watch_state.json."]
-        return Spec("watch", ["watch"] + (["--dry-run"] if dry else []), "Watch list" + (" (dry run)" if dry else ""),
-                    {"kind": kind, "dry_run": "1" if dry else ""}, estimate=["Free: Ashby's public API only."],
-                    warnings=warnings, options={"dry_run": dry})
     if kind == "mail":
         if not (Path(root) / outlook.TOKEN_FILE).exists():
             raise ValueError("Sign in to Outlook first: run `python hunt.py outlook-login` in the data folder "
@@ -159,17 +159,7 @@ def build(conn, root, form):
                     estimate=MONITOR_ESTIMATE, warnings=warnings, options={"dry_run": dry})
     if kind == "monitor_sync":
         return Spec("monitor_sync", ["monitor-sync"], "Sync monitors", {"kind": kind}, estimate=MONITOR_SYNC_ESTIMATE,
-                    warnings=["Creates, updates and deletes monitors on your Exa account to match [monitor].companies "
-                              "in profile.toml, and records them in monitor_state.json.",
-                              "A new monitor runs, billed, every 4 hours until a later sync deletes it."])
-    if kind == "send":
-        run_id = form.get("run_id", "")
-        scored = {r["run_id"] for r in conn.execute("SELECT DISTINCT run_id FROM results WHERE score IS NOT NULL")}
-        if run_id not in scored:
-            raise ValueError("choose a saved run with scored results")
-        return Spec("send", ["send", f"{ingest.OUT_DIR}/{run_id}"], f"Send notification for run {run_id}",
-                    {"kind": kind, "run_id": run_id}, estimate=["Free: no research or scoring."],
-                    warnings=["Sends the run's notification to Telegram."])
+                    warnings=MONITOR_SYNC_WARNINGS)
     if kind in ("interview_prep", "interview_review"):
         return _build_interview(root, kind, form.get("interview", ""))
     raise ValueError(f"unknown job kind {kind!r}")
@@ -275,10 +265,13 @@ class Runner:
         return self.root / JOBS_DIR / f"{job_id}.log"
 
     def start(self, conn, spec):
-        """Starts the job and returns its id. Raises runs.Busy if a hunt.py command is already running."""
+        """Starts the job and returns its id. Raises runs.Busy if a hunt.py command is already running, and what
+        `spec.prepare` raises."""
         with self._lock:
             if self._procs or runs.is_locked(self.root):
                 raise runs.Busy("another hunt.py command is running")
+            if spec.prepare:
+                spec.prepare()
             (self.root / JOBS_DIR).mkdir(exist_ok=True)
             with conn:
                 job_id = conn.execute(

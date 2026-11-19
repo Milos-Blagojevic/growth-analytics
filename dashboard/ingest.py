@@ -1,7 +1,7 @@
 """Rebuilds the derived tables of hunt.db from the pipeline's files.
 
-Sources (all relative to the project root): out/<run>/*.json, discovered.csv, companies.csv, watch_state.json,
-interviews/<id>/*.json, mail/*.json.
+Sources (all relative to the project root): out/<run>/*.json, discovered.csv, companies.csv, watch_state.json (the
+postings of the former watch list, so those tracked on Pipeline keep their titles), interviews/<id>/*.json, mail/*.json.
 A full rebuild is cheap at this size and keeps ingest idempotent; `refresh` skips it when no source changed.
 """
 
@@ -29,7 +29,7 @@ UNREADABLE = (OSError, ValueError, KeyError, TypeError, AttributeError, csv.Erro
 
 
 def signature(root):
-    """Fingerprint (paths, sizes, mtimes) of every source file; changes whenever a run, discover, watch or mail writes."""
+    """Fingerprint (paths, sizes, mtimes) of every source file; changes whenever a run, discover or mail writes."""
     root = Path(root)
     files = [p for d in runs.run_dirs(root / OUT_DIR) for p in sorted(d.glob("*.json"))]
     files += [root / name for name in (DISCOVERED, COMPANIES, WATCH_STATE) if (root / name).exists()]

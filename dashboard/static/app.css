@@ -242,6 +242,7 @@ select { padding: 8px 10px; cursor: pointer; }
 .pill.active { color: var(--fg); border-color: var(--accent); background: rgba(139, 124, 255, 0.12); }
 .block { margin-top: 28px; }
 .block h2 { font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.block h2 .btn { margin-left: auto; }
 .block > p { margin-bottom: 14px; }
 
 .table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-top: 12px; }

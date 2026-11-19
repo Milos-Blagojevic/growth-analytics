@@ -319,13 +319,17 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
                     {"kind": "monitor_sync"}):
         finished(root, started_job_id(c.post("/runs", data=started)))
     assert c.post("/runs", data={"kind": "discover", "focus": "PRIVATE-FOCUS", "limit": "500"}).status_code == 400
+    # New under Monitors: the company is added and its sync started, and neither names the company.
+    finished(root, started_job_id(c.post("/runs/monitors", data={"name": "PRIVATE-COMPANY", "domain": "private-co.io"})))
+    assert c.post("/runs/monitors", data={"name": "PRIVATE-COMPANY", "domain": "private-co.io"}).status_code == 400
     app.state.scheduler.tick(datetime.now() + timedelta(minutes=1))
     conn = db.connect(root)
     finished(root, jobs.recent(conn, 1)[0]["id"])
     conn.close()
     monkeypatch.setenv("STUB_SLEEP", "30")
-    running = started_job_id(c.post("/runs", data={"kind": "watch"}))
-    assert c.post("/runs", data={"kind": "watch", "dry_run": "1"}).status_code == 409
+    running = started_job_id(c.post("/runs", data={"kind": "news"}))
+    assert c.post("/runs", data={"kind": "news", "dry_run": "1"}).status_code == 409
+    assert c.post("/runs/monitors", data={"name": "PRIVATE-OTHER", "domain": "private-other.io"}).status_code == 409
     assert c.post(f"/runs/jobs/{running}/cancel").status_code == 204
     finished(root, running)
     assert c.post(f"/runs/jobs/{running}/cancel").status_code == 409
@@ -354,8 +358,10 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("hunt_run_started", {"kind": "mail", "trigger": "button", "dry_run": False}),
         ("hunt_run_started", {"kind": "news", "trigger": "button", "dry_run": True}),
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
+        ("monitor_added", {}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
         ("hunt_run_started", {"kind": "discover", "trigger": "schedule", "has_focus": True, "limit": 9}),
-        ("hunt_run_started", {"kind": "watch", "trigger": "button", "dry_run": False}),
+        ("hunt_run_started", {"kind": "news", "trigger": "button", "dry_run": False}),
         ("hunt_run_cancelled", {}),
     ]
     assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}  # one owner, no person profile

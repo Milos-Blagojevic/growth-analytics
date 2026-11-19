@@ -14,6 +14,7 @@ watch_state.json*
 watch.log
 monitor_state.json*
 monitor.log
+monitors.csv
 hunt.db*
 jobs/
 .hunt.lock

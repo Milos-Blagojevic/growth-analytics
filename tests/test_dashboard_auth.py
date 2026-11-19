@@ -29,7 +29,8 @@ def test_pages_and_actions_need_the_login(client):
     htmx = client.get("/pipeline", headers={"HX-Request": "true"})
     assert (htmx.status_code, htmx.headers["HX-Redirect"]) == (401, "/login?next=/pipeline")
     # A valid CSRF token is not enough: a POST without the session cookie starts nothing.
-    assert client.post("/runs", data={"kind": "watch", "dry_run": "1"}).status_code == 401
+    assert client.post("/runs", data={"kind": "news", "dry_run": "1"}).status_code == 401
+    assert client.post("/runs/monitors", data={"name": "Acme", "domain": "acme.com"}).status_code == 401
     assert client.get("/static/app.css").status_code == 200
     assert 'type="password"' in client.get("/login").text
 

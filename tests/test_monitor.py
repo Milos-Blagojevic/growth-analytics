@@ -8,7 +8,7 @@ import requests
 import hunt
 from clients import exa_client
 from exa_mock import NEXT_RUN, contents_response, error, grounded, monitor_run, result
-from pipeline import monitor, research, scoring
+from pipeline import monitor, research, runs, scoring
 
 PROFILE_TOML = """
 [search]
@@ -20,13 +20,7 @@ work_mode = "Prefer fully remote roles."
 location = "Belgrade, Serbia"
 experience = "8 years of analytics engineering (dbt, Snowflake)."
 """
-MONITOR_TOML = """
-[monitor]
-companies = [
-  { name = "Acme", domain = "https://www.Acme.com/" },
-  { name = "Beta", domain = "beta.io" },
-]
-"""
+MONITORS_CSV = "# name,domain\nAcme,https://www.Acme.com/\n\nBeta,beta.io\n"
 COMPANIES = [("Acme", "acme.com"), ("Beta", "beta.io")]
 WEBHOOK = "https://hunt.example.org"
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/acme"
@@ -64,27 +58,43 @@ def state(account, profile):
 # Config ------------------------------------------------------------------------------------------------------
 
 
-def test_companies_are_spelled_as_in_companies_csv_and_no_table_is_no_companies():
-    listed = [{"name": " Acme ", "domain": "https://www.Acme.com/"}, {"name": "Beta", "domain": "beta.io"}]
+def test_companies_are_spelled_as_in_companies_csv_and_no_file_is_no_companies(tmp_path):
+    (tmp_path / "monitors.csv").write_text("\ufeff# name,domain\n Acme ,https://www.Acme.com/,extra\n\nBeta,beta.io\n")
 
-    assert monitor.load_config({"monitor": {"companies": listed}}) == COMPANIES
-    assert monitor.load_config({}) == []
+    assert runs.read_monitors(tmp_path / "monitors.csv") == COMPANIES
+    assert runs.read_monitors(tmp_path / "missing.csv") == []
 
 
 @pytest.mark.parametrize(
-    "listed, message",
+    "text, message",
     [
-        ([{"name": "Acme"}], "needs a name and a domain"),
-        ([{"domain": "acme.com"}], "needs a name and a domain"),
-        (["acme.com"], "needs a name and a domain"),
-        ([{"name": "Acme", "domain": "acme.com/careers"}], "needs a name and a domain"),
-        ([{"name": "Acme", "domain": "localhost"}], "needs a name and a domain"),
-        ([{"name": "Acme", "domain": "acme.com"}, {"name": "Acme EU", "domain": "www.acme.com"}], "acme.com is listed twice"),
+        ("Acme\n", "needs a name and a domain"),
+        (",acme.com\n", "needs a name and a domain"),
+        ("Acme,acme.com/careers\n", "needs a name and a domain"),
+        ("Acme,localhost\n", "needs a name and a domain"),
+        ("Acme,acme .com\n", "needs a name and a domain"),
+        ("Acme,acme.com\nAcme EU,www.acme.com\n", "acme.com is listed twice"),
+        ("Acme," + "x" * 200_000 + ".com\n", "cannot be read"),  # beyond csv's field limit
     ],
 )
-def test_a_company_entry_that_cannot_name_a_monitor_is_refused(listed, message):
+def test_a_row_that_cannot_name_a_monitor_is_refused_not_skipped(tmp_path, text, message):
+    """monitor-sync deletes the monitor of every company the list leaves out: a skipped row would lose one."""
+    (tmp_path / "monitors.csv").write_text(text)
+
     with pytest.raises(ValueError, match=message):
-        monitor.load_config({"monitor": {"companies": listed}})
+        runs.read_monitors(tmp_path / "monitors.csv")
+
+
+def test_add_monitor_appends_one_row_that_reads_back_and_refuses_one_listed_already(tmp_path):
+    path = tmp_path / "monitors.csv"
+    assert runs.add_monitor(path, "Acme, Inc.", "https://www.Acme.com/") == ("Acme, Inc.", "acme.com")  # created
+    path.write_text(path.read_text().rstrip("\n"))  # an editor that leaves no newline at the end
+
+    assert runs.add_monitor(path, "Beta", "beta.io") == ("Beta", "beta.io")
+    assert runs.read_monitors(path) == [("Acme, Inc.", "acme.com"), ("Beta", "beta.io")]
+    with pytest.raises(ValueError, match="acme.com is monitored already"):
+        runs.add_monitor(path, "Acme EU", "acme.com")
+    assert runs.read_monitors(path) == [("Acme, Inc.", "acme.com"), ("Beta", "beta.io")]
 
 
 @pytest.mark.parametrize("address", ["http://127.0.0.1:8000", "https://localhost:8000", "http://hunt.example.org", "hunt.example.org"])
@@ -376,9 +386,11 @@ def test_a_title_from_the_web_stays_on_one_line_and_a_link_with_white_space_is_l
 
 @pytest.fixture
 def folder(tmp_path, monkeypatch):
-    """A data folder with a profile that lists Acme and Beta, and the keys `monitor` needs but Telegram's."""
+    """A data folder with a profile and a monitors.csv that lists Acme and Beta, and the keys `monitor` needs but
+    Telegram's."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "profile.toml").write_text(PROFILE_TOML + MONITOR_TOML)
+    (tmp_path / "profile.toml").write_text(PROFILE_TOML)
+    (tmp_path / runs.MONITORS).write_text(MONITORS_CSV)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     return tmp_path
 
@@ -599,7 +611,7 @@ def test_monitor_needs_a_sync_and_telegram_before_it_asks_exa(http, folder, stat
 
 
 def sync_args():
-    return argparse.Namespace(profile="profile.toml", state=monitor.STATE)
+    return argparse.Namespace(profile="profile.toml", companies=runs.MONITORS, state=monitor.STATE)
 
 
 def test_monitor_sync_refuses_a_dashboard_address_exa_would_not_take_before_any_request(http, folder):
@@ -617,7 +629,7 @@ def test_monitor_sync_gives_the_monitors_the_railway_address_and_deletes_them_wh
     assert [entry["id"] for entry in saved_state(folder).values()] == ["mon_1", "mon_2"]
     assert "2 monitor(s)" in capsys.readouterr().out
 
-    (folder / "profile.toml").write_text(PROFILE_TOML)  # the [monitor] table is gone
+    (folder / runs.MONITORS).write_text("# name,domain\n")  # every company taken off the list
     monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN")  # deleting needs no address
 
     assert hunt.cmd_monitor_sync(sync_args()) == 0
@@ -631,11 +643,39 @@ def test_monitor_sync_gives_the_monitors_the_railway_address_and_deletes_them_wh
 
 
 def test_monitor_sync_with_nothing_listed_and_nothing_ever_synced_exits_before_any_request(http, folder):
-    (folder / "profile.toml").write_text(PROFILE_TOML)
+    (folder / runs.MONITORS).unlink()
 
-    with pytest.raises(SystemExit, match=r"\[monitor\].companies is empty"):
+    with pytest.raises(SystemExit, match="monitors.csv: no companies listed"):
         hunt.cmd_monitor_sync(sync_args())
     assert len(http.calls) == 0
+
+
+def test_monitor_sync_changes_nothing_while_the_profile_still_lists_the_companies(http, folder, state):
+    """[monitor].companies is no longer read: a sync on monitors.csv alone would delete the monitors it lists."""
+    monitor.save_state(folder / monitor.STATE, state)
+    (folder / "profile.toml").write_text(PROFILE_TOML + '[monitor]\ncompanies = [{ name = "Acme", domain = "acme.com" }]\n')
+    requests_so_far, before = len(http.calls), (folder / monitor.STATE).read_text()
+
+    with pytest.raises(SystemExit, match=r"\[monitor\].companies is no longer read. Move each company to monitors.csv"):
+        hunt.cmd_monitor_sync(sync_args())
+
+    assert len(http.calls) == requests_so_far and (folder / monitor.STATE).read_text() == before
+
+
+@pytest.mark.parametrize("text", [None, "Acme,acme.com\nAcme EU,acme.com\n"])
+def test_monitor_sync_changes_nothing_without_a_monitors_csv_it_can_read(http, folder, state, text):
+    """A missing or broken list is not an empty one: the monitors that run on Exa are left alone."""
+    monitor.save_state(folder / monitor.STATE, state)
+    (folder / runs.MONITORS).unlink()
+    if text:
+        (folder / runs.MONITORS).write_text(text)
+    requests_so_far, before = len(http.calls), (folder / monitor.STATE).read_text()
+
+    with pytest.raises(SystemExit, match=r"not found, and 2 monitor\(s\) of this folder run on Exa" if text is None
+                       else "monitors.csv: acme.com is listed twice"):
+        hunt.cmd_monitor_sync(sync_args())
+
+    assert len(http.calls) == requests_so_far and (folder / monitor.STATE).read_text() == before
 
 
 @pytest.mark.parametrize(

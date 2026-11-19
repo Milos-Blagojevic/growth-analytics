@@ -1,7 +1,7 @@
-"""Exa Monitors for job postings: one monitor per company in [monitor].companies.
+"""Exa Monitors for job postings: one monitor per company in monitors.csv (runs.MONITORS).
 
 Exa runs each monitor by itself every PERIOD and returns only the pages its earlier runs did not. `sync` makes the
-monitors on Exa match the profile; `findings` reads what a company's monitor found since the last check, as one
+monitors on Exa match the list; `findings` reads what a company's monitor found since the last check, as one
 research per new posting for the scorer. STATE keeps each company's monitor, the last run read and the postings
 already judged, and the id that marks the monitors on Exa as this data folder's.
 """
@@ -28,23 +28,6 @@ MAX_TRIES = 3  # checks in a row that may fail to read one run, or to score one 
 ENDED = ("completed", "failed", "cancelled")
 SOURCE = "hunt.py"  # in each monitor's metadata: tells these monitors from others on the Exa account
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
-
-
-def load_config(profile):
-    """[(name, domain)] from [monitor].companies, domains spelled as in companies.csv. No table is no companies.
-    Raises ValueError for an entry without a name or a bare domain, and for a domain listed twice."""
-    companies, listed = [], set()
-    for entry in profile.get("monitor", {}).get("companies", []):
-        listing = entry if isinstance(entry, dict) else {}
-        name, given = (str(listing.get(key, "")).strip() for key in ("name", "domain"))
-        domain = runs.normalize_domain(given)
-        if not name or "." not in domain or "/" in runs.without_scheme(given).rstrip("/"):
-            raise ValueError(f"[monitor].companies: each entry needs a name and a domain such as acme.com; got {entry!r}")
-        if domain in listed:
-            raise ValueError(f"[monitor].companies: {domain} is listed twice")
-        listed.add(domain)
-        companies.append((name, domain))
-    return companies
 
 
 def _is_entry(entry):
