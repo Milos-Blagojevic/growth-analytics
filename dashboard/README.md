@@ -56,11 +56,11 @@ The dashboard copies the pipeline files into `hunt.db` (SQLite, git-ignored) and
 
 ## PostHog events
 
-Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's environment (see [PostHog](../clients/README.md#posthog) for what they are and everything else that is sent), each action of yours that succeeds is reported as one event, and each page you open as a `$pageview`. Every event is the owner's (one fixed distinct id, without a person profile: see [One owner, no person](../clients/README.md#posthog)) and names nothing of yours: no company, posting, note, title or id, and nothing about the request but a page's route as it is declared.
+Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's environment (see [PostHog](../clients/README.md#posthog) for what they are and everything else that is sent), each action of yours that succeeds is reported as one event, and each page you open as a `$pageview`. Every event is the owner's (one fixed distinct id, without a person profile: see [One owner, no person](../clients/README.md#posthog)) and names nothing of yours: no company, posting, note, title or id, and nothing about the request but a page's route as it is declared and the route of the page it was opened from.
 
 | Event | When | Properties |
 |---|---|---|
-| `$pageview` | The browser loads a page: a GET answered with a full HTML page, the reload or redirect that follows an action included. A company's slide-over panel, the forms in the panel, the board's live filter and the polls of a running job or the chat bot are parts of the page they were asked from, not pages | `$current_url` and `$pathname`, both the route as it is declared (`/`, `/c/{domain}`, `/interviews/{interview_id}`), never the address or its query |
+| `$pageview` | The browser loads a page: a GET answered with a full HTML page, the reload or redirect that follows an action included. A company's slide-over panel, the forms in the panel, the board's live filter and the polls of a running job or the chat bot are parts of the page they were asked from, not pages | `$current_url` and `$pathname`, both the route as it is declared (`/`, `/c/{domain}`, `/interviews/{interview_id}`), never the address or its query. `previous_route`: the page of the dashboard it was opened from, by its declared route too (see [From page to page](#from-page-to-page)) |
 | `pipeline_status_updated` | You set a status on a card (Board, a company's details, Pipeline). Saving notes sends nothing | `status` |
 | `leads_queued` | Leads are added to `companies.csv` | `lead_count` |
 | `email_update_decided` | An email update is confirmed, added to the pipeline or dismissed | |
@@ -69,10 +69,18 @@ Optional: with `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` in the dashboard's env
 | `interview_created`, `interview_updated` | An interview is created, or its details are saved | |
 | `interview_transcript_saved` | A transcript is uploaded or pasted | `source`: `file` or `pasted` |
 | `interview_speaker_selected` | You choose which speaker is you | |
-| `hunt_run_started` | A job starts | `kind` (as on the Runs page: `run`, `discover`, `watch`, `monitor`, `monitor_sync`, `mail`, `news`, `send`, `interview_prep`, `interview_review`) and `trigger`: `button` or `schedule` |
+| `hunt_run_started` | A job starts | `kind` (as on the Runs page: `run`, `discover`, `watch`, `monitor`, `monitor_sync`, `mail`, `news`, `send`, `interview_prep`, `interview_review`) and `trigger`: `button` or `schedule`. Then how it was started: a `run` has `mode` (`dry_run`, `deliver` for **Run and notify**, `research_only`) and `fiber` (true with Fiber); a `discover` has `has_focus` (whether it was given an extra focus, never the focus) and `limit`; `watch`, `monitor`, `mail` and `news` have `dry_run` |
 | `hunt_run_cancelled` | You stop a running job | |
 
 An action that is refused (a 400, a 409) sends nothing, and neither do signing in and out or the preview of a job before you confirm it (the login page is a page view like the others). An exception no page handled is reported by its type and stack with the route as it is declared (`/c/{domain}`) and its method, never with its message. The dashboard also writes one log record, `dashboard_started`. The job itself reports its own start, end and model calls as `hunt.py` does everywhere (see [PostHog](../clients/README.md#posthog)).
+
+### From page to page
+
+A click on a tab, or on any other link of the dashboard, is the page view of the page it leads to, and `previous_route` is the page the click was made on. **Interviews** clicked on the Board is a `$pageview` of `/interviews` with `previous_route` `/`; clicked on a company's page, one with `/c/{domain}`. The dashboard reads it off the `Referer` header the browser sends with the request and keeps only the route that address matches, never the address.
+
+- A page that is loaded again has its own route as `previous_route`: the reload or redirect that follows an action, and the browser's reload button, which the browser marks with `Cache-Control: max-age=0`. So the page views whose `previous_route` differs from `$pathname` are your moves from one page to another. Two reloads come out differently. A forced reload, the one that skips the browser's cache, is marked `no-cache` instead, like every request made while the developer tools keep the cache off, so it is not taken for a reload and repeats the page the page was first opened from. And a reload that ends on the login page, because the session ran out, says `/login` was opened from `/login`.
+- `previous_route` is absent when the page was opened from outside the dashboard: a typed address, a bookmark, a link in Telegram.
+- A page the browser shows again from its own copy, as Back and Forward usually do, asks the dashboard for nothing and is not a page view.
 
 ## Deploy to Railway
 
