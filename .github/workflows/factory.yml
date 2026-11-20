@@ -1,0 +1,46 @@
+name: Factory
+
+# One code task from the chat bot (factory/intake.py, after the owner's /go): factory/worker.py runs a Pydantic AI
+# Coder agent on a clone of the default branch in a Docker container without network access or credentials, then
+# pushes the change to a new branch factory/<task id>, opens the pull request and reports to Telegram. Each run is a
+# paid Claude session, and nothing else starts one: no push, pull request, label or schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "YYYYMMDD-HHMMSS: names the branch factory/<task id>"
+        required: true
+      task:
+        description: "What to change, as a self-contained instruction"
+        required: true
+
+# How the chat bot finds a task's run again (worker.run_name).
+run-name: factory ${{ inputs.task_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  task:
+    # A run started on another branch would take factory/worker.py from that branch and give it this job's secrets.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      # The inputs reach the script through the environment, never pasted into the command.
+      - name: Run the task
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FACTORY_PUSH_TOKEN: ${{ secrets.FACTORY_PUSH_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}  # optional, with POSTHOG_HOST: see factory/README.md
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+          BASE: ${{ github.event.repository.default_branch }}
+          TASK_ID: ${{ inputs.task_id }}
+          TASK: ${{ inputs.task }}
+        run: uv run factory/worker.py --repo "$GITHUB_REPOSITORY" --base "$BASE" --task-id "$TASK_ID" --task "$TASK"

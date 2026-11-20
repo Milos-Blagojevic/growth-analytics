@@ -9,10 +9,11 @@ Researches companies with Exa, scores how well they and their open roles fit you
 | Path | Holds | Docs |
 |---|---|---|
 | `hunt.py` | The CLI entry point: `python hunt.py <command>` | [Commands](#commands) |
-| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram, PostHog | [clients/README.md](clients/README.md) |
+| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram, PostHog, GitHub | [clients/README.md](clients/README.md) |
 | `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, Exa monitors, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
 | `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot (your mail, and news digests on request) | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
+| `factory/` | Code tasks: you ask the chat bot for a change in this repository, and a coding agent opens a pull request | [factory/README.md](factory/README.md) |
 | `prospects/` | Sales prospects for your own product: Exa research, Claude assessment, value range and routing rules, DuckDB warehouse | [prospects/README.md](prospects/README.md) |
 | `evals/` | Public, human-labeled AI exams: Jev role-screen runner and reproducible results | [evals/README.md](evals/README.md) |
 | `dashboard/` | The dashboard app and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
@@ -45,6 +46,7 @@ python -m clients.exa_client
 3. `cp companies.example.csv companies.csv` and list `name,domain` rows (the domain disambiguates similarly named companies). Domains are normalised as in `discover` and the dashboard: `https://`, `http://`, `www.` and any path after the host are stripped. A row whose domain still contains a `/` or has no `.` stops the run before any paid call, with the row named. A domain listed twice (case-insensitive) is researched once, with a warning. A file saved by Excel as "CSV UTF-8" (with a byte-order mark) is read as is.
 4. Optional: `[news].topics` in `profile.toml` for the news digest (scheduled, or when you ask the chat bot for news), `monitors.csv` (`cp monitors.example.csv monitors.csv`, `name,domain` rows, or **New monitor** on the dashboard's Runs page) for the few companies whose new postings Exa should watch for you, and an Outlook sign-in for email updates (see [News digest](pipeline/README.md#news-digest), [Monitors](pipeline/README.md#monitors) and [Email updates](inbox/README.md#email-updates)). A profile that still has `[monitor].companies` from before stops `monitor-sync` until those companies are moved to `monitors.csv`; a `[watch]` table is no longer read. Fiber's jobs database as an extra source of open roles is chosen per run, not here: `run --fiber`, or **With Fiber** on the dashboard's Runs page (see Role search in [Run](pipeline/README.md#run); it costs more per company).
 5. Optional, for the prospect pipeline: `cp prospects.example.toml prospects.toml` (your product, ideal customer, pricing and routing tiers) and `cp prospects.example.csv prospects.csv` (`name,domain` rows, read like `companies.csv`). See [Prospects](prospects/README.md#configure).
+6. Optional, for code tasks from the chat bot: `FACTORY_REPO` and `FACTORY_DISPATCH_TOKEN` in `.env`, and the Factory workflow's secrets on GitHub. See [Factory](factory/README.md#set-up-once).
 
 ## Commands
 
@@ -64,6 +66,7 @@ python -m clients.exa_client
 | `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py gmail-login` | Signs in to Gmail once | No | No | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
 | `python hunt.py chat` | Telegram chat bot over your mail; makes a news digest when you ask for news | Claude; Exa and Jev for a news digest | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
+| `uv run factory/worker.py` | One code task, from an instruction to a pull request; run by the Factory workflow | Claude (one session, up to 150 model requests or $10) | Yes, the pull request's overview | [Factory](factory/README.md) |
 | `python -m prospects discover` | Finds companies that match your ideal customer in Fiber's company database | Exa agent run and Fiber (about $0.75 a run so far; no cap) | No | [Prospects](prospects/README.md#discover) |
 | `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
 | `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
@@ -82,6 +85,7 @@ python -m clients.exa_client
 | `Dockerfile`, `.dockerignore` | Dashboard image for Railway; private files are kept out of it |
 | `.github/workflows/ci.yml` | GitHub Actions: run the tests on pull requests and pushes to `main` |
 | `.github/workflows/verify.yml` | GitHub Actions: the `verify` skill on a pull request labelled `verify` (see [Verify in CI](tests/README.md#verify-in-ci)) |
+| `.github/workflows/factory.yml` | GitHub Actions: one code task from the chat bot, run by `factory/worker.py` (see [Factory](factory/README.md)) |
 | `AGENTS.md` | Instructions for coding agents working in this repo |
 | `.claude/skills/verify/` | Independent verification: one full review and one focused follow-up, then owner approval for further review; draft PRs may precede completion, never merge readiness. `/verify <intent>` and follow-up usage: [verification process](tests/README.md#independent-verification). `scripts/sandbox.py` serves sample data with a fake `hunt.py`; `scripts/ci.py` runs one opt-in full review and rejects incomplete evidence (see [Verify in CI](tests/README.md#verify-in-ci)). |
 | `.claude/skills/posthog/` | `posthog` skill: what a change has to add for PostHog (an event for a new dashboard action, a generation for a new model call, the records of a new command), what may never be sent, and how to test it. Agents follow it whenever they add or change a feature; the `verify` skill checks it |

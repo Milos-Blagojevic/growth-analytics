@@ -38,7 +38,8 @@ def _isolate(monkeypatch, http):
     monkeypatch.setenv("EXA_API_KEY", "test-exa-key")
     for var in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SCORING_MODEL", "DASHBOARD_URL",
                 "RAILWAY_PUBLIC_DOMAIN", "OUTLOOK_CLIENT_ID", "OUTLOOK_TENANT", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET",
-                "TYPESAFE_API_KEY", "JEV_MODEL", "CHAT_BOT", "LOGFIRE_TOKEN", "POSTHOG_PROJECT_TOKEN", "POSTHOG_HOST"):
+                "TYPESAFE_API_KEY", "JEV_MODEL", "CHAT_BOT", "LOGFIRE_TOKEN", "POSTHOG_PROJECT_TOKEN", "POSTHOG_HOST",
+                "FACTORY_REPO", "FACTORY_DISPATCH_TOKEN", "FACTORY_PUSH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(exa_client, "BACKOFF_BASE_SECONDS", 0)
     monkeypatch.setattr(exa_client, "AGENT_POLL_SECONDS", 0)
