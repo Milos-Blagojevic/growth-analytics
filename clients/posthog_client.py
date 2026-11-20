@@ -1,7 +1,8 @@
 """PostHog: product events, error tracking, AI Observability and logs. The only place that talks to PostHog.
 
 Off until `configure` gets both the project token and the ingestion host (POSTHOG_PROJECT_TOKEN and POSTHOG_HOST,
-read by the entry points: hunt.py, `python -m prospects`, `python -m dashboard` and a live `python -m evals` run).
+read by the entry points: hunt.py, `python -m prospects`, `python -m dashboard`, the factory worker and a live
+`python -m evals` run).
 Until then every function here does nothing. None of them raises or waits for PostHog: events and log records are
 queued and sent by background threads, and a failure is logged and never reaches the work it reports on. What is
 still queued when a process exits is sent then, for a bounded time (TIMEOUT, RETRIES, FLUSH_MILLIS), and dropped
@@ -59,7 +60,7 @@ OWNER = "growth-analytics-owner"
 
 _client = None  # the process's posthog.Posthog, once configured
 _records = None  # (LoggerProvider, its logger): log records go out through a provider of their own, never the global one
-_service = None  # "dashboard", "hunt", "prospects" or "evals": on every event and log record
+_service = None  # "dashboard", "hunt", "prospects", "evals" or "factory": on every event and log record
 _session = f"process-{uuid4()}"  # the AI session of the generations one command makes outside an agent turn
 _turn = ContextVar("posthog_agent_turn", default=None)  # the agent answer in progress: {"trace_id", "session_id"}
 

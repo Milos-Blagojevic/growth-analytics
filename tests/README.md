@@ -24,6 +24,8 @@ Tests need no keys and make no network calls. Every HTTP request made through `r
 
 PostHog is off in every test unless the test asks for the `posthog_api` fixture, which turns it on against `tests/posthog_mock.py` (capture v1's `/i/v1/analytics/events` and `/i/v1/ai/events` endpoints and the OTLP logs endpoint in their wire formats) and returns what was sent: `posthog_api.events()` and `posthog_api.records()`. A test of something that reports to PostHog checks there that none of the text it handled was sent.
 
+The factory's tests mock the GitHub API the same way and run real `git` against a local repository in a temporary folder. The coding agent and its Docker container are replaced by a function that edits a copy of the clone, so the suite needs no Docker (`tests/test_worker.py`).
+
 CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.13 for every pull request and every push to `main`.
 
 ## Eval runner versus model quality

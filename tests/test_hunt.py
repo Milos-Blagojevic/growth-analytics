@@ -605,6 +605,14 @@ def test_chat_needs_telegram_and_a_signed_in_mailbox_before_it_starts(http, work
     assert (mailboxes.outlook_token, mailboxes.gmail_token) == ("outlook_token.json", "gmail_token.json")
     assert mailboxes.news.profile["search"]["roles"] == ["analytics engineer", "growth engineer"]
     assert mailboxes.news.state == "news_state.json"
+    assert mailboxes.factory is None  # code tasks need both of their settings
+
+    monkeypatch.setenv("FACTORY_REPO", "me/repo")
+    monkeypatch.setenv("FACTORY_DISPATCH_TOKEN", "dispatch-token")
+    assert hunt.cmd_chat(chat_args()) == 0
+    assert (served[-1][1].factory.repo, served[-1][1].factory.token) == ("me/repo", "dispatch-token")
+    monkeypatch.delenv("FACTORY_REPO")
+    monkeypatch.delenv("FACTORY_DISPATCH_TOKEN")
 
     # Without Exa, or a profile it can use, the bot still starts for the mail; the digest tool says what is missing.
     with caplog.at_level("WARNING", logger="hunt"):

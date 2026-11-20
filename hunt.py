@@ -32,6 +32,7 @@ from pathlib import Path
 import logfire
 
 from clients import exa_client, jev, posthog_client, telegram
+from factory import intake
 from inbox import chat, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
 from pipeline import monitor, news, research, runs, scoring
@@ -635,7 +636,7 @@ def cmd_chat(args):
     _require_claude()
     if not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env.")
-    mailboxes = chat.Mailboxes(news=chat.News(state=args.news_state))
+    mailboxes = chat.Mailboxes(news=chat.News(state=args.news_state), factory=intake.from_env())
     for name, module, path in (("outlook", outlook, args.outlook_token), ("gmail", gmail, args.gmail_token)):
         if not module.configured():
             continue

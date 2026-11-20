@@ -108,6 +108,7 @@ Upgrading a deployment from before the watch list was removed: delete every `wat
    | `CHAT_BOT` | `1` keeps the Telegram chat bot (`hunt.py chat`) running alongside the dashboard (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). A news digest you ask it for uses `EXA_API_KEY` and the volume's `profile.toml` and `news_state.json`, and costs Exa and Claude money each time. |
    | `LOGFIRE_TOKEN` | Optional, with `CHAT_BOT=1`: traces of the bot's answers in Pydantic Logfire, without their text (see [Chat with your mail](../inbox/README.md#chat-with-your-mail)). |
    | `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | Optional, both or neither: your PostHog project token and its ingestion host (`https://eu.i.posthog.com` or `https://us.i.posthog.com`). The dashboard then reports your actions, the pages you open (by route) and its errors, and the jobs and the chat bot it starts report their commands and model calls, none of it with text (see [PostHog events](#posthog-events)). |
+   | `FACTORY_REPO`, `FACTORY_DISPATCH_TOKEN` | Optional, with `CHAT_BOT=1`: code tasks from the chat bot. The repository as `owner/name` and the token that starts its Factory workflow (it cannot push; see [Factory](../factory/README.md#set-up-once)). |
    | `DASHBOARD_URL` | Only for a custom domain. Without it, Telegram links point to `https://<RAILWAY_PUBLIC_DOMAIN>`. |
 
 4. **Settings → Networking → Generate domain.** Railway sets `RAILWAY_PUBLIC_DOMAIN`, which the dashboard accepts as its host name.

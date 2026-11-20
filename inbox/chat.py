@@ -12,6 +12,10 @@ news_state.json with `hunt.py news`, so no digest repeats the articles of one al
 the chat (a one-off that reads and records nothing). Each digest is paid Exa searches, Jev requests and a Claude
 call, so one answer makes at most MAX_DIGESTS. Article titles and excerpts are untrusted input like email.
 
+Two more tools belong to code tasks (factory/intake.py): one proposes a code change in the owner's repository, one
+lists the tasks so far, and both only say so where code tasks are not set up. Neither starts anything: `handle`
+shows the proposal word for word, and only the owner's /go command for it starts the workflow, in fixed code.
+
 The conversation lives in memory for the life of the process (/new starts a fresh one), trimmed to the last
 MAX_TURNS exchanges. Emails are referred to by short handles (o1, g2: account letter plus a number) that the
 tools hand out, so the model never has to repeat provider ids.
@@ -39,6 +43,7 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.usage import UsageLimits
 
 from clients import jev, posthog_client, telegram
+from factory import intake
 from inbox import gmail, outlook
 from pipeline import news, scoring
 
@@ -134,14 +139,15 @@ class News:
 
 @dataclass
 class Mailboxes:
-    """What the tools get: the token files of the mailboxes that are set up, the handles given out so far, and
-    what the news digest needs (`news`)."""
+    """What the tools get: the token files of the mailboxes that are set up, the handles given out so far, what
+    the news digest needs (`news`) and the code-task set-up where there is one (`factory`)."""
 
     outlook_token: str | None = None
     gmail_token: str | None = None
     news: News = field(default_factory=News)
     refs: dict = field(default_factory=dict)  # handle -> (account, provider message id)
     _tokens: dict = field(default_factory=dict)  # account -> (access token, expires at)
+    factory: intake.Factory | None = None
 
     def accounts(self):
         return [a for a, path in (("outlook", self.outlook_token), ("gmail", self.gmail_token)) if path]
@@ -183,6 +189,7 @@ class Mailboxes:
 
     def reset(self):
         self.refs.clear()
+        intake.drop(self.factory)
 
 
 def _when(received_at):
@@ -330,7 +337,8 @@ def build_agent(model=None):
         instructions=INSTRUCTIONS,
         # PostHog: a span per tool call inside an answer's trace (the tool's name and seconds, nothing it read).
         tools=[posthog_client.instrument_tool(tool)
-               for tool in (list_emails, read_email, draft_email, draft_reply, news_digest)],
+               for tool in (list_emails, read_email, draft_email, draft_reply, news_digest,
+                            intake.propose_code_task, intake.code_tasks)],
         retries=2,
     )
     # Set on the agent, so it wins over any global Agent.instrument_all / logfire.instrument_pydantic_ai default.
@@ -340,7 +348,8 @@ def build_agent(model=None):
     @agent.instructions
     def situation(ctx: RunContext[Mailboxes]) -> str:
         now = datetime.now().astimezone()
-        return f"Now: {now:%A %d %B %Y, %H:%M} ({now.tzname()}). Accounts set up: {', '.join(ctx.deps.accounts())}."
+        text = f"Now: {now:%A %d %B %Y, %H:%M} ({now.tzname()}). Accounts set up: {', '.join(ctx.deps.accounts())}."
+        return f"{text}\n\n{intake.instructions(ctx.deps.factory)}" if ctx.deps.factory else text
 
     return agent
 
@@ -412,16 +421,21 @@ class Conversation:
 def handle(conversation, text):
     """One incoming Telegram message -> the reply text. Never raises: failures become a short reply."""
     command = text.strip().split()[0].lower() if text.strip() else ""
+    factory = conversation.deps.factory
     if command in ("/start", "/help"):
-        return HELP
+        return HELP + (intake.HELP if factory else "")
     if command == "/new":
         conversation.reset()
         return "Fresh start. What do you want to know?"
+    if command == intake.GO or command.startswith(f"{intake.GO}_"):
+        return intake.start(factory, command)
     try:
-        return conversation.answer(text) or "(no answer)"
+        answer = conversation.answer(text) or "(no answer)"
     except Exception as exc:  # the model, a tool or the usage limit: the owner sees why, the bot keeps running
         logger.exception("answer failed")
+        intake.drop(factory)  # a task proposed before the failure was never shown: it must not be startable
         return f"Sorry, that failed: {type(exc).__name__}: {str(exc)[:300]}"
+    return answer + intake.notice(factory)
 
 
 def serve(agent, deps, *, poll=telegram.updates, send=telegram.send, sleep=time.sleep, stop=None):
