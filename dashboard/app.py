@@ -10,7 +10,9 @@ With PostHog on (`python -m dashboard` turns it on from POSTHOG_PROJECT_TOKEN an
 yours that succeeds is reported as an event (`posthog_client.capture`: a name and a few properties that are values
 from fixed sets, booleans or counts, never a company, a note or an id), each page you open as a $pageview of its
 route as it is declared, with the route of the page you opened it from, and each exception nothing handled by its
-type, stack and route. All of them are the owner's, without a person profile.
+type, stack and route. All of them are the owner's, without a person profile. With POSTHOG_SUPPORT_WIDGET on, the
+pages behind the login also show PostHog Support's chat widget (`posthog_client.support_widget`): what you type in
+it is sent to PostHog as a ticket.
 """
 
 import hashlib
@@ -167,10 +169,12 @@ class _ReportPageviews:
 
 
 def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
-               chat_bot=False):
+               chat_bot=False, support_widget=None):
     """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
     `password` turns on the login (required when serving beyond loopback); `schedule_entries` come from
-    schedule.parse(HUNT_SCHEDULE); `chat_bot` keeps `hunt.py chat` running while the app serves (CHAT_BOT=1)."""
+    schedule.parse(HUNT_SCHEDULE); `chat_bot` keeps `hunt.py chat` running while the app serves (CHAT_BOT=1);
+    `support_widget` (posthog_client.support_widget, POSTHOG_SUPPORT_WIDGET=1) puts PostHog Support's chat widget on
+    every page but the login page."""
     root = Path(root).resolve()
     login = auth.Auth(password) if password else None
     scheduler = None  # set below, once the job helpers exist
@@ -207,6 +211,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         interview_stages=interviews.STAGES,
         asset_version=asset_version,
         score_labels=interviews.SCORES,
+        support_widget=support_widget,
     )
     templates.env.filters.update(
         ago=_ago,

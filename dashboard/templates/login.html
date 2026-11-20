@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Log in · Job hunt{% endblock %}
 {% block topbar %}{% endblock %}
+{# Public on Railway: anyone could open tickets in PostHog Support from here. #}
+{% block support %}{% endblock %}
 {% block content %}
 {# method/action only matter if htmx fails to load: the password then goes in the body, never the URL. #}
 <form class="login" method="post" action="/login" hx-post="/login">

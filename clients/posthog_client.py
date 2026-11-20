@@ -24,6 +24,9 @@ retention) without a person profile (`_before_send`): no identify, no person or 
   with its type and its stack, never its message (`_without_messages`): a message names the file that could not be
   written, quotes the value that did not parse. hunt.py and `python -m prospects` say how a command ended in its
   `finished` record instead.
+- `support_widget`: the settings of posthog-js for PostHog Support's chat widget on the dashboard's pages, only when
+  the owner turns it on (POSTHOG_SUPPORT_WIDGET). The one exception to "never text": what the owner types in the
+  widget leaves as a ticket. Nothing else the browser could capture by itself does.
 """
 
 import atexit
@@ -189,6 +192,62 @@ def capture_exception(exc, properties=None):
         _client.capture_exception(exc, properties=properties or {})
     except Exception:
         logger.warning("PostHog capture of an exception failed", exc_info=True)
+
+
+# PostHog Support's chat widget (the dashboard's pages) ------------------------------------------------------
+# posthog-js in the browser, which by itself would also send each page's address (a company, an interview, what
+# was searched), the text of what was clicked, heatmaps, web vitals and, with the project's session replay on, a
+# recording of every page. All of that is off here, and the page drops every event but the widget's own.
+
+WIDGET_EVENTS = "$conversations_"  # the prefix of the events the widget captures (loaded, opened, message sent)
+# The names of the properties posthog-js puts on events that hold an address: the page's ($current_url, $pathname),
+# the one before it ($referrer) and the session's first ($session_entry_url, ...). A pattern rather than a list,
+# since the page always loads the latest posthog-js.
+WIDGET_DENIED_PROPERTIES = "url|pathname|referr"
+
+
+def support_widget(token, host):
+    """What the dashboard's pages need to show PostHog Support's chat widget (POSTHOG_SUPPORT_WIDGET): the
+    posthog-js script on the project's assets host, the project token, the init options, the prefix of the events
+    the page keeps and the pattern of the property names it takes off them; None without both settings.
+
+    Unlike everything else in this module, the widget sends text: what the owner types in it becomes a ticket in
+    PostHog Support, with the name and email its form asks for, the browser that sent it, posthog-js's random
+    session id and, for a new ticket or a ticket recovery (**Recover your tickets**), the address of the page it was
+    started on: the widget adds those to its own requests, out of reach of these settings. Nothing else posthog-js
+    could capture by itself is on, and the widget's own events leave as the owner's (`OWNER`, bootstrapped, never
+    identified, so without a person profile) without an address."""
+    if not token or not host:
+        return None
+    host = host.rstrip("/")
+    return {
+        # The assets host the official snippet loads from: https://eu.i.posthog.com -> https://eu-assets.i.posthog.com
+        "script": host.replace(".i.posthog.com", "-assets.i.posthog.com") + "/static/array.js",
+        "token": token,
+        "events": WIDGET_EVENTS,
+        "denied": WIDGET_DENIED_PROPERTIES,
+        "options": {
+            "api_host": host,
+            "bootstrap": {"distinctID": OWNER},
+            "person_profiles": "identified_only",
+            # On in the project's settings for other sites, so each is turned off here rather than left to them.
+            "autocapture": False,
+            "rageclick": False,
+            "capture_pageview": False,  # the server reports the dashboard's page views, by route
+            "capture_pageleave": False,
+            "capture_heatmaps": False,
+            "capture_dead_clicks": False,
+            "capture_performance": False,
+            "capture_exceptions": False,
+            "disable_session_recording": True,
+            "disable_surveys": True,
+            "disable_product_tours": True,
+            # Not advanced_disable_flags: it also turns off the remote config that tells the page Support is on.
+            "advanced_disable_feature_flags": True,
+            "save_referrer": False,
+            "save_campaign_params": False,
+        },
+    }
 
 
 # AI Observability -------------------------------------------------------------------------------------------

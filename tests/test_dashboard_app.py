@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta
@@ -465,3 +466,62 @@ def test_the_dashboard_takes_posthog_from_its_environment_and_works_the_same_wit
     with make_client(served[1]) as c:
         assert c.post("/projects", data={"title": "dbt tests"}).status_code == 204
     assert len(posthog_api.events()) == 1 and len(posthog_api.records()) == 1
+
+
+def test_the_support_widget_shows_only_when_asked_for_never_on_the_login_page_and_captures_nothing_else(
+        tmp_path, posthog_api, monkeypatch):
+    served = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.append(app))
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--root", str(tmp_path)])
+    monkeypatch.delenv("HUNT_SCHEDULE", raising=False)
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "correct horse battery")
+
+    def pages(app):
+        c = make_client(app)
+        login = c.get("/login").text
+        c.post("/login", data={"password": "correct horse battery", "next": "/"})
+        return login, c.get("/").text
+
+    entry.main()  # PostHog is on, the widget is not asked for
+    assert not any("array.js" in page for page in pages(served[0]))
+
+    monkeypatch.setenv("POSTHOG_SUPPORT_WIDGET", "1")
+    entry.main()
+    login, board = pages(served[1])
+    assert "array.js" not in login  # public on Railway: anyone could open tickets from it
+    widget = json.loads(re.search(r"const widget = (.*);$", board, re.M).group(1))
+    assert (widget["script"], widget["token"]) == ("https://eu-assets.i.posthog.com/static/array.js", "phc_test")
+    # Each one is on in the project's settings for other sites, or on by default: on here, posthog-js would record
+    # every page, send its address and the text clicked, or load flags with the person's properties.
+    assert widget["options"] == {
+        "api_host": "https://eu.i.posthog.com",
+        "bootstrap": {"distinctID": posthog_client.OWNER},
+        "person_profiles": "identified_only",
+        "autocapture": False,
+        "rageclick": False,
+        "capture_pageview": False,
+        "capture_pageleave": False,
+        "capture_heatmaps": False,
+        "capture_dead_clicks": False,
+        "capture_performance": False,
+        "capture_exceptions": False,
+        "disable_session_recording": True,
+        "disable_surveys": True,
+        "disable_product_tours": True,
+        "advanced_disable_feature_flags": True,
+        "save_referrer": False,
+        "save_campaign_params": False,
+    }
+    # The page keeps the widget's own events only, and takes off them every property that holds an address (the
+    # session's first page leaked /c/acme.com before), but none of those PostHog needs to take the event.
+    assert widget["events"] == "$conversations_"
+    denied = re.compile(widget["denied"], re.I)
+    assert all(denied.search(name) for name in (
+        "$current_url", "$pathname", "$referrer", "$referring_domain", "$session_entry_url", "$session_entry_pathname",
+        "$session_entry_referrer", "$session_entry_referring_domain", "$prev_pageview_pathname", "$initial_current_url"))
+    assert not any(denied.search(name) for name in ("token", "distinct_id", "$session_id", "$lib", "$host"))
+
+    monkeypatch.delenv("POSTHOG_HOST")
+    with pytest.raises(SystemExit):
+        entry.main()
+    assert len(served) == 2

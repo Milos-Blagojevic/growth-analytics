@@ -65,5 +65,35 @@
     document.addEventListener("htmx:responseError", (e) => toast(e.detail.xhr.responseText || "Request failed."));
     document.addEventListener("htmx:sendError", () => toast("The dashboard is not reachable."));
   </script>
+
+  {% block support %}
+  {% if support_widget %}
+  {# PostHog Support's chat widget (POSTHOG_SUPPORT_WIDGET): see posthog_client.support_widget for what it sends. #}
+  <script>
+    (() => {
+      const widget = {{ support_widget | tojson }};
+      const denied = new RegExp(widget.denied, "i");
+      const script = document.createElement("script");
+      script.src = widget.script;
+      script.crossOrigin = "anonymous";
+      script.async = true;
+      script.onload = () => window.posthog.init(widget.token, {
+        ...widget.options,
+        // Only the widget's own events leave, without an address or the person properties posthog-js sets.
+        before_send: (event) => {
+          if (!event || !event.event.startsWith(widget.events)) return null;
+          for (const name of Object.keys(event.properties || {})) {
+            if (denied.test(name)) delete event.properties[name];
+          }
+          delete event.$set;
+          delete event.$set_once;
+          return event;
+        },
+      });
+      document.head.appendChild(script);
+    })();
+  </script>
+  {% endif %}
+  {% endblock %}
 </body>
 </html>
