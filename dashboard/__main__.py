@@ -10,6 +10,8 @@ By default it serves the current directory on 127.0.0.1 only, without a login. A
   PORT                   default for --port (set by Railway)
   POSTHOG_PROJECT_TOKEN  with POSTHOG_HOST, reports your actions, page views, errors and a start record to PostHog
   POSTHOG_HOST           the project's ingestion host, e.g. https://eu.i.posthog.com (optional)
+  POSTHOG_SUPPORT_WIDGET 1/true/yes shows PostHog Support's chat widget on the pages behind the login (needs both
+                         PostHog settings); what you type in it is sent to PostHog as a ticket
 """
 
 import argparse
@@ -45,15 +47,20 @@ def main():
         # Without a login, anyone who can reach the port could read your data and start paid runs.
         parser.error(f"--host {args.host} serves beyond this machine: set DASHBOARD_PASSWORD first")
     chat_bot = os.environ.get("CHAT_BOT", "").strip().lower() in ("1", "true", "yes")
+    token, host = os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST")
+    widget = None
+    if os.environ.get("POSTHOG_SUPPORT_WIDGET", "").strip().lower() in ("1", "true", "yes"):
+        widget = posthog_client.support_widget(token, host)
+        if widget is None:
+            parser.error("POSTHOG_SUPPORT_WIDGET needs POSTHOG_PROJECT_TOKEN and POSTHOG_HOST")
     try:
         entries = schedule.parse(os.environ.get("HUNT_SCHEDULE", ""))
         app = create_app(args.root, allowed_hosts=allowed_hosts(), password=password, schedule_entries=entries,
-                         chat_bot=chat_bot)
+                         chat_bot=chat_bot, support_widget=widget)
     except ValueError as exc:
         parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"),
-                             service="dashboard", exceptions=True)
+    posthog_client.configure(token, host, service="dashboard", exceptions=True)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

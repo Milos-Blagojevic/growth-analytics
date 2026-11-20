@@ -64,6 +64,8 @@ Send the count, the fixed-set value, the boolean or the duration instead. And ne
 
 If a change seems to need a function in `posthog_client` that takes free text, stop and ask the owner: that is a change to what leaves the machine, not an implementation detail.
 
+The one exception is the owner's choice: the dashboard's opt-in Support widget (`POSTHOG_SUPPORT_WIDGET`, settings in `posthog_client.support_widget`, the loader in `dashboard/templates/base.html`) sends what the owner types in it as a PostHog Support ticket. It makes no other text sendable; a change that widens what the widget's page sends (another event, another page, a capture setting turned on) needs the owner's say, as in AGENTS.md.
+
 ## 4. Test it
 
 PostHog is off in tests unless the test asks for the `posthog_api` fixture (`tests/posthog_mock.py`). With it, `posthog_api.events()` and `posthog_api.records()` return what was sent, in the wire format.
