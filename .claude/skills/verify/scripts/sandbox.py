@@ -1,7 +1,7 @@
 """Serve the dashboard on a throwaway data folder where every job runs a fake hunt.py, for /verify smoke runs.
 
     .venv/bin/python .claude/skills/verify/scripts/sandbox.py --root DIR [--code DIR] [--port 8765] [--seed]
-        [--schedule HUNT_SCHEDULE] [--password DASHBOARD_PASSWORD] [--chat-bot]
+        [--schedule HUNT_SCHEDULE] [--password DASHBOARD_PASSWORD] [--chat-bot] [--mcp-token MCP_TOKEN]
 
 `python -m dashboard` always starts the hunt.py next to the dashboard package (jobs.HUNT_SCRIPT), whatever --root
 is, so a Run button or HUNT_SCHEDULE entry there spends money and can message Telegram. This launcher passes
@@ -14,7 +14,8 @@ DIR must be new or empty, or a folder this script created before (it leaves a .v
 runs migrations on a copy of real data. --code is the code tree to serve (default: the current directory), so the
 same DIR can be served first by the base commit's code (`git archive <base> | tar -x -C <folder>`) and then by the
 changed code. --seed fills an empty DIR with sample files built by that tree's tests/dashboard_data.py.
---schedule and --password take the place of HUNT_SCHEDULE and DASHBOARD_PASSWORD (the environment is ignored).
+--schedule, --password and --mcp-token take the place of HUNT_SCHEDULE, DASHBOARD_PASSWORD and MCP_TOKEN (the
+environment is ignored); with --mcp-token, the MCP endpoint at /mcp starts jobs of the fake hunt.py too.
 The first output line is `SANDBOX <base url> <csrf token>`.
 """
 
@@ -80,6 +81,7 @@ def main():
     parser.add_argument("--schedule", default="", help="HUNT_SCHEDULE value; entries run the fake hunt.py")
     parser.add_argument("--password", default=None, help="DASHBOARD_PASSWORD value (turns on the login)")
     parser.add_argument("--chat-bot", action="store_true", help="CHAT_BOT=1: keep the fake hunt.py chat running")
+    parser.add_argument("--mcp-token", default=None, help="MCP_TOKEN value (serves the MCP endpoint at /mcp)")
     args = parser.parse_args()
     root, code = args.root.resolve(), args.code.resolve()
     seedable = not root.exists() or not any(root.iterdir())
@@ -98,7 +100,8 @@ def main():
 
     app = create_app(root, hunt_command=[sys.executable, str(fake)], password=args.password,
                      schedule_entries=schedule.parse(args.schedule),
-                     **({"chat_bot": True} if args.chat_bot else {}))  # older trees (--code) lack the kwarg
+                     **({"chat_bot": True} if args.chat_bot else {}),  # older trees (--code) lack these kwargs
+                     **({"mcp_token": args.mcp_token} if args.mcp_token else {}))
     print(f"SANDBOX http://127.0.0.1:{args.port} {app.state.csrf_token}", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=args.port)
 

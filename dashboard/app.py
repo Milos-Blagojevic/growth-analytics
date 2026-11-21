@@ -4,7 +4,8 @@ Pages read the pipeline's saved files (through hunt.db); your statuses, notes an
 jobs start hunt.py commands as subprocesses, from a button or from HUNT_SCHEDULE. Every request needs an allowed
 Host (loopback, plus the deployment's own host name), and with a password every page needs the login cookie. Every
 POST also needs the per-process CSRF token (sent by htmx as the X-CSRF-Token header) and a matching Origin, so other
-websites open in the browser cannot start paid runs.
+websites open in the browser cannot start paid runs. The MCP endpoint (/mcp, with MCP_TOKEN: mcp_server.py) takes a
+bearer token instead of both, and no Origin but the dashboard's own.
 
 With PostHog on (`python -m dashboard` turns it on from POSTHOG_PROJECT_TOKEN and POSTHOG_HOST), each action of
 yours that succeeds is reported as an event (`posthog_client.capture`: a name and a few properties that are values
@@ -18,7 +19,7 @@ it is sent to PostHog as a ticket.
 import hashlib
 import secrets
 import threading
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -31,7 +32,8 @@ from starlette.datastructures import Headers
 from starlette.routing import Match, Route
 
 from clients import posthog_client
-from dashboard import auth, bot, db, email_updates, ingest, jobs, monitors, projects, queries, schedule, tracking
+from dashboard import (auth, bot, db, email_updates, ingest, jobs, mcp_server, monitors, projects, queries, schedule,
+                       tracking)
 from interview import interviews
 from pipeline import runs
 
@@ -169,15 +171,19 @@ class _ReportPageviews:
 
 
 def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, password=None, schedule_entries=(),
-               chat_bot=False, support_widget=None):
+               chat_bot=False, support_widget=None, mcp_token=None):
     """`hunt_command` replaces `python hunt.py` (tests use a stub); `allowed_hosts` are the accepted Host names;
     `password` turns on the login (required when serving beyond loopback); `schedule_entries` come from
     schedule.parse(HUNT_SCHEDULE); `chat_bot` keeps `hunt.py chat` running while the app serves (CHAT_BOT=1);
     `support_widget` (posthog_client.support_widget, POSTHOG_SUPPORT_WIDGET=1) puts PostHog Support's chat widget on
-    every page but the login page."""
+    every page but the login page; `mcp_token` (MCP_TOKEN) serves the MCP endpoint (mcp_server.py) at /mcp to clients
+    that send it as a bearer token."""
     root = Path(root).resolve()
     login = auth.Auth(password) if password else None
+    if mcp_token:
+        mcp_server.check_token(mcp_token)
     scheduler = None  # set below, once the job helpers exist
+    tools = None  # the MCP server, likewise
     chat = bot.Bot(root, hunt_command) if chat_bot else None
 
     @asynccontextmanager
@@ -187,7 +193,8 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             scheduler.start()
         if chat:
             chat.start()
-        yield
+        async with tools.session_manager.run() if tools else nullcontext():
+            yield
         if scheduler:
             scheduler.stop()
         if chat:
@@ -244,6 +251,20 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         hostname = urlparse(f"//{host}").hostname
         if hostname not in allowed_hosts:
             return PlainTextResponse("Unknown host.", status_code=400)  # also blocks DNS rebinding
+        if mcp_token and request.url.path == mcp_server.PATH:
+            # An MCP client is no browser: its bearer token stands in for the login cookie and the CSRF token, and
+            # neither of those opens /mcp. A page of another site cannot send the header without a CORS preflight,
+            # which nothing here answers, and an Origin other than the dashboard's own is refused as for the pages.
+            origin = request.headers.get("origin")
+            if origin is not None and not _same_origin(origin, host):
+                return PlainTextResponse("Cross-origin request refused.", status_code=403)
+            scheme, _, given = request.headers.get("authorization", "").partition(" ")
+            if scheme.lower() != "bearer" or not secrets.compare_digest(given.encode(), mcp_token.encode()):
+                return PlainTextResponse("Missing or wrong MCP token.", status_code=401,
+                                         headers={"WWW-Authenticate": "Bearer"})
+            if request.method != "POST":  # stateless: no stream to open (GET) and no session to end (DELETE)
+                return PlainTextResponse("POST only.", status_code=405, headers={"Allow": "POST"})
+            return await call_next(request)
         if request.method not in ("GET", "HEAD"):
             # Browsers send Origin with every POST, so one without it is not from a page of the dashboard.
             if not _same_origin(request.headers.get("origin", ""), host):
@@ -380,18 +401,13 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     @app.post("/leads/queue")
     async def leads_queue(request: Request):
         """Appends the selected leads to companies.csv, so the next full run (scheduled or not) researches them."""
-        domains = [d for d in (await request.form()).getlist("domains") if d]
+        domains = (await request.form()).getlist("domains")
         with connection() as conn:
-            names = {r["domain"]: r["name"] for r in conn.execute("SELECT domain, name FROM leads")}
-        unknown = [d for d in domains if d not in names]
-        if not domains or unknown:
-            return PlainTextResponse(f"Unknown companies: {', '.join(unknown)}" if unknown else "Select companies first.",
-                                     status_code=400)
-        try:
-            ingest.add_companies(root / ingest.COMPANIES, [(names[d], d) for d in domains])
-        except ValueError as exc:  # companies.csv is unreadable (the banner names it): nothing is appended blind
-            return PlainTextResponse(f"companies.csv {exc}", status_code=400)
-        posthog_client.capture("leads_queued", {"lead_count": len(domains)})
+            try:
+                ingest.queue_leads(conn, root, domains)
+            except ValueError as exc:
+                return PlainTextResponse(str(exc), status_code=400)
+        posthog_client.capture("leads_queued", {"lead_count": len([d for d in domains if d])})
         return Response(status_code=204, headers={"HX-Refresh": "true"})
 
     # Pipeline and side projects -----------------------------------------------------------------------------
@@ -716,5 +732,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     if schedule_entries:
         scheduler = schedule.Scheduler(schedule_entries, start_scheduled)
         app.state.scheduler = scheduler
+
+    if mcp_token:
+        tools = mcp_server.build(root, runner, connection, report_started)
+        app.router.routes.extend(mcp_server.http_routes(tools))
 
     return app

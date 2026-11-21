@@ -43,12 +43,14 @@ def extract(ref, into):
 
 def forget(tree):
     """Drops `tree` and `tree/tests` from sys.path and the modules imported from them (not from a .venv inside
-    `tree`), so the code tree served next loads its own modules."""
+    `tree`, and not this script, which runs as __main__: duckdb, for one, imports __main__ when it loads), so the code
+    tree served next loads its own modules."""
     own = {str(tree), str(tree / "tests")}
     sys.path[:] = [p for p in sys.path if p not in own]
     for name, module in list(sys.modules.items()):
         file = getattr(module, "__file__", None)
-        if file and Path(file).resolve().is_relative_to(tree) and "site-packages" not in Path(file).parts:
+        if (name != "__main__" and file and Path(file).resolve().is_relative_to(tree)
+                and "site-packages" not in Path(file).parts):
             del sys.modules[name]
 
 
