@@ -108,9 +108,11 @@ def build(root, runner, connection, report_started):
     previews_lock = threading.Lock()
 
     def tool(annotations):
-        """Registers `fn` as a tool. The failures a tool expects (ValueError, LookupError: what the pages answer 400,
-        404 or 409 for) go back to the client as their message; anything else is reported to PostHog by type and
-        stack, and the client gets the SDK's generic error."""
+        """Registers `fn` as a tool. The failures a tool expects (ValueError and LookupError themselves: how the tools
+        and the pages' checks refuse, what the pages answer 400, 404 or 409 for) go back to the client as their
+        message. Anything else, their subclasses included (a KeyError, a JSON or decode error: a bug, or a file in a
+        shape the code does not know), is reported to PostHog by type and stack, and the client gets the SDK's
+        generic error."""
 
         def register(fn):
             @functools.wraps(fn)
@@ -119,9 +121,9 @@ def build(root, runner, connection, report_started):
                     result = fn(*args, **kwargs)
                 except ToolError:
                     raise
-                except (ValueError, LookupError) as exc:
-                    raise ToolError(str(exc)) from None
                 except Exception as exc:
+                    if type(exc) in (ValueError, LookupError):
+                        raise ToolError(str(exc)) from None
                     posthog_client.capture_exception(exc, {"route": PATH, "method": "POST", "tool": fn.__name__})
                     raise
                 posthog_client.capture("mcp_tool_called", {"tool": fn.__name__})

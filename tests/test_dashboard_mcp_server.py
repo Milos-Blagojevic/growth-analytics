@@ -381,8 +381,11 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         call(c, "cancel_job", job_id=running)
         finished(root, running)
         monkeypatch.setattr(queries, "leads", unreadable)
-        with pytest.raises(Refused, match="^Error executing tool list_leads$"):  # the client learns nothing of it
-            call(c, "list_leads")
+        # A bug, or a saved file in a shape the code does not know: a KeyError is no refusal, though a LookupError.
+        monkeypatch.setattr(queries, "interview_progress", lambda conn: {}["PRIVATE-KEY"])
+        for tool in ("list_leads", "interview_progress"):
+            with pytest.raises(Refused, match=f"^Error executing tool {tool}$"):  # the client learns nothing of it
+                call(c, tool)
 
     events = posthog_api.events()
     assert [own(event) for event in events] == [
@@ -414,12 +417,13 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         ("hunt_run_cancelled", {"trigger": "mcp"}),
         ("mcp_tool_called", {"tool": "cancel_job"}),
         ("$exception", {"route": "/mcp", "method": "POST", "tool": "list_leads"}),
+        ("$exception", {"route": "/mcp", "method": "POST", "tool": "interview_progress"}),
     ]
     assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}
-    (raised,) = events[-1]["properties"]["$exception_list"]
-    assert (raised["type"], raised["value"]) == ("PermissionError", "")
-    for frame in raised["stacktrace"]["frames"]:  # the source around each line: code, here this test's
-        for key in ("pre_context", "context_line", "post_context"):
+    raised = [r for event in events[-2:] for r in event["properties"]["$exception_list"]]
+    assert [(r["type"], r["value"]) for r in raised] == [("PermissionError", ""), ("KeyError", "")]
+    for frame in (frame for r in raised for frame in r["stacktrace"]["frames"]):
+        for key in ("pre_context", "context_line", "post_context"):  # the source around each line: here this test's
             frame.pop(key, None)
     told = json.dumps(events).lower()
     for private in ("acme", "delta", "private", TOKEN.lower(), "127.0.0.1"):
