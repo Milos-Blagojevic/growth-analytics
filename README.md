@@ -15,7 +15,7 @@ Researches companies with Exa, scores how well they and their open roles fit you
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
 | `prospects/` | Sales prospects for your own product: Exa research, Claude assessment, value range and routing rules, DuckDB warehouse | [prospects/README.md](prospects/README.md) |
 | `evals/` | Public, human-labeled AI exams: Jev role-screen runner and reproducible results | [evals/README.md](evals/README.md) |
-| `dashboard/` | The dashboard app and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
+| `dashboard/` | The dashboard app, its MCP endpoint for AI clients and its Railway deploy | [dashboard/README.md](dashboard/README.md) |
 | `tests/` | The test suite and Verify in CI | [tests/README.md](tests/README.md) |
 | `docs/` | Specs for coding agents and parked ideas | [docs/parked-ideas.md](docs/parked-ideas.md) |
 
@@ -67,7 +67,7 @@ python -m clients.exa_client
 | `python -m prospects discover` | Finds companies that match your ideal customer in Fiber's company database | Exa agent run and Fiber (about $0.75 a run so far; no cap) | No | [Prospects](prospects/README.md#discover) |
 | `python -m prospects run` | Researches, assesses, rates and routes every company in `prospects.csv` | Exa, Claude (Exa only with `--research-only`) | No | [Prospects](prospects/README.md#run) |
 | `python -m prospects load` | Rebuilds `prospects.duckdb` from the saved runs with the current `prospects.toml` and prints the ranking | No | No | [Prospects](prospects/README.md#the-warehouse) |
-| `python -m dashboard` | Dashboard: results, tracking, starting jobs | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard) |
+| `python -m dashboard` | Dashboard: results, tracking, starting jobs; with `MCP_TOKEN`, the same as tools for AI clients at `/mcp` | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard), [MCP endpoint](dashboard/README.md#mcp-endpoint) |
 | `python -m evals roles` | Validate the public Jev keep/drop exam; `--dataset FILE` selects a frozen exam, `--live --output NEW_DIRECTORY` scores it and saves reports | No by default; Jev with `--live` | No | [AI evaluations](evals/README.md) |
 | `python -m pytest` | Test suite, no keys and no network | No | No | [Tests](tests/README.md#run-the-tests) |
 
@@ -75,7 +75,7 @@ python -m clients.exa_client
 
 | File | Purpose |
 |---|---|
-| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic,logfire]` and `logfire` for the chat bot and its traces, `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard, `posthog` and the OpenTelemetry packages its log export uses (`opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`), and `duckdb` for the prospect warehouse) |
+| `requirements.txt` | Pinned dependencies (`exa-py`, `python-dotenv`, `anthropic`, `pydantic`, `requests`, `pydantic-ai-slim[anthropic,logfire]` and `logfire` for the chat bot and its traces, `fastapi`, `uvicorn`, `jinja2`, `python-multipart` for the dashboard, `mcp` for its MCP endpoint, `posthog` and the OpenTelemetry packages its log export uses (`opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`), and `duckdb` for the prospect warehouse, which the MCP endpoint reads too) |
 | `requirements-dev.txt` | Test dependencies (`pytest`, `responses`, `httpx` for FastAPI's `TestClient`, `PyYAML` for the Verify workflow test) |
 | `pytest.ini` | pytest settings: test paths and options |
 | `evals/data/roles*.json`, `evals/sessions/`, `evals/results/<run>/` | Public synthetic/real-posting exams, source-backed owner-labeling records, and selected live result directories with per-case evidence and Markdown reports |

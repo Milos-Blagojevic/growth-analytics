@@ -12,6 +12,8 @@ By default it serves the current directory on 127.0.0.1 only, without a login. A
   POSTHOG_HOST           the project's ingestion host, e.g. https://eu.i.posthog.com (optional)
   POSTHOG_SUPPORT_WIDGET 1/true/yes shows PostHog Support's chat widget on the pages behind the login (needs both
                          PostHog settings); what you type in it is sent to PostHog as a ticket
+  MCP_TOKEN              serves the MCP endpoint at /mcp (at least 32 characters) to clients that send it as
+                         `Authorization: Bearer <MCP_TOKEN>`: your dashboard's data and jobs, as tools
 """
 
 import argparse
@@ -53,13 +55,14 @@ def main():
         widget = posthog_client.support_widget(token, host)
         if widget is None:
             parser.error("POSTHOG_SUPPORT_WIDGET needs POSTHOG_PROJECT_TOKEN and POSTHOG_HOST")
+    # Before create_app: the MCP SDK sets up logging of its own when nothing has.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
         entries = schedule.parse(os.environ.get("HUNT_SCHEDULE", ""))
         app = create_app(args.root, allowed_hosts=allowed_hosts(), password=password, schedule_entries=entries,
-                         chat_bot=chat_bot, support_widget=widget)
+                         chat_bot=chat_bot, support_widget=widget, mcp_token=os.environ.get("MCP_TOKEN") or None)
     except ValueError as exc:
         parser.error(str(exc))
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     posthog_client.configure(token, host, service="dashboard", exceptions=True)
     uvicorn.run(app, host=args.host, port=args.port)
 

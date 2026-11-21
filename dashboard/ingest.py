@@ -285,6 +285,23 @@ def add_companies(path, companies):
     return new
 
 
+def queue_leads(conn, root, domains):
+    """Appends the leads `domains` (discovered.csv's, by domain) to companies.csv, so the next full run researches
+    them; returns the rows added. Raises ValueError for no domains, a domain that is no lead, and a companies.csv
+    that cannot be read (the banner names it): nothing is appended blind."""
+    domains = [d for d in domains if d]
+    if not domains:
+        raise ValueError("Select companies first.")
+    names = {r["domain"]: r["name"] for r in conn.execute("SELECT domain, name FROM leads")}
+    unknown = [d for d in domains if d not in names]
+    if unknown:
+        raise ValueError(f"Unknown companies: {', '.join(unknown)}")
+    try:
+        return add_companies(Path(root) / COMPANIES, [(names[d], d) for d in domains])
+    except ValueError as exc:
+        raise ValueError(f"companies.csv {exc}") from exc
+
+
 def _ingest_leads(conn, discovered, queued):
     """`queued`: normalised domains of companies.csv."""
     if not discovered.exists():
