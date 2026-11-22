@@ -24,6 +24,10 @@ retention) without a person profile (`_before_send`): no identify, no person or 
   with its type and its stack, never its message (`_without_messages`): a message names the file that could not be
   written, quotes the value that did not parse. hunt.py and `python -m prospects` say how a command ended in its
   `finished` record instead.
+- `instrument_mcp`, `mcp_sessions`, `flush_mcp`: the dashboard's MCP endpoint through PostHog's MCP Analytics SDK
+  (posthog.mcp): a $mcp_tool_call per tool call, by tool, with its seconds, whether it failed and the client that
+  made it, plus the handshakes and tool listings. Never a tool's arguments, what it returned, an agent's stated
+  intent, a name an agent made up or an error's message (`_without_mcp_text`).
 - `support_widget`: the settings of posthog-js for PostHog Support's chat widget on the dashboard's pages, only when
   the owner turns it on (POSTHOG_SUPPORT_WIDGET). The one exception to "never text": what the owner types in the
   widget leaves as a ticket. Nothing else the browser could capture by itself does.
@@ -65,6 +69,7 @@ _records = None  # (LoggerProvider, its logger): log records go out through a pr
 _service = None  # "dashboard", "hunt", "prospects" or "evals": on every event and log record
 _session = f"process-{uuid4()}"  # the AI session of the generations one command makes outside an agent turn
 _turn = ContextVar("posthog_agent_turn", default=None)  # the agent answer in progress: {"trace_id", "session_id"}
+_mcp = None  # the analytics handle of the instrumented MCP server, whose events `flush_mcp` waits for
 
 
 def configure(token, host, *, service, exceptions=False):
@@ -146,9 +151,9 @@ def flush():
 
 def shutdown():
     """Sends what is queued and turns PostHog off again. Runs when the process exits; tests call it between cases."""
-    global _client, _records, _service
+    global _client, _records, _service, _mcp
     client, records = _client, _records
-    _client = _records = _service = None
+    _client = _records = _service = _mcp = None
     if client is None:
         return
     for step in (client.shutdown, lambda: records[0].force_flush(timeout_millis=FLUSH_MILLIS), records[0].shutdown):
@@ -248,6 +253,74 @@ def support_widget(token, host):
             "save_campaign_params": False,
         },
     }
+
+
+# MCP Analytics ----------------------------------------------------------------------------------------------
+# https://posthog.com/docs/mcp-analytics/installation/python: the SDK wraps the server's tool calls and sends its
+# events through this module's client, so `_before_send` makes them the owner's and takes exception messages off.
+
+# What the SDK puts on its events that holds text: a tool's arguments and what it returned (companies, notes,
+# research), the agent's own words on why it called the tool, and an error's message (it quotes what was asked for).
+MCP_DENIED_PROPERTIES = ("$mcp_parameters", "$mcp_response", "$mcp_intent", "$mcp_error_message")
+
+
+def instrument_mcp(server):
+    """Reports the calls of `server` (an mcp MCPServer) to PostHog; does nothing while PostHog is off. Call it once
+    the tools are registered and before the server's ASGI app is built.
+
+    No argument is added to the tools and nothing to what they return: no `context` (it would make every tool require
+    the agent's intent, which is never sent), no `llm_model` (a model name the agent writes itself) and no
+    conversation id (an argument and a text block in every result). `$exception` stays with the endpoint's own
+    `capture_exception`, which reports only the failures that are bugs."""
+    global _mcp
+    if _client is None:
+        return
+    try:
+        from posthog.mcp import instrument
+        from posthog.mcp.types import MCPAnalyticsOptions
+
+        _mcp = instrument(server, _client, MCPAnalyticsOptions(
+            context=False, capture_model=False, enable_conversation_id=False, enable_exception_autocapture=False,
+            before_send=_without_mcp_text))
+    except Exception:
+        logger.warning("PostHog MCP Analytics could not be set up", exc_info=True)
+
+
+def _without_mcp_text(event):
+    properties = event["properties"]
+    for key in MCP_DENIED_PROPERTIES:
+        properties.pop(key, None)
+    if event["event"] == "$mcp_unknown_tool":  # the name the agent asked for, which no tool has: its own text
+        properties.pop("$mcp_tool_name", None)
+    return event
+
+
+def mcp_sessions(app, server):
+    """`app`, the ASGI app of a route that serves `server`, behind the SDK's stateless-session middleware once
+    `instrument_mcp` has instrumented it: at a handshake it sends the client a session token in the Mcp-Session-Id
+    header (a session id and the client's name and version, which the client sends back with each request), so a
+    client's calls share a session and carry its name. The SDK puts it on the app it builds, which a server that
+    takes only that app's routes leaves out."""
+    if _mcp is None:
+        return app
+    try:
+        from posthog.mcp import PostHogMcpStatelessSessionMiddleware
+
+        return PostHogMcpStatelessSessionMiddleware(app, server=server)
+    except Exception:
+        logger.warning("PostHog MCP sessions could not be set up", exc_info=True)
+        return app
+
+
+async def flush_mcp():
+    """Waits for the events of the MCP calls that have ended (the SDK makes them in tasks of the server's event
+    loop): a server awaits it when it stops, before `flush`."""
+    if _mcp is None:
+        return
+    try:
+        await _mcp.flush()
+    except Exception:
+        logger.warning("PostHog MCP flush failed", exc_info=True)
 
 
 # AI Observability -------------------------------------------------------------------------------------------

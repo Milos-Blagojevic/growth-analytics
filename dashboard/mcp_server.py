@@ -21,8 +21,9 @@ untrusted, as everywhere else. No tool reads a mailbox, the CV, profile.toml, pr
 turns, and none sends anything by itself: Telegram is reached only through jobs, as from the Runs page.
 
 PostHog: each tool call that succeeds is `mcp_tool_called` with the tool's name; a change or a job start also sends
-the event the same action on the pages sends, with `trigger: "mcp"`. Never an argument or a result. A tool that
-fails on something unexpected is reported like an unhandled exception of the pages (`capture_exception`, route /mcp).
+the event the same action on the pages sends, with `trigger: "mcp"`. PostHog's MCP Analytics SDK also reports every
+call, handshake and tool listing (`posthog_client.instrument_mcp`). Never an argument or a result. A tool that fails
+on something unexpected is reported like an unhandled exception of the pages (`capture_exception`, route /mcp).
 """
 
 import functools
@@ -538,13 +539,17 @@ def build(root, runner, connection, report_started):
         report("hunt_run_cancelled")
         return {"job_id": job_id, "cancelled": True}
 
+    posthog_client.instrument_mcp(server)  # before http_routes builds its app: the SDK wraps that too
     return server
 
 
 def http_routes(server):
     """The routes that serve `server` at PATH: stateless, a JSON answer to each POST. The SDK's own Host and Origin
-    checks are off: the dashboard's guard makes them, for the dashboard's host names."""
+    checks are off: the dashboard's guard makes them, for the dashboard's host names. With PostHog on, each route's
+    app is behind PostHog's MCP session middleware, inside the guard (`posthog_client.mcp_sessions`)."""
     app = server.streamable_http_app(
         streamable_http_path=PATH, json_response=True, stateless_http=True,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+    for route in app.routes:
+        route.app = posthog_client.mcp_sessions(route.app, server)
     return app.routes

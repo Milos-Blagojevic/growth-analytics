@@ -55,15 +55,16 @@ def main():
         widget = posthog_client.support_widget(token, host)
         if widget is None:
             parser.error("POSTHOG_SUPPORT_WIDGET needs POSTHOG_PROJECT_TOKEN and POSTHOG_HOST")
-    # Before create_app: the MCP SDK sets up logging of its own when nothing has.
+    # Before create_app: the MCP SDK sets up logging of its own when nothing has, and the MCP endpoint is
+    # instrumented for PostHog when it is built.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    posthog_client.configure(token, host, service="dashboard", exceptions=True)
     try:
         entries = schedule.parse(os.environ.get("HUNT_SCHEDULE", ""))
         app = create_app(args.root, allowed_hosts=allowed_hosts(), password=password, schedule_entries=entries,
                          chat_bot=chat_bot, support_widget=widget, mcp_token=os.environ.get("MCP_TOKEN") or None)
     except ValueError as exc:
         parser.error(str(exc))
-    posthog_client.configure(token, host, service="dashboard", exceptions=True)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

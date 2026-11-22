@@ -13,6 +13,7 @@ from dashboard import db, mcp_server, queries
 from dashboard.app import create_app
 from dashboard_data import (BASE_URL, INTERVIEW_TURNS, PREP, fit, mail_update, result, review_fields, wispr,
                             write_interview, write_mail, write_run)
+import posthog_mock
 from prospect_data import SETTINGS, assessment, figure, research
 from prospect_data import write_run as write_prospect_run
 from prospects import warehouse
@@ -386,9 +387,12 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         for tool in ("list_leads", "interview_progress"):
             with pytest.raises(Refused, match=f"^Error executing tool {tool}$"):  # the client learns nothing of it
                 call(c, tool)
+        made_up = rpc(c, "tools/call", {"name": "private-unknown-tool", "arguments": {}}).json()["result"]
+        assert made_up["isError"]
 
     events = posthog_api.events()
-    assert [own(event) for event in events] == [
+    dashboards = [event for event in events if not event["event"].startswith("$mcp_")]
+    assert [own(event) for event in dashboards] == [
         ("mcp_tool_called", {"tool": "get_company"}),
         ("pipeline_status_updated", {"status": "applied", "trigger": "mcp"}),
         ("mcp_tool_called", {"tool": "set_status"}),
@@ -419,8 +423,33 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         ("$exception", {"route": "/mcp", "method": "POST", "tool": "list_leads"}),
         ("$exception", {"route": "/mcp", "method": "POST", "tool": "interview_progress"}),
     ]
+    # PostHog's MCP Analytics: every call, refused or failed ones too, by tool, with why it failed by type only.
+    calls = [event["properties"] for event in posthog_api.events("$mcp_tool_call")]
+    assert [(p["$mcp_tool_name"], p["$mcp_is_error"], p.get("$mcp_error_type")) for p in calls] == [
+        ("get_company", False, None),
+        ("set_status", False, None),
+        ("set_status", False, None),
+        ("get_company", True, "ToolError"),
+        ("list_email_suggestions", False, None),
+        ("decide_email_suggestion", False, None),
+        ("queue_leads", False, None),
+        ("create_project", False, None),
+        ("update_project", False, None),
+        ("create_interview", False, None),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("preview_job", True, "ToolError"),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("cancel_job", False, None),
+        ("list_leads", True, "PermissionError"),
+        ("interview_progress", True, "KeyError"),
+    ]
+    assert len(posthog_api.events("$mcp_unknown_tool")) == 1  # without the name the agent made up
     assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}
-    raised = [r for event in events[-2:] for r in event["properties"]["$exception_list"]]
+    raised = [r for event in dashboards[-2:] for r in event["properties"]["$exception_list"]]
     assert [(r["type"], r["value"]) for r in raised] == [("PermissionError", ""), ("KeyError", "")]
     for frame in (frame for r in raised for frame in r["stacktrace"]["frames"]):
         for key in ("pre_context", "context_line", "post_context"):  # the source around each line: here this test's
@@ -428,3 +457,45 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
     told = json.dumps(events).lower()
     for private in ("acme", "delta", "private", TOKEN.lower(), "127.0.0.1"):
         assert private not in told
+
+
+def test_with_posthog_on_a_client_sees_the_same_tools_and_answers_and_its_calls_share_its_session(root, posthog_api):
+    def connect(app):
+        """A client's handshake, the session it is given (sent back with each request), the tools and an answer."""
+        with served(app) as c:
+            hello = rpc(c, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                                          "clientInfo": {"name": "test-client", "version": "1.0"}})
+            session = hello.headers.get("mcp-session-id")
+            headers = HEADERS | ({"Mcp-Session-Id": session} if session else {})
+            tools = rpc(c, "tools/list", headers=headers).json()["result"]["tools"]
+            answer = rpc(c, "tools/call", {"name": "get_company", "arguments": {"domain": "acme.com"}},
+                         headers=headers).json()["result"]
+        return session, tools, answer
+
+    posthog_client.shutdown()
+    off = connect(make_app(root))
+    posthog_client.configure(posthog_mock.TOKEN, posthog_mock.HOST, service="tests")
+    on = connect(make_app(root))
+
+    assert off[0] is None and on[0]  # the endpoint keeps no sessions: PostHog's middleware hands the client one
+    assert on[1:] == off[1:]  # no argument added to a tool, nothing added to an answer
+    hello, tool_call = posthog_api.events("$mcp_initialize")[0], posthog_api.events("$mcp_tool_call")[0]
+    assert tool_call["session_id"] == hello["session_id"]
+    assert (tool_call["properties"]["$mcp_tool_name"], tool_call["properties"]["$mcp_client_name"]) == (
+        "get_company", "test-client")
+
+
+def test_the_dashboard_reports_each_tool_call_once_its_environment_turns_posthog_on(tmp_path, posthog_api,
+                                                                                      monkeypatch):
+    served_apps = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served_apps.append(app))
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--root", str(tmp_path)])
+    monkeypatch.delenv("HUNT_SCHEDULE", raising=False)
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+    monkeypatch.setenv("MCP_TOKEN", TOKEN)
+
+    entry.main()  # POSTHOG_PROJECT_TOKEN and POSTHOG_HOST are set, as on Railway
+    with served(served_apps[0]) as c:
+        call(c, "overview")
+    (tool_call,) = posthog_api.events("$mcp_tool_call")
+    assert (tool_call["properties"]["$mcp_tool_name"], tool_call["properties"]["service"]) == ("overview", "dashboard")
