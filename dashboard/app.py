@@ -199,6 +199,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             scheduler.stop()
         if chat:
             chat.stop()
+        await posthog_client.flush_mcp()
         posthog_client.flush()
 
     app = FastAPI(title="Job hunt dashboard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)

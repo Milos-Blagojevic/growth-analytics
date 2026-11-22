@@ -388,7 +388,8 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
                 call(c, tool)
 
     events = posthog_api.events()
-    assert [own(event) for event in events] == [
+    dashboards = [event for event in events if not event["event"].startswith("$mcp_")]
+    assert [own(event) for event in dashboards] == [
         ("mcp_tool_called", {"tool": "get_company"}),
         ("pipeline_status_updated", {"status": "applied", "trigger": "mcp"}),
         ("mcp_tool_called", {"tool": "set_status"}),
@@ -419,8 +420,32 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         ("$exception", {"route": "/mcp", "method": "POST", "tool": "list_leads"}),
         ("$exception", {"route": "/mcp", "method": "POST", "tool": "interview_progress"}),
     ]
+    # PostHog's MCP Analytics: every call, refused or failed ones too, by tool, with why it failed by type only.
+    calls = [event["properties"] for event in posthog_api.events("$mcp_tool_call")]
+    assert [(p["$mcp_tool_name"], p["$mcp_is_error"], p.get("$mcp_error_type")) for p in calls] == [
+        ("get_company", False, None),
+        ("set_status", False, None),
+        ("set_status", False, None),
+        ("get_company", True, "ToolError"),
+        ("list_email_suggestions", False, None),
+        ("decide_email_suggestion", False, None),
+        ("queue_leads", False, None),
+        ("create_project", False, None),
+        ("update_project", False, None),
+        ("create_interview", False, None),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("preview_job", True, "ToolError"),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("cancel_job", False, None),
+        ("list_leads", True, "PermissionError"),
+        ("interview_progress", True, "KeyError"),
+    ]
     assert {event["distinct_id"] for event in events} == {posthog_client.OWNER}
-    raised = [r for event in events[-2:] for r in event["properties"]["$exception_list"]]
+    raised = [r for event in dashboards[-2:] for r in event["properties"]["$exception_list"]]
     assert [(r["type"], r["value"]) for r in raised] == [("PermissionError", ""), ("KeyError", "")]
     for frame in (frame for r in raised for frame in r["stacktrace"]["frames"]):
         for key in ("pre_context", "context_line", "post_context"):  # the source around each line: here this test's
