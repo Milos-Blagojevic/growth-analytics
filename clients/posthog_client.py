@@ -25,9 +25,9 @@ retention) without a person profile (`_before_send`): no identify, no person or 
   written, quotes the value that did not parse. hunt.py and `python -m prospects` say how a command ended in its
   `finished` record instead.
 - `instrument_mcp`, `mcp_sessions`, `flush_mcp`: the dashboard's MCP endpoint through PostHog's MCP Analytics SDK
-  (posthog.mcp): a $mcp_tool_call per tool call, by tool, with its seconds, whether it failed and the client and model
-  that made it, plus the handshakes and tool listings. Never a tool's arguments, what it returned, an agent's stated
-  intent or an error's message (`MCP_DENIED_PROPERTIES`).
+  (posthog.mcp): a $mcp_tool_call per tool call, by tool, with its seconds, whether it failed and the client that
+  made it, plus the handshakes and tool listings. Never a tool's arguments, what it returned, an agent's stated
+  intent, a name an agent made up or an error's message (`_without_mcp_text`).
 - `support_widget`: the settings of posthog-js for PostHog Support's chat widget on the dashboard's pages, only when
   the owner turns it on (POSTHOG_SUPPORT_WIDGET). The one exception to "never text": what the owner types in the
   widget leaves as a ticket. Nothing else the browser could capture by itself does.
@@ -268,9 +268,10 @@ def instrument_mcp(server):
     """Reports the calls of `server` (an mcp MCPServer) to PostHog; does nothing while PostHog is off. Call it once
     the tools are registered and before the server's ASGI app is built.
 
-    No `context` argument (it would make every tool require the agent's intent, which is never sent) and no
-    conversation id (it adds an argument and a text block to what the tools return); `$exception` stays with the
-    endpoint's own `capture_exception`, which reports only the failures that are bugs."""
+    No argument is added to the tools and nothing to what they return: no `context` (it would make every tool require
+    the agent's intent, which is never sent), no `llm_model` (a model name the agent writes itself) and no
+    conversation id (an argument and a text block in every result). `$exception` stays with the endpoint's own
+    `capture_exception`, which reports only the failures that are bugs."""
     global _mcp
     if _client is None:
         return
@@ -279,15 +280,18 @@ def instrument_mcp(server):
         from posthog.mcp.types import MCPAnalyticsOptions
 
         _mcp = instrument(server, _client, MCPAnalyticsOptions(
-            context=False, enable_conversation_id=False, enable_exception_autocapture=False,
+            context=False, capture_model=False, enable_conversation_id=False, enable_exception_autocapture=False,
             before_send=_without_mcp_text))
     except Exception:
         logger.warning("PostHog MCP Analytics could not be set up", exc_info=True)
 
 
 def _without_mcp_text(event):
+    properties = event["properties"]
     for key in MCP_DENIED_PROPERTIES:
-        event["properties"].pop(key, None)
+        properties.pop(key, None)
+    if event["event"] == "$mcp_unknown_tool":  # the name the agent asked for, which no tool has: its own text
+        properties.pop("$mcp_tool_name", None)
     return event
 
 
