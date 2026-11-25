@@ -11,7 +11,6 @@ The test suite, flat in this folder. It needs no keys and makes no network calls
 | `jev_mock.py` | The TypeSafe (Jev) API mock |
 | `posthog_mock.py` | The PostHog ingestion mock: events and log records |
 | `dashboard_data.py` | Writes pipeline files to a temporary directory for dashboard tests |
-| `prospect_data.py` | Sample `prospects.toml`, Exa replies, research and saved runs for the prospects tests |
 
 ## Run the tests
 

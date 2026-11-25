@@ -95,7 +95,7 @@ For a few companies whose new postings you want to hear about, list them in `mon
 - `python hunt.py monitor-sync` makes the monitors on your Exa account match the list. It creates the missing ones, updates those whose search no longer matches (the company's name, your `[search].roles`), deletes those of companies you removed, and prints when each runs next. Run it after every change to the list or to your roles: the dashboard's Monitors block runs it for you after each change it makes, and a `monitor-sync` entry in `HUNT_SCHEDULE` keeps a removed company or a change of roles from waiting for the next one.
 - `python hunt.py monitor` reads what the monitors' runs found since the last check, judges each new posting and sends the ones that suit you to Telegram. Schedule it for the times you want to hear about them.
 
-For 08:00, 12:00, 16:00 and 20:00, add this entry to `HUNT_SCHEDULE` on Railway (see [Deploy to Railway](../dashboard/README.md#deploy-to-railway)), or `0 8,12,16,20 * * * cd /path/to/growth-analytics && .venv/bin/python hunt.py monitor >> monitor.log 2>&1` to `crontab -e` on a laptop that is on:
+For 08:00, 12:00, 16:00 and 20:00, add this entry to `HUNT_SCHEDULE` on Railway (see [Deploy to Railway](../dashboard/README.md#deploy-to-railway)), or `0 8,12,16,20 * * * cd /path/to/job-hunt && .venv/bin/python hunt.py monitor >> monitor.log 2>&1` to `crontab -e` on a laptop that is on:
 
 ```
 0 8,12,16,20 * * * monitor

@@ -1,4 +1,4 @@
-"""Exa client for growth-analytics: search, contents, agent runs and monitors.
+"""Exa client for the job hunt: search, contents, agent runs and monitors.
 
 Defaults follow the project setup: type="auto", highlights for content.
 Docs: https://docs.exa.ai/reference/search-api-guide-for-coding-agents
@@ -267,11 +267,10 @@ def stop_agent_runs():
     _stop.set()
 
 
-def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), exclude=None, effort="low"):
+def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), effort="low"):
     """Exa Agent run, waited for: (structured, grounding), shaped like grounded_answer().
 
     data_sources: Exa Connect provider ids, e.g. ["fiber"]; the agent queries them alongside web search.
-    exclude: records the agent should not return, e.g. [{"domain": "acme.com"}].
     effort: "minimal", "low" or "medium" have a fixed run price ($0.012, $0.025, $0.10). Partner calls are billed
     on top with no cap (Fiber: $0.02 a credit, a search is 2 credits plus 1 per result), so one run can cost
     from a few cents to a dollar. The whole cost is tallied under "agent:<effort>" in cost_summary().
@@ -301,7 +300,6 @@ def agent_answer(query, output_schema, *, system_prompt=None, data_sources=(), e
                 output_schema=output_schema,
                 effort=effort,
                 data_sources=[{"provider": provider} for provider in data_sources] or None,
-                input={"exclusion": list(exclude)} if exclude else None,
             ),
             retryable=lambda exc: _http_status(exc) == 429,
         )
