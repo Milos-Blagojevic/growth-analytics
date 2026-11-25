@@ -1,7 +1,7 @@
 ---
 name: posthog
-description: Keep PostHog analytics and observability in step with a code change. Use whenever a change adds, renames or removes a dashboard action or route, a model call (Claude, Jev, Exa or a new provider), a chat agent tool, a hunt.py or prospects command, a dashboard job kind or a scheduled command. Says what each has to report to PostHog and through which function, what may never be sent, how to test it, and what the owner has to change in PostHog itself.
-when_to_use: While implementing any feature or behavior change in hunt.py, clients/, pipeline/, inbox/, interview/, prospects/ or dashboard/, before running the verify skill and before reporting the work done. Also when asked whether something is tracked, why an event, trace or log record is missing in PostHog, or to add, rename or remove one. Skip for docs-only and test-only changes.
+description: Keep PostHog analytics and observability in step with a code change. Use whenever a change adds, renames or removes a dashboard action or route, a model call (Claude, Jev, Exa or a new provider), a chat agent tool, a hunt.py command, a dashboard job kind or a scheduled command. Says what each has to report to PostHog and through which function, what may never be sent, how to test it, and what the owner has to change in PostHog itself.
+when_to_use: While implementing any feature or behavior change in hunt.py, clients/, pipeline/, inbox/, interview/ or dashboard/, before running the verify skill and before reporting the work done. Also when asked whether something is tracked, why an event, trace or log record is missing in PostHog, or to add, rename or remove one. Skip for docs-only and test-only changes.
 argument-hint: "[what the change adds or alters]"
 allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(git merge-base *) Bash(git ls-files *) Bash(.venv/bin/python -m pytest *)
 ---
@@ -28,7 +28,7 @@ Go through every row. Most changes hit one or two.
 | A call to another model or a service that answers with a model (a Jev question set, an Exa structured search or agent run, a new provider) | A generation when it was answered | Through `jev.ask`, `exa_client.search_structured` or `exa_client.agent_answer` it is already reported. A new provider reports from its own client module: `posthog_client.generation("<provider>", "<model>", input_tokens=..., output_tokens=..., latency=...)` |
 | A tool of the chat agent (`inbox/chat.py`) | A span per call, in the answer's trace | Add the function to the tuple in `build_agent` that `posthog_client.instrument_tool` wraps. Model calls the tool makes join the trace by themselves |
 | Another agent, or a flow of several model calls that is one answer to the owner | One trace per answer, one session per conversation | Run it inside `with posthog_client.agent_turn(session_id):` and report its model usage with `generation` before the block ends |
-| A `hunt.py` or `python -m prospects` command | A record when it starts and one when it ends, with its exit code | Nothing to add: `main()` runs every command inside `posthog_client.command(args.command)` |
+| A `hunt.py` command | A record when it starts and one when it ends, with its exit code | Nothing to add: `main()` runs every command inside `posthog_client.command(args.command)` |
 | A `python -m evals` exam | The same for its `--live` run, and a generation per model call | The live part of `main()` already runs inside `command`; a new exam reuses it. The free check reports nothing and makes no request: keep it that way |
 | A new entry point (another `__main__`, another long-lived process) | The same as the existing ones | `posthog_client.configure(os.environ.get("POSTHOG_PROJECT_TOKEN"), os.environ.get("POSTHOG_HOST"), service="<name>")` in its `main()`, then `with posthog_client.command(...)` around each command (a `main` that returns its exit code instead of exiting sets it on what `command` yields, as `evals/__main__.py` does), or `log("<name>_started")` and `flush()` on shutdown for a server |
 | A page or another GET route, or a link or tab that leads to one | A `$pageview` when the browser loads it as a page, which says where the link was clicked; nothing for what htmx asks for by itself | Nothing to add: `_ReportPageviews` in `dashboard/app.py` reports every GET answered with a full HTML page and 200, by its route as it is declared (`/c/{domain}`, never the address or its query), with the declared route of the dashboard page it was opened from (`previous_route`, which `_previous_route` reads off the `Referer` header, never that page's address), and skips requests with `HX-Request` (a slide-over panel, a form, a live filter, a poll). An exception no route handles is reported by `_ReportErrors` the same way |
@@ -47,7 +47,7 @@ A change that touches none of these rows needs nothing for PostHog. Say so in yo
 
 Before you pass a value to `posthog_client`, ask where it comes from. A value from one of these is not a property, an attribute or a name:
 
-- a file under Private files in AGENTS.md (the profile, the CV, `companies.csv`, saved runs, interviews, mail, `prospects.toml`);
+- a file under Private files in AGENTS.md (the profile, the CV, `companies.csv`, saved runs, interviews, mail);
 - an email, a web page, an Exa result, a posting, an article;
 - a prompt, a model's answer, a tool's arguments or what it returned;
 - a form field the owner typed (a note, a title, a focus, a topic);

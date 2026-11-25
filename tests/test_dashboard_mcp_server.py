@@ -14,16 +14,13 @@ from dashboard.app import create_app
 from dashboard_data import (BASE_URL, INTERVIEW_TURNS, PREP, fit, mail_update, result, review_fields, wispr,
                             write_interview, write_mail, write_run)
 import posthog_mock
-from prospect_data import SETTINGS, assessment, figure, research
-from prospect_data import write_run as write_prospect_run
-from prospects import warehouse
 from test_dashboard_jobs import STUB, finished
 
 TOKEN = "mcp-" + "k" * 40
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json, text/event-stream"}
 READ_ONLY = {"overview", "list_companies", "get_company", "list_runs", "spend_summary", "list_leads", "get_pipeline",
              "pipeline_funnel", "list_email_suggestions", "list_interviews", "get_interview", "interview_progress",
-             "list_projects", "list_jobs", "get_job", "prospect_ranking", "get_prospect", "preview_job", "list_monitors"}
+             "list_projects", "list_jobs", "get_job", "preview_job", "list_monitors"}
 CHANGES = {"set_status", "decide_email_suggestion", "queue_leads", "create_project", "update_project",
            "create_interview", "start_job", "cancel_job"}
 
@@ -209,25 +206,6 @@ def test_the_funnel_counts_applications_by_status_and_by_the_week_they_were_sent
     assert {k: v for k, v in funnel["by_status"].items() if v} == {"saved": 1, "applied": 1, "interviewing": 1}
     assert (funnel["applications"], funnel["responses"], funnel["response_rate"]) == (2, 1, 0.5)
     assert [week["applications"] for week in funnel["applications_per_week"]] == [0, 2]  # both sent this week
-
-
-def test_prospects_come_from_the_warehouse_when_there_is_one(root):
-    with served(make_app(root)) as c:
-        with pytest.raises(Refused, match="No prospects.duckdb"):
-            call(c, "prospect_ranking")
-        write_prospect_run(root, "20261101-090000", [
-            {"name": "Acme", "domain": "acme.com", "research": research("Acme", "acme.com"),
-             "assessment": assessment(revenue_figures=[figure(9_000_000.0)])},
-            {"name": "Small", "domain": "small.com", "research": research("Small", "small.com"),
-             "assessment": assessment(headcount_low=20, headcount_high=20)},
-        ])
-        warehouse.build(root / "prospect_runs", root / mcp_server.PROSPECTS_DB, SETTINGS)
-
-        assert [p["domain"] for p in call(c, "prospect_ranking")["prospects"]] == ["acme.com", "small.com"]
-        acme = call(c, "get_prospect", domain="https://acme.com/")
-    assert acme["prospect"]["name"] == "Acme" and acme["prospect"]["tier"]
-    assert [(f["kind"], f["amount_usd"], f["used"]) for f in acme["figures"]] == [("revenue", 9_000_000.0, True)]
-    assert acme["facts"] and acme["news"]
 
 
 # Changes to the owner's data -----------------------------------------------------------------------------------

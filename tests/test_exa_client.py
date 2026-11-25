@@ -239,7 +239,7 @@ def test_agent_answer_runs_an_agent_with_data_sources_and_returns_what_it_found(
     ))  # fmt: skip
 
     content, grounding = exa_client.agent_answer(
-        "find companies", AGENT_SCHEMA, system_prompt="be strict", data_sources=["fiber"], exclude=[{"domain": "old.com"}]
+        "find companies", AGENT_SCHEMA, system_prompt="be strict", data_sources=["fiber"]
     )
 
     assert content == {"companies": [{"name": "Acme", "employees": 40}]}
@@ -253,13 +253,12 @@ def test_agent_answer_runs_an_agent_with_data_sources_and_returns_what_it_found(
         "outputSchema": AGENT_SCHEMA,
         "effort": "low",
         "dataSources": [{"provider": "fiber"}],
-        "input": {"exclusion": [{"domain": "old.com"}]},
     }]  # fmt: skip
     # one run, with the partner's charge inside its cost
     assert exa_client.cost_summary()["by_label"] == {"agent:low": {"requests": 1, "dollars": pytest.approx(0.205)}}
 
 
-def test_agent_answer_sends_no_data_sources_or_exclusions_unless_given(exa):
+def test_agent_answer_sends_no_data_sources_unless_given(exa):
     exa.on_agent(agent_run({"companies": []}))
 
     exa_client.agent_answer("find companies", AGENT_SCHEMA, effort="minimal")

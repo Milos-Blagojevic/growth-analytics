@@ -1,7 +1,7 @@
 """PostHog: product events, error tracking, AI Observability and logs. The only place that talks to PostHog.
 
 Off until `configure` gets both the project token and the ingestion host (POSTHOG_PROJECT_TOKEN and POSTHOG_HOST,
-read by the entry points: hunt.py, `python -m prospects`, `python -m dashboard` and a live `python -m evals` run).
+read by the entry points: hunt.py, `python -m dashboard` and a live `python -m evals` run).
 Until then every function here does nothing. None of them raises or waits for PostHog: events and log records are
 queued and sent by background threads, and a failure is logged and never reaches the work it reports on. What is
 still queued when a process exits is sent then, for a bounded time (TIMEOUT, RETRIES, FLUSH_MILLIS), and dropped
@@ -17,13 +17,12 @@ retention) without a person profile (`_before_send`): no identify, no person or 
   address asked for or its query, and the dashboard page it was opened from, by its declared route too.
 - `generation`, `parse_anthropic`, `agent_turn`, `instrument_tool`: a model call or a tool call as provider, model,
   token counts, seconds, trace and session. Never a prompt, an answer, a tool's arguments or what it returned: those
-  hold the CV, emails, interview transcripts and pricing.
+  hold the CV, emails and interview transcripts.
 - `log`, `command`: records written for PostHog (a command started, a command finished). The programs' own loggers
   are never exported: they name companies, senders and subjects.
 - `capture_exception`, and `configure(exceptions=True)` for the ones no code caught: an exception of the dashboard
   with its type and its stack, never its message (`_without_messages`): a message names the file that could not be
-  written, quotes the value that did not parse. hunt.py and `python -m prospects` say how a command ended in its
-  `finished` record instead.
+  written, quotes the value that did not parse. hunt.py says how a command ended in its `finished` record instead.
 - `instrument_mcp`, `mcp_sessions`, `flush_mcp`: the dashboard's MCP endpoint through PostHog's MCP Analytics SDK
   (posthog.mcp): a $mcp_tool_call per tool call, by tool, with its seconds, whether it failed and the client that
   made it, plus the handshakes and tool listings. Never a tool's arguments, what it returned, an agent's stated
@@ -66,7 +65,7 @@ OWNER = "growth-analytics-owner"
 
 _client = None  # the process's posthog.Posthog, once configured
 _records = None  # (LoggerProvider, its logger): log records go out through a provider of their own, never the global one
-_service = None  # "dashboard", "hunt", "prospects" or "evals": on every event and log record
+_service = None  # "dashboard", "hunt" or "evals": on every event and log record
 _session = f"process-{uuid4()}"  # the AI session of the generations one command makes outside an agent turn
 _turn = ContextVar("posthog_agent_turn", default=None)  # the agent answer in progress: {"trace_id", "session_id"}
 _mcp = None  # the analytics handle of the instrumented MCP server, whose events `flush_mcp` waits for
