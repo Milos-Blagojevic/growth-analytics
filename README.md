@@ -55,7 +55,7 @@ python -m clients.exa_client
 | `python hunt.py discover` | Suggests new companies to research | Exa | No | [Run](pipeline/README.md#run) |
 | `python hunt.py run` | Researches and scores every company in `companies.csv` | Exa, Jev, Claude (and an Exa agent run with Fiber per company with `--fiber`) | Yes, unless `--dry-run` or `--research-only` | [Run](pipeline/README.md#run) |
 | `python hunt.py send` | Sends a saved run's notification again | No | Yes | [Run](pipeline/README.md#run) |
-| `python hunt.py monitor-sync` | Creates, updates and deletes the Exa monitors to match `monitors.csv` | None by itself; Exa then bills each monitor's runs ($0.002 a run, six a day) | No | [Monitors](pipeline/README.md#monitors) |
+| `python hunt.py monitor-sync` | Creates, updates and deletes the Exa monitors to match `monitors.csv` | None by itself; Exa then bills each monitor's runs ($0.002 a run, two a day) | No | [Monitors](pipeline/README.md#monitors) |
 | `python hunt.py monitor` | Suitable new postings the monitors found since the last check | Jev, Claude (Exa only for an unclear link or a missing posting text) | Yes, unless `--dry-run` | [Monitors](pipeline/README.md#monitors) |
 | `python hunt.py outlook-login` | Signs in to Outlook once | No | No | [Email updates](inbox/README.md#email-updates) |
 | `python hunt.py mail` | Application confirmations, rejections and interview invites in new email | Jev, Claude | Yes, unless `--dry-run` | [Email updates](inbox/README.md#email-updates) |

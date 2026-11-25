@@ -189,7 +189,7 @@ def test_the_scheduled_monitor_jobs_run_their_commands_and_say_what_exa_bills(ro
 
     sync = c.post("/runs/preview", data={"kind": "monitor_sync"}).text
     assert "python hunt.py monitor-sync" in sync
-    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.36 a month for each company in monitors.csv" in sync
+    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.12 a month for each company in monitors.csv" in sync
     assert "Creates, updates and deletes monitors on your Exa account to match monitors.csv" in sync
     check = c.post("/runs/preview", data={"kind": "monitor"}).text
     assert "Sends the suitable new postings to Telegram" in check and "one call per new posting" in check
@@ -208,7 +208,7 @@ def test_new_monitor_adds_the_company_and_syncs_and_runs_shows_which_have_a_moni
         {"folder": "f1", "monitors": {"acme.com": {"id": "mon_1", "name": "Acme", "params": {}, "created_at": "2026-11-02T08:00:00Z"}}}))
 
     form = c.get("/runs/monitors/new").text
-    assert "python hunt.py monitor-sync" in form and "about $0.36 a month for each company" in form
+    assert "python hunt.py monitor-sync" in form and "about $0.12 a month for each company" in form
     job = finished(root, started_job_id(c.post("/runs/monitors", data={"name": " Beta  Labs ", "domain": "https://www.Beta.io/"})))
 
     assert (job["kind"], job["args"], job["label"]) == ("monitor_sync", ["monitor-sync"], "New monitor: Beta Labs (beta.io)")

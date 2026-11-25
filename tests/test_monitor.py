@@ -172,7 +172,7 @@ def test_sync_creates_a_monitor_per_company_that_exa_runs_by_itself(account, pro
     assert acme["search"]["query"] == "New job openings at Acme (acme.com) for any of: analytics engineer, growth engineer."
     assert acme["search"]["includeDomains"][:3] == ["acme.com", "*.acme.com", "jobs.ashbyhq.com"]
     assert acme["search"]["contents"] == {"text": {"maxCharacters": research.DESCRIPTION_CHARS}}
-    assert acme["trigger"] == {"type": "interval", "period": "4h"}
+    assert acme["trigger"] == {"type": "interval", "period": "12h"}
     assert acme["outputSchema"] == research.ATS_SCHEMA
     assert acme["webhook"] == {"url": WEBHOOK, "events": ["monitor.deleted"]}  # nothing is pushed while it runs
     assert "Beta (beta.io)" in beta["search"]["query"]
@@ -197,6 +197,25 @@ def test_sync_leaves_a_matching_monitor_alone_and_sends_only_what_changed(accoun
     assert account.monitors["mon_1"]["search"]["query"].endswith("for any of: data engineer.")
     assert state["monitors"]["acme.com"]["params"]["search"]["query"].endswith("for any of: data engineer.")
     assert len(account.calls("POST")) == 2 and problems == [] and "updated (search)" in lines[0]
+
+
+def test_sync_moves_monitors_made_with_another_period_to_this_one(account, profile, monkeypatch):
+    """A monitor keeps the period it was created with until a sync sends PERIOD: the first sync after a change of
+    PERIOD moves every monitor to it (Exa bills each run), keeping the monitors and what they judged."""
+    period = monitor.PERIOD
+    monkeypatch.setattr(monitor, "PERIOD", "7d" if period != "7d" else "1d")  # monitors made before PERIOD changed
+    state = {"monitors": {}}
+    monitor.sync(COMPANIES, profile, WEBHOOK, state, lambda: None)
+    monkeypatch.setattr(monitor, "PERIOD", period)
+
+    lines, problems = monitor.sync(COMPANIES, profile, WEBHOOK, state, lambda: None)
+
+    assert [account.calls("PATCH", f"/{mid}") for mid in ("mon_1", "mon_2")] == [
+        [{"trigger": {"type": "interval", "period": period}}]] * 2
+    assert account.monitors["mon_1"]["trigger"] == {"type": "interval", "period": period}
+    assert [entry["params"]["trigger"]["period"] for entry in state["monitors"].values()] == [period] * 2
+    assert len(account.calls("POST")) == 2 and problems == []  # updated, not created again
+    assert all("updated (trigger)" in line for line in lines)
 
 
 def test_sync_deletes_the_monitor_of_a_company_no_longer_listed_and_keeps_it_while_exa_fails(account, profile, state):

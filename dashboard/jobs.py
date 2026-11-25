@@ -53,11 +53,11 @@ MONITOR_ESTIMATE = ["Exa: reading the monitors' runs is free; about $0.001 for a
                     "Jev (when TYPESAFE_API_KEY is set): one request per new posting, a fraction of a cent in total.",
                     f"Claude: one call per new posting Jev does not rule out, about ${CLAUDE_DOLLARS_PER_COMPANY:.3f} "
                     "each (the same call as a company's in a run); none when nothing is new."]
-MONITOR_SYNC_ESTIMATE = ["Free by itself. Exa then bills every monitor $0.002 a run, six runs a day: about $0.36 a "
+MONITOR_SYNC_ESTIMATE = ["Free by itself. Exa then bills every monitor $0.002 a run, two runs a day: about $0.12 a "
                          f"month for each company in {runs.MONITORS}."]
 MONITOR_SYNC_WARNINGS = [f"Creates, updates and deletes monitors on your Exa account to match {runs.MONITORS}, and "
                          "records them in monitor_state.json.",
-                         "A new monitor runs, billed, every 4 hours until a later sync deletes it."]
+                         "A new monitor runs, billed, every 12 hours until a later sync deletes it."]
 
 
 @dataclass
