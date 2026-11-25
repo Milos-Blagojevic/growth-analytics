@@ -55,22 +55,53 @@
   <h2>Monitors <span class="count">{{ monitored | length }}</span>
     <button class="btn primary sm" type="button" hx-get="/runs/monitors/new" hx-target="#panel" {{ 'disabled' if monitors_error }}>New monitor</button>
   </h2>
-  <p class="muted small">Exa searches each company's own site and job boards for new postings in your target roles every 4 hours, about $0.36 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>; a company removed there loses its monitor at the next <code>monitor-sync</code>.</p>
+  <p class="muted small">Exa searches each company's own site and job boards for new postings in your target roles every 4 hours, about $0.36 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>: New, Edit and Remove change it and start <code>monitor-sync</code>, which creates, updates and deletes the monitors to match.</p>
   {% if monitors_error %}
   <div class="note error">{{ monitors_error }}</div>
   {% elif monitored %}
-  <table class="table">
-    <thead><tr><th>Company</th><th>Domain</th><th>Monitor</th></tr></thead>
-    <tbody>
-      {% for m in monitored %}
+  {% macro monitor_row(m) %}
       <tr>
+        <td class="pick"><input type="checkbox" name="domains" value="{{ m.domain }}" aria-label="Select {{ m.name }}" onchange="pickMonitors()"></td>
         <td>{{ m.name }}</td>
         <td class="muted">{{ m.domain }}</td>
         <td class="muted">{% if m.on_exa %}on Exa{% if m.since %} since {{ m.since[:10] }}{% endif %}{% else %}not on Exa yet{% endif %}</td>
+        <td class="nowrap"><button class="btn ghost sm" type="button" hx-get="/runs/monitors/edit?domain={{ m.domain | urlencode }}" hx-target="#panel" aria-label="Edit {{ m.name }}">Edit</button></td>
       </tr>
-      {% endfor %}
+  {% endmacro %}
+  <form id="monitor-picks" hx-get="/runs/monitors/remove" hx-target="#panel" autocomplete="off">
+  <div class="selection-bar">
+    <span class="muted small" id="monitors-picked">0 selected</span>
+    <span class="spacer"></span>
+    <button class="btn danger sm" type="submit" id="remove-monitors" disabled>Remove selected…</button>
+  </div>
+  <table class="table monitors">
+    <thead><tr><th></th><th>Company</th><th>Domain</th><th>Monitor</th><th></th></tr></thead>
+    <tbody>
+      {% for m in monitored[:monitors_shown] %}{{ monitor_row(m) }}{% endfor %}
     </tbody>
+    {% if monitored | length > monitors_shown %}
+    <tbody id="more-monitors" hidden>
+      {% for m in monitored[monitors_shown:] %}{{ monitor_row(m) }}{% endfor %}
+    </tbody>
+    {% endif %}
   </table>
+  </form>
+  {% if monitored | length > monitors_shown %}
+  <button class="btn ghost sm show-more" type="button" aria-controls="more-monitors" aria-expanded="false" data-more="Show all {{ monitored | length }}" onclick="showAllMonitors(this)">Show all {{ monitored | length }}</button>
+  {% endif %}
+  <script>
+    function pickMonitors() {
+      const n = document.querySelectorAll("#monitor-picks input[name=domains]:checked").length;
+      document.getElementById("monitors-picked").textContent = `${n} selected`;
+      document.getElementById("remove-monitors").disabled = n === 0;
+    }
+    function showAllMonitors(button) {
+      const more = document.getElementById("more-monitors");
+      more.hidden = !more.hidden;
+      button.setAttribute("aria-expanded", String(!more.hidden));
+      button.textContent = more.hidden ? button.dataset.more : "Show fewer";
+    }
+  </script>
   {% else %}
   <div class="empty slim">No companies monitored yet.</div>
   {% endif %}

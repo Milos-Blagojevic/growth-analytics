@@ -10,7 +10,7 @@ stateless and answers each request with JSON.
 
 Three kinds of tools:
 - reads (free): the board, a company, saved runs and their costs, leads, the pipeline and its funnel, email
-  suggestions, interviews, side projects, jobs and their logs, the prospect ranking;
+  suggestions, interviews, side projects, jobs and their logs, the Exa monitors' companies, the prospect ranking;
 - changes to your own data (free): statuses and notes, email suggestions, companies.csv, side projects, interviews;
 - jobs (paid; some send Telegram messages): `preview_job` validates a job and returns its command, estimate and side
   effects with a one-time token; `start_job` starts only a previewed job, by its token. A client asks before each
@@ -55,7 +55,7 @@ LOG_CHARS = 20_000  # of a job's log, the end
 # prospects/__main__.py's DB: that module imports hunt.py, which the dashboard never does.
 PROSPECTS_DB = "prospects.duckdb"
 JOB_KINDS = ("run", "discover", "mail", "news", "monitor", "monitor_sync", "interview_prep", "interview_review",
-             "new_monitor")
+             "new_monitor", "edit_monitor", "remove_monitors")
 INSTRUCTIONS = """The owner's job-hunt dashboard: companies researched and scored for fit, the pipeline of their \
 applications, email updates, interviews, side projects, saved runs and their costs, and the prospect ranking for \
 their own product. Start with `overview`.
@@ -238,6 +238,15 @@ def build(root, runner, connection, report_started):
         researches it) or researched (with its latest score), and how many there are of each."""
         with connection() as conn:
             return queries.leads(conn, status=status or "")
+
+    @tool(READ)
+    def list_monitors() -> dict:
+        """The companies in monitors.csv, whose new postings Exa monitors watch, each with whether its monitor runs on
+        Exa (`on_exa`) and since when. `error` says why the list cannot be changed now (monitors.csv cannot be read,
+        or is missing while monitors run). `preview_job` kinds new_monitor, edit_monitor and remove_monitors change
+        it."""
+        companies, error = monitors.listing(root)
+        return {"monitors": companies, "error": error}
 
     @tool(READ)
     def get_pipeline() -> dict:
@@ -456,14 +465,14 @@ def build(root, runner, connection, report_started):
     # Jobs -------------------------------------------------------------------------------------------------------
 
     def spec_for(conn, kind, fields):
-        if kind == "new_monitor":
-            return monitors.new(root, fields)
-        return jobs.build(conn, root, fields)
+        build = {"new_monitor": monitors.new, "edit_monitor": monitors.edit,
+                 "remove_monitors": monitors.remove}.get(kind)
+        return build(root, fields) if build else jobs.build(conn, root, fields)
 
     @tool(READ)
     def preview_job(kind: Literal[JOB_KINDS], mode: Literal[tuple(jobs.RUN_MODES)] = "dry_run", fiber: bool = False,
                     domains: list[str] | None = None, focus: str = "", limit: int = 15, dry_run: bool = False,
-                    interview_id: str = "", name: str = "", domain: str = "") -> dict:
+                    interview_id: str = "", name: str = "", domain: str = "", current_domain: str = "") -> dict:
         """Checks a job and says what it would do, without starting it: the hunt.py command, the estimated cost and
         the side effects (Telegram messages, files written, what is sent to Claude), and a token that `start_job`
         takes within 15 minutes. Show the user all of it before starting.
@@ -476,8 +485,15 @@ def build(root, runner, connection, report_started):
           prints instead of sending to Telegram and saving state.
         - monitor_sync: create, update and delete Exa monitors to match monitors.csv.
         - new_monitor: add the company `name` (`domain`) to monitors.csv and sync, which creates its monitor.
+        - edit_monitor: change the company monitors.csv lists under `current_domain` (see `list_monitors`) to `name`
+          and `domain`, and sync: a new name updates its monitor, a new domain replaces it.
+        - remove_monitors: delete the companies of `domains` from monitors.csv and sync, which deletes their monitors.
         - interview_prep, interview_review: Claude's prep brief or transcript review for `interview_id`."""
-        fields = {"name": name, "domain": domain} if kind == "new_monitor" else {
+        fields = {
+            "new_monitor": {"name": name, "domain": domain},
+            "edit_monitor": {"current": current_domain, "name": name, "domain": domain},
+            "remove_monitors": {"domains": domains or []},
+        }.get(kind) or {
             "kind": kind, "mode": mode, "fiber": "1" if fiber else "", "domains": domains or [], "focus": focus,
             "limit": str(limit), "dry_run": "1" if dry_run else "", "interview": interview_id}
         with connection() as conn:
@@ -490,7 +506,7 @@ def build(root, runner, connection, report_started):
                 del previews[old]
             while len(previews) >= MAX_PREVIEWS:
                 del previews[next(iter(previews))]
-            previews[token] = (expires, kind, fields if kind == "new_monitor" else spec.fields)
+            previews[token] = (expires, kind, spec.fields)
         command = "python hunt.py " + shlex.join(spec.args)
         if spec.companies:
             command += " --companies jobs/<id>-companies.csv"
@@ -526,8 +542,8 @@ def build(root, runner, connection, report_started):
             raise ToolError("Another hunt.py command is running; start this job when it has finished.") from None
         except OSError as exc:
             raise ToolError(f"Could not start hunt.py: {exc}") from None
-        if kind == "new_monitor":
-            report("monitor_added")
+        if spec.event:  # New, Edit or Remove of a monitor
+            report(*spec.event)
         report_started(spec, "mcp")
         return {"job_id": job_id, "label": spec.label}
 

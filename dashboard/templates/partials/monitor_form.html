@@ -1,16 +1,21 @@
 <div class="backdrop" onclick="closePanel()"></div>
 <article class="sheet modal">
   <header class="sheet-head">
-    <div class="sheet-id"><h2>New monitor</h2></div>
+    <div class="sheet-id"><h2>{{ 'Edit monitor' if company else 'New monitor' }}</h2></div>
     <button class="close" type="button" onclick="closePanel()" aria-label="Close">✕</button>
   </header>
-  <form class="sheet-body form" hx-post="/runs/monitors">
-    <label>Company<input name="name" required maxlength="100" placeholder="e.g. Acme" autofocus></label>
-    <label>Domain<input name="domain" required maxlength="200" placeholder="e.g. acme.com"></label>
+  <form class="sheet-body form" hx-post="{{ '/runs/monitors/edit' if company else '/runs/monitors' }}">
+    {% if company %}<input type="hidden" name="current" value="{{ company.domain }}">{% endif %}
+    <label>Company<input name="name" required maxlength="100" placeholder="e.g. Acme" value="{{ company.name if company }}" autofocus></label>
+    <label>Domain<input name="domain" required maxlength="200" placeholder="e.g. acme.com" value="{{ company.domain if company }}"></label>
     <section>
       <div class="eyebrow">Command</div>
       <code class="command">python hunt.py monitor-sync</code>
+      {% if company %}
+      <p class="muted small">Changes the company's row in <code>{{ file }}</code>, then syncs. A new name updates its monitor's search on Exa; a new domain deletes its monitor and creates one for the new domain, and the postings judged for the old domain are forgotten.</p>
+      {% else %}
       <p class="muted small">Adds the company to <code>{{ file }}</code>, then syncs, so the next scheduled <code>monitor</code> reads what its monitor finds.</p>
+      {% endif %}
     </section>
     <section>
       <div class="eyebrow">Estimated cost</div>
@@ -20,11 +25,11 @@
       <div class="eyebrow">Side effects</div>
       <ul class="plain warn">{% for line in warnings %}<li>{{ line }}</li>{% endfor %}</ul>
     </section>
-    {% if busy %}<div class="note error">A hunt.py command is running; wait for it to finish before adding a company.</div>{% endif %}
+    {% if busy %}<div class="note error">A hunt.py command is running; wait for it to finish before {{ 'changing the company' if company else 'adding a company' }}.</div>{% endif %}
     <div class="form-foot">
       <span class="spacer"></span>
       <button class="btn ghost" type="button" onclick="closePanel()">Cancel</button>
-      <button class="btn primary" type="submit" {{ 'disabled' if busy }}>Add and sync</button>
+      <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ 'Save and sync' if company else 'Add and sync' }}</button>
     </div>
   </form>
 </article>

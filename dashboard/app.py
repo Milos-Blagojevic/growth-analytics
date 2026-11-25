@@ -614,6 +614,7 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
                 modes=jobs.RUN_MODES,
                 monitored=monitored,
                 monitors_error=monitors_error,
+                monitors_shown=monitors.SHOWN,
                 schedules=scheduler.status() if scheduler else None,
                 chat=chat.status() if chat else None,
                 chat_log=chat.read_log() if chat else "",
@@ -664,31 +665,68 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
         report_started(spec, "button")
         return redirect(f"/runs/jobs/{job_id}")
 
-    @app.get("/runs/monitors/new", response_class=HTMLResponse)
-    def monitor_new(request: Request):
+    def monitor_form(request, company):
         return templates.TemplateResponse(request, "partials/monitor_form.html", {
             "busy": runner.busy(), "estimate": jobs.MONITOR_SYNC_ESTIMATE, "warnings": jobs.MONITOR_SYNC_WARNINGS,
-            "file": runs.MONITORS,
+            "file": runs.MONITORS, "company": company,
         })
 
-    @app.post("/runs/monitors")
-    async def monitor_add(request: Request):
-        """New under Monitors: adds a company to monitors.csv and starts the monitor-sync that creates its monitor."""
+    @app.get("/runs/monitors/new", response_class=HTMLResponse)
+    def monitor_new(request: Request):
+        return monitor_form(request, None)
+
+    @app.get("/runs/monitors/edit", response_class=HTMLResponse)
+    def monitor_edit_form(request: Request, domain: str = ""):
+        """Edit on a company under Monitors: its name and domain, to change."""
+        try:
+            name, domain = monitors.company(root, domain)
+        except LookupError as exc:
+            return PlainTextResponse(str(exc), status_code=404)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+        return monitor_form(request, {"name": name, "domain": domain})
+
+    @app.get("/runs/monitors/remove", response_class=HTMLResponse)
+    def monitor_remove_confirm(request: Request):
+        """Remove under Monitors: the dialog that confirms the companies picked and says what their sync does."""
+        try:
+            spec, error = monitors.remove(root, request.query_params), None
+        except ValueError as exc:
+            spec, error = None, str(exc)
+        return templates.TemplateResponse(request, "partials/run_confirm.html", {
+            "spec": spec, "error": error, "busy": runner.busy(), "action": "/runs/monitors/remove",
+            "submit": "Remove and sync",
+        })
+
+    async def change_monitors(request, build):
+        """New, Edit and Remove under Monitors: change monitors.csv and start the monitor-sync that makes Exa match."""
         form = await request.form()
         with connection() as conn:
             try:
-                spec = monitors.new(root, form)
+                spec = build(root, form)
                 job_id = runner.start(conn, spec)
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
             except runs.Busy:
-                return PlainTextResponse("Another hunt.py command is running; add the company when it finishes.",
+                return PlainTextResponse("Another hunt.py command is running; change the monitors when it finishes.",
                                          status_code=409)
             except OSError as exc:
                 return PlainTextResponse(f"Could not start hunt.py: {exc}", status_code=500)
-        posthog_client.capture("monitor_added")
+        posthog_client.capture(*spec.event)
         report_started(spec, "button")
         return redirect(f"/runs/jobs/{job_id}")
+
+    @app.post("/runs/monitors")
+    async def monitor_add(request: Request):
+        return await change_monitors(request, monitors.new)
+
+    @app.post("/runs/monitors/edit")
+    async def monitor_edit(request: Request):
+        return await change_monitors(request, monitors.edit)
+
+    @app.post("/runs/monitors/remove")
+    async def monitor_remove(request: Request):
+        return await change_monitors(request, monitors.remove)
 
     def job_or_404(conn, job_id):
         job = jobs.get(conn, job_id)

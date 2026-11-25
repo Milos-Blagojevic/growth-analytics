@@ -37,14 +37,14 @@
     {% endif %}
     {% if busy %}<div class="note error">A hunt.py command is running; wait for it to finish before starting another.</div>{% endif %}
 
-    <form class="form-foot" hx-post="/runs">
+    <form class="form-foot" hx-post="{{ action or '/runs' }}">
       {% for name, value in spec.fields.items() %}
         {% if value is string %}<input type="hidden" name="{{ name }}" value="{{ value }}">
         {% else %}{% for v in value %}<input type="hidden" name="{{ name }}" value="{{ v }}">{% endfor %}{% endif %}
       {% endfor %}
       <span class="spacer"></span>
       <button class="btn ghost" type="button" onclick="closePanel()">Cancel</button>
-      <button class="btn primary" type="submit" {{ 'disabled' if busy }}>Start</button>
+      <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ submit or 'Start' }}</button>
     </form>
     {% endif %}
   </div>

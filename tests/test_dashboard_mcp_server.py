@@ -23,7 +23,7 @@ TOKEN = "mcp-" + "k" * 40
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json, text/event-stream"}
 READ_ONLY = {"overview", "list_companies", "get_company", "list_runs", "spend_summary", "list_leads", "get_pipeline",
              "pipeline_funnel", "list_email_suggestions", "list_interviews", "get_interview", "interview_progress",
-             "list_projects", "list_jobs", "get_job", "prospect_ranking", "get_prospect", "preview_job"}
+             "list_projects", "list_jobs", "get_job", "prospect_ranking", "get_prospect", "preview_job", "list_monitors"}
 CHANGES = {"set_status", "decide_email_suggestion", "queue_leads", "create_project", "update_project",
            "create_interview", "start_job", "cancel_job"}
 
@@ -347,6 +347,27 @@ def test_a_new_monitor_is_added_to_monitors_csv_only_when_its_sync_starts(root):
     assert (root / "monitors.csv").read_text().splitlines()[-1] == "Acme,acme.com"
 
 
+def test_the_monitored_companies_are_listed_and_edited_or_removed_only_when_their_sync_starts(root):
+    (root / "monitors.csv").write_text("Acme,acme.com\nBeta,beta.io\n")
+    with served(make_app(root)) as c:
+        assert call(c, "list_monitors") == {"monitors": [
+            {"name": "Acme", "domain": "acme.com", "on_exa": False, "since": None},
+            {"name": "Beta", "domain": "beta.io", "on_exa": False, "since": None}], "error": None}
+        edit = call(c, "preview_job", kind="edit_monitor", current_domain="acme.com", name="Acme", domain="acme.io")
+        assert (edit["label"], edit["command"]) == ("Edit monitor: Acme (acme.io)", "python hunt.py monitor-sync")
+        assert "The sync deletes the monitor of acme.com and creates one for acme.io" in edit["warnings"][1]
+        remove = call(c, "preview_job", kind="remove_monitors", domains=["beta.io"])
+        assert remove["warnings"][0] == "Removes Beta (beta.io) from monitors.csv."
+        with pytest.raises(Refused, match="Not in monitors.csv: nope.io"):
+            call(c, "preview_job", kind="remove_monitors", domains=["nope.io"])
+        assert (root / "monitors.csv").read_text() == "Acme,acme.com\nBeta,beta.io\n"  # a preview changes nothing
+
+        for preview in (edit, remove):
+            assert finished(root, call(c, "start_job", token=preview["token"])["job_id"])["status"] == "succeeded"
+        assert [m["domain"] for m in call(c, "list_monitors")["monitors"]] == ["acme.io"]
+    assert (root / "monitors.csv").read_text() == "Acme,acme.io\n"
+
+
 # PostHog ----------------------------------------------------------------------------------------------------------
 
 def own(event):
@@ -377,6 +398,11 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
             call(c, "preview_job", kind="discover", focus="PRIVATE-FOCUS", limit=500)
         monitor = call(c, "preview_job", kind="new_monitor", name="PRIVATE-COMPANY", domain="private-co.io")
         finished(root, call(c, "start_job", token=monitor["token"])["job_id"])
+        edit = call(c, "preview_job", kind="edit_monitor", current_domain="private-co.io", name="PRIVATE-RENAMED",
+                    domain="private-co.io")
+        finished(root, call(c, "start_job", token=edit["token"])["job_id"])
+        remove = call(c, "preview_job", kind="remove_monitors", domains=["private-co.io"])
+        finished(root, call(c, "start_job", token=remove["token"])["job_id"])
         monkeypatch.setenv("STUB_SLEEP", "30")
         running = call(c, "start_job", token=call(c, "preview_job", kind="news")["token"])["job_id"]
         call(c, "cancel_job", job_id=running)
@@ -416,6 +442,14 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "mcp"}),
         ("mcp_tool_called", {"tool": "start_job"}),
         ("mcp_tool_called", {"tool": "preview_job"}),
+        ("monitor_edited", {"name_changed": True, "domain_changed": False, "trigger": "mcp"}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "mcp"}),
+        ("mcp_tool_called", {"tool": "start_job"}),
+        ("mcp_tool_called", {"tool": "preview_job"}),
+        ("monitors_removed", {"monitor_count": 1, "trigger": "mcp"}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "mcp"}),
+        ("mcp_tool_called", {"tool": "start_job"}),
+        ("mcp_tool_called", {"tool": "preview_job"}),
         ("hunt_run_started", {"kind": "news", "trigger": "mcp", "dry_run": False}),
         ("mcp_tool_called", {"tool": "start_job"}),
         ("hunt_run_cancelled", {"trigger": "mcp"}),
@@ -439,6 +473,10 @@ def test_posthog_hears_each_call_by_tool_and_each_change_as_the_pages_report_it_
         ("preview_job", False, None),
         ("start_job", False, None),
         ("preview_job", True, "ToolError"),
+        ("preview_job", False, None),
+        ("start_job", False, None),
+        ("preview_job", False, None),
+        ("start_job", False, None),
         ("preview_job", False, None),
         ("start_job", False, None),
         ("preview_job", False, None),

@@ -323,6 +323,16 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     # New under Monitors: the company is added and its sync started, and neither names the company.
     finished(root, started_job_id(c.post("/runs/monitors", data={"name": "PRIVATE-COMPANY", "domain": "private-co.io"})))
     assert c.post("/runs/monitors", data={"name": "PRIVATE-COMPANY", "domain": "private-co.io"}).status_code == 400
+    # Edit and Remove under Monitors: what changed and how many, never the company. Their dialogs send nothing.
+    htmx = {"HX-Request": "true"}
+    assert c.get("/runs/monitors/edit", params={"domain": "private-co.io"}, headers=htmx).status_code == 200
+    renamed = {"current": "private-co.io", "name": "PRIVATE-RENAMED", "domain": "private-co.io"}
+    finished(root, started_job_id(c.post("/runs/monitors/edit", data=renamed)))
+    assert c.post("/runs/monitors/edit", data=renamed).status_code == 400  # nothing to change
+    finished(root, started_job_id(c.post("/runs/monitors/edit", data=renamed | {"domain": "private-new.io"})))
+    assert c.get("/runs/monitors/remove", params={"domains": "private-new.io"}, headers=htmx).status_code == 200
+    finished(root, started_job_id(c.post("/runs/monitors/remove", data={"domains": ["private-new.io"]})))
+    assert c.post("/runs/monitors/remove", data={"domains": ["private-new.io"]}).status_code == 400
     app.state.scheduler.tick(datetime.now() + timedelta(minutes=1))
     conn = db.connect(root)
     finished(root, jobs.recent(conn, 1)[0]["id"])
@@ -360,6 +370,12 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("hunt_run_started", {"kind": "news", "trigger": "button", "dry_run": True}),
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
         ("monitor_added", {}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
+        ("monitor_edited", {"name_changed": True, "domain_changed": False}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
+        ("monitor_edited", {"name_changed": False, "domain_changed": True}),
+        ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
+        ("monitors_removed", {"monitor_count": 1}),
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
         ("hunt_run_started", {"kind": "discover", "trigger": "schedule", "has_focus": True, "limit": 9}),
         ("hunt_run_started", {"kind": "news", "trigger": "button", "dry_run": False}),
