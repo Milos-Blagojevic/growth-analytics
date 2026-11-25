@@ -7,6 +7,9 @@ from pipeline import research
 from exa_mock import AGENT_URL, CONTENTS_URL, agent_run, contents_response, error, grounded, result, structured_response
 
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{}"
+GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{}/jobs"
+LEVER_API = "https://api.lever.co/v0/postings/{}"
+LEVER_EU_API = "https://api.eu.lever.co/v0/postings/{}"
 
 
 def role(title, url, location="Remote", remote="Remote (Europe)"):
@@ -28,6 +31,10 @@ def ashby_board(http, board, *job_ids):
     http.get(ASHBY_API.format(board), json={"jobs": [{"id": j, "title": "t"} for j in job_ids]})
 
 
+def ashby_jobs(http, board, *jobs):
+    http.get(ASHBY_API.format(board), json={"apiVersion": "1", "jobs": list(jobs)})
+
+
 def test_research_drops_dead_links_and_describes_live_roles(exa, http, profile):
     live = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")
     closed_on_ashby = role("Lead Growth Engineer", "https://jobs.ashbyhq.com/acme/2222")
@@ -47,7 +54,9 @@ def test_research_drops_dead_links_and_describes_live_roles(exa, http, profile):
     )
     ashby_board(http, "acme", "1111")
     http.get(not_found["url"], status=404)
+    http.get(GREENHOUSE_API.format("acme"), status=404)
     http.get(soft_404["url"], status=302, headers={"Location": "https://jobs.lever.co/acme"})
+    http.get(LEVER_API.format("acme"), status=404)
     http.get("https://jobs.lever.co/acme", status=200)
     http.get(blocked["url"], status=403)
 
@@ -137,6 +146,7 @@ def test_ats_fallback_when_main_search_has_no_live_roles(exa, http, profile):
     exa.on_search(lambda body: fallback if "includeDomains" in body else main)
     exa.on_contents(contents_response([result(found["url"], text="SQL and dbt.")]))
     http.get(stale["url"], status=404)
+    http.get(GREENHOUSE_API.format("acme"), status=404)
     ashby_board(http, "acme", "1111")
 
     out = research.research_company("Acme", "acme.com", profile)
@@ -155,6 +165,7 @@ def test_ats_fallback_failure_keeps_the_main_research(exa, http, profile):
     main = structured_response(company([stale]))
     exa.on_search(lambda body: error(500) if "includeDomains" in body else main)
     http.get(stale["url"], status=404)
+    http.get(GREENHOUSE_API.format("acme"), json={"jobs": []})
 
     out = research.research_company("Acme", "acme.com", profile)
 
@@ -730,3 +741,156 @@ def test_check_posting_still_sees_a_redirect_away_from_an_encoded_url_as_dead(ht
     http.get("https://acme.com/careers", status=200)
 
     assert research.check_posting("https://acme.com/jobs/ingénieur") == "dead"
+
+
+def test_the_job_board_of_a_posting_adds_its_other_postings_in_the_target_roles_with_their_text(exa, http, profile):
+    live = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")
+    exa.on_search(structured_response(company([live]), [grounded("open_roles[0].url", live["url"], confidence="high")]))
+    ashby_jobs(
+        http,
+        "acme",
+        {"id": "1111", "title": "Senior Analytics Engineer", "jobUrl": live["url"], "location": "Berlin",
+         "workplaceType": "Remote", "descriptionHtml": "<p>Own the <b>dbt</b> models.</p>"},
+        {"id": "2222", "title": "Analytics Engineer", "jobUrl": "https://jobs.ashbyhq.com/acme/2222",
+         "location": "Remote", "isRemote": True, "descriptionHtml": "<p>SQL.</p>"},
+        {"id": "3333", "title": "Lead  Growth\nEngineer", "jobUrl": "https://jobs.ashbyhq.com/acme/3333",
+         "location": "Belgrade", "secondaryLocations": [{"location": "Remote - Europe"}], "workplaceType": "Hybrid",
+         "descriptionHtml": "<h2>About</h2><p>Experiments.</p>"},
+        {"id": "4444", "title": "Account Executive", "jobUrl": "https://jobs.ashbyhq.com/acme/4444"},
+        {"id": "5555", "title": "Senior Analytics Engineer, Platform", "isListed": False,
+         "jobUrl": "https://jobs.ashbyhq.com/acme/5555"},
+    )
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["role_source"] == "main+board"
+    assert out["content"]["open_roles"] == [
+        {**live, "link_status": "live", "description": "Own the dbt models."},
+        {"title": "Lead Growth Engineer", "url": "https://jobs.ashbyhq.com/acme/3333",  # a seniority level first
+         "location": "Belgrade; Remote - Europe", "remote_or_relocation": "hybrid", "link_status": "live",
+         "description": "About\nExperiments."},
+        {"title": "Analytics Engineer", "url": "https://jobs.ashbyhq.com/acme/2222", "location": "Remote",
+         "remote_or_relocation": "remote", "link_status": "live", "description": "SQL."},
+    ]
+    assert out["grounding"]["open_roles"] == {
+        "confidence": "high", "urls": [live["url"], "https://jobs.ashbyhq.com/acme"],
+    }
+    assert exa.requests(CONTENTS_URL) == []  # the board gave every text: no fetch
+    assert len(exa.requests()) == 1  # and a live role: no ATS fallback
+
+
+def test_a_greenhouse_board_confirms_a_careers_page_posting_and_links_its_other_postings_on_the_board(exa, http, profile):
+    careers = role("Senior Analytics Engineer", "https://acme.com/careers/jobs?gh_jid=333")
+    gone = role("Senior Growth Engineer", "https://job-boards.greenhouse.io/acme/jobs/111")
+    exa.on_search(structured_response(company([careers, gone])))
+    http.get(careers["url"], status=403)
+    http.get(gone["url"], status=404)
+    exa.on_contents(contents_response(statuses=[(careers["url"], "success")]))
+    http.get(GREENHOUSE_API.format("acme"), json={"jobs": [
+        {"id": 333, "title": "Senior Analytics Engineer", "absolute_url": careers["url"],
+         "location": {"name": "Remote, EU"}, "content": "&lt;p&gt;Build the metrics layer.&lt;/p&gt;"},
+        {"id": 444, "title": "Senior Growth Engineer", "absolute_url": "https://talent.example.org/acme/444",
+         "location": {"name": "Belgrade"}, "content": "&lt;p&gt;Experiments.&lt;/p&gt;"},
+        {"id": 555, "title": "Recruiter", "absolute_url": "https://acme.com/careers/jobs?gh_jid=555"},
+    ]})  # fmt: skip
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["role_source"] == "main+board"
+    assert out["content"]["open_roles"] == [
+        {**careers, "link_status": "live", "description": "Build the metrics layer."},  # its link stays
+        {"title": "Senior Growth Engineer", "url": "https://job-boards.greenhouse.io/acme/jobs/444",
+         "location": "Belgrade", "remote_or_relocation": "unknown", "link_status": "live",
+         "description": "Experiments."},
+    ]
+    assert out["dead_roles"] == [{"title": gone["title"], "url": gone["url"]}]
+    assert len(exa.requests(CONTENTS_URL)) == 1  # the link check's fetch only
+
+
+def test_the_board_of_a_posting_the_ats_fallback_found_is_asked_too(exa, http, profile):
+    found = role("Senior Analytics Engineer", "https://jobs.eu.lever.co/acme/0b0b0b0b-0000-4000-8000-000000000001")
+    other = "https://jobs.eu.lever.co/acme/0b0b0b0b-0000-4000-8000-000000000002"
+    main = structured_response(company([]))
+    fallback = structured_response({"open_roles": [{**found, "company_verified": True}]})
+    exa.on_search(lambda body: fallback if "includeDomains" in body else main)
+    http.get(found["url"], status=200, body="<h1>Senior Analytics Engineer</h1>")
+    http.get(LEVER_EU_API.format("acme"), json=[
+        {"id": found["url"].rpartition("/")[2], "text": "Senior Analytics Engineer", "hostedUrl": found["url"],
+         "categories": {"location": "Berlin"}, "workplaceType": "onsite", "description": "<div>dbt</div>",
+         "lists": [{"text": "You bring", "content": "<li>SQL</li>"}], "additional": "<p>Relocation offered.</p>"},
+        {"id": other.rpartition("/")[2], "text": "Growth Engineer", "hostedUrl": other,
+         "categories": {"allLocations": ["Berlin", "Remote - EU"]}, "workplaceType": "remote",
+         "description": "<div>Experiments.</div>"},
+    ])  # fmt: skip
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["role_source"] == "ats_fallback+board"
+    assert out["content"]["open_roles"] == [
+        {**found, "link_status": "live", "description": "dbt\nYou bring\nSQL\nRelocation offered."},
+        {"title": "Growth Engineer", "url": other, "location": "Berlin; Remote - EU", "remote_or_relocation": "remote",
+         "link_status": "live", "description": "Experiments."},
+    ]
+    assert exa.requests(CONTENTS_URL) == []
+
+
+@pytest.mark.parametrize("answer", [{"status": 404}, {"status": 500}, {"body": "not json"}, {"json": {"jobs": "x"}}])
+def test_a_job_board_that_cannot_be_read_adds_nothing(exa, http, profile, answer):
+    live = role("Senior Analytics Engineer", "https://jobs.lever.co/acme/123")
+    exa.on_search(structured_response(company([live])))
+    http.get(live["url"], status=200, body="<h1>Senior Analytics Engineer</h1>")
+    http.get(LEVER_API.format("acme"), **answer)
+    exa.on_contents(contents_response([result(live["url"], text="dbt")]))
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["role_source"] == "main"
+    assert out["content"]["open_roles"] == [{**live, "link_status": "live", "description": "dbt"}]
+
+
+def test_no_job_board_is_asked_for_a_company_whose_identity_is_not_verified(exa, http, profile):
+    live = role("Senior Analytics Engineer", "https://job-boards.greenhouse.io/acme/jobs/333")
+    exa.on_search(structured_response(company([live], verified=False)))
+    http.get(live["url"], status=200, body="<h1>Senior Analytics Engineer</h1>")
+    exa.on_contents(contents_response([result(live["url"], text="dbt")]))
+
+    out = research.research_company("Acme", "acme.com", profile)  # an unmocked board request would fail the test
+
+    assert out["role_source"] == "main"
+
+
+def test_only_the_first_live_roles_keep_a_text_and_one_they_have_is_not_fetched_again(exa):
+    roles = [{**role(f"Analytics Engineer {n}", f"https://jobs.ashbyhq.com/acme/{n}"), "link_status": "live",
+              "description": f"Board text {n}"} for n in range(research.MAX_DESCRIBED_ROLES + 2)]
+
+    described = research.attach_descriptions(roles)
+
+    assert [r.get("description") for r in described] == [
+        *(f"Board text {n}" for n in range(research.MAX_DESCRIBED_ROLES)), None, None
+    ]
+    assert exa.requests(CONTENTS_URL) == []
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("Senior Analytics Engineer", True),
+    ("Engineer, Analytics (Remote)", True),
+    ("Software Engineer - Growth", True),
+    ("Analytics Engineering Manager", False),
+    ("Data Analyst", False),
+])  # fmt: skip
+def test_a_board_posting_is_in_the_target_roles_when_its_title_holds_every_word_of_one(profile, title, expected):
+    assert research._in_target_roles(title, profile) is expected
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://jobs.ashbyhq.com/Acme/1111/application", ("ashby", "acme")),
+    ("https://boards.greenhouse.io/acme/jobs/1", ("greenhouse", "acme")),
+    ("https://boards.greenhouse.io/embed/job_app?for=acme&token=1", ("greenhouse", "acme")),
+    ("https://jobs.eu.lever.co/acme/x", ("lever-eu", "acme")),
+    ("https://job-boards.eu.greenhouse.io/acme/jobs/1", None),  # its API is not known
+    ("https://apply.workable.com/acme/j/1", None),
+    ("https://jobs.ashbyhq.com/", None),
+    ("https://jobs.lever.co/a%2Fb/1", None),
+])  # fmt: skip
+def test_the_job_board_a_link_is_on(url, expected):
+    assert research._board_of(url) == expected

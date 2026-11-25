@@ -9,7 +9,7 @@ Researches companies with Exa, scores how well they and their open roles fit you
 | Path | Holds | Docs |
 |---|---|---|
 | `hunt.py` | The CLI entry point: `python hunt.py <command>` | [Commands](#commands) |
-| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram, PostHog | [clients/README.md](clients/README.md) |
+| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby, Greenhouse and Lever job boards, Telegram, PostHog | [clients/README.md](clients/README.md) |
 | `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, Exa monitors, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
 | `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot (your mail, and news digests on request) | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
