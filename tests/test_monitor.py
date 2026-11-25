@@ -804,14 +804,15 @@ def read_from_board(state, *seen):
 @pytest.mark.parametrize(
     ("links", "feed", "found"),
     [
-        ([], None, None),  # nothing says where the company posts: no request
-        (["https://jobs.ashbyhq.com/acme-labs/1", "https://acme.com/careers/7"], None, None),  # another name, no board
-        ([AE], {"status": 503}, None),
-        ([AE], {"status": 404}, None),
-        ([AE], {"json": {"jobs": []}}, None),  # an empty board: the company may have moved to another one
-        ([AE], {"json": {"jobs": [{"id": "9"}]}}, BOARD),
+        ([], None, (None, False)),  # nothing says where the company posts: no request
+        (["https://jobs.ashbyhq.com/acme-labs/1", "https://acme.com/careers/7"], None, (None, False)),  # another name
+        ([AE], {"status": 503}, (None, True)),  # could not be read: nothing is decided from it
+        ([AE], {"status": 404}, (None, False)),
+        ([AE], {"json": {"jobs": []}}, (None, False)),  # an empty board: the company may have moved to another one
+        ([AE], {"json": {"jobs": [boards_mock.ashby_job("9", "Analytics Engineer", listed=False)]}}, (None, False)),
+        ([AE], {"json": {"jobs": [{"id": "9"}]}}, (BOARD, False)),
     ],
-    ids=["no-links", "not-its-board", "unreadable", "gone", "empty", "lists-a-posting"],
+    ids=["no-links", "not-its-board", "unreadable", "gone", "empty", "nothing-listed", "lists-a-posting"],
 )
 def test_a_company_is_read_from_a_board_its_links_name_that_answers_and_lists_a_posting(http, links, feed, found):
     if feed:
@@ -820,11 +821,18 @@ def test_a_company_is_read_from_a_board_its_links_name_that_answers_and_lists_a_
     assert monitor.board("Acme", "acme.com", None, links) == found
 
 
+def test_a_company_stays_on_the_board_it_is_read_from_while_that_board_does_not_answer(http, state):
+    entry = read_from_board(state, JUDGED)
+    http.get(BOARD_API, status=503)
+
+    assert monitor.board("Acme", "acme.com", entry, []) == (BOARD, True)
+
+
 def test_sync_reads_a_company_from_its_job_board_and_deletes_the_monitor_it_had(account, http, profile, state, tmp_path):
     acme = state["monitors"]["acme.com"]
     acme.update(seen=[JUDGED], unscored={SALES: 1}, last_run="run_7")
     http.get(BOARD_API, json={"jobs": [{"id": "1111"}]})
-    found = monitor.board("Acme", "acme.com", acme, [])  # the board its judged postings are on
+    found, _ = monitor.board("Acme", "acme.com", acme, [])  # the board its judged postings are on
 
     lines, problems = monitor.sync(COMPANIES, profile, WEBHOOK, state, lambda: None, {"acme.com": found})
 
@@ -856,7 +864,7 @@ def test_a_company_whose_board_lists_nothing_any_more_gets_a_monitor_again_and_k
     exa_client.delete_monitor("mon_1")  # as the sync that moved Acme to its board did
     entry = read_from_board(state, JUDGED)
     http.get(BOARD_API, json={"jobs": []})
-    assert monitor.board("Acme", "acme.com", entry, []) is None  # the board it is read from lists nothing now
+    assert monitor.board("Acme", "acme.com", entry, []) == (None, False)  # the board it is read from lists nothing now
 
     lines, problems = monitor.sync(COMPANIES, profile, WEBHOOK, state, lambda: None)
 
@@ -884,7 +892,8 @@ def test_a_board_gives_the_target_roles_no_check_has_judged_each_with_the_boards
                       boards_mock.ashby_job("1111", "Senior Analytics Engineer"),  # judged, under another form of its link
                       boards_mock.ashby_job("2222", "Account Executive"),  # not one of the target roles
                       boards_mock.ashby_job("3333", "Analytics Engineer", text="dbt and Looker.", workplace="Hybrid", location="Belgrade"),
-                      boards_mock.ashby_job("4444", forged, text="Growth loops."))
+                      boards_mock.ashby_job("4444", forged, text="Growth loops."),
+                      boards_mock.ashby_job("5555", "Staff Analytics Engineer", listed=False))  # by direct link only
 
     found, problems = monitor.board_findings("acme.com", entry, profile)
 
@@ -971,13 +980,14 @@ def test_monitor_reports_a_board_it_could_not_read_and_reads_the_other_companies
     assert "1 of 1 new posting(s) from 1/2 monitor(s) are worth a look" in capsys.readouterr().out
 
 
-def saved_run(folder, domain, *links):
+def saved_run(folder, domain, *links, verified=True):
     """A run in out/ whose result for the company lists `links` as its open roles."""
     run_dir = folder / "out" / "20261120-090000"
     run_dir.mkdir(parents=True, exist_ok=True)
     roles = [{"title": "x", "url": link, "location": "", "remote_or_relocation": "", "link_status": "live"} for link in links]
+    content = {"identity_verified": verified, "open_roles": roles}
     (run_dir / f"{domain}.json").write_text(json.dumps({"name": domain, "domain": domain,
-                                                        "research": {"content": {"open_roles": roles}, "dead_roles": []}}))
+                                                        "research": {"content": content, "dead_roles": []}}))
 
 
 def test_monitor_sync_gives_no_monitor_to_a_company_whose_board_the_saved_runs_name(account, http, folder, monkeypatch, capsys):
@@ -1004,3 +1014,30 @@ def test_monitor_sync_needs_no_dashboard_address_when_every_company_is_read_from
 
     assert account.calls("POST") == [] and saved_state(folder)["acme.com"]["board"] == BOARD
     assert "monitor(s). Exa runs" not in capsys.readouterr().out
+
+
+def test_monitor_sync_takes_no_board_from_a_saved_run_that_did_not_verify_the_company(account, http, folder, monkeypatch):
+    # such a run is where a namesake's postings are saved; no feed is registered, so asking the board fails the test
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "hunt.up.railway.app")
+    saved_run(folder, "acme.com", AE, verified=False)
+
+    assert hunt.cmd_monitor_sync(sync_args()) == 0
+
+    assert [body["metadata"]["domain"] for body in account.calls("POST")] == ["acme.com", "beta.io"]
+    assert "board" not in saved_state(folder)["acme.com"]
+
+
+def test_monitor_sync_leaves_a_company_on_a_board_that_does_not_answer(account, http, folder, capsys):
+    (folder / runs.MONITORS).write_text("Acme,acme.com\n")
+    state = {"folder": "f1", "monitors": {}}
+    entry = dict(read_from_board(state, JUDGED))
+    monitor.save_state(folder / monitor.STATE, state)
+    http.get(BOARD_API, status=503)  # a bad minute at the job board's API
+
+    assert hunt.cmd_monitor_sync(sync_args()) == 0
+
+    assert account.calls("POST") == [] and saved_state(folder)["acme.com"] == entry  # no monitor, nothing forgotten
+    out = capsys.readouterr().out
+    assert "Acme (acme.com): reads its Ashby board acme\n" in out
+    assert "Acme (acme.com): a job board of its did not answer, so nothing was decided from it" in out
+    assert "1 company(ies) read from their job board, free" in out and "monitor(s). Exa runs" not in out

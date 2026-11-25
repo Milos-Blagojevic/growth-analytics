@@ -122,7 +122,7 @@ A monitor is a search that Exa runs by itself every period (1 hour at least) and
 from clients import boards
 
 board = boards.board_of("https://jobs.ashbyhq.com/acme/1111")   # {"ats": "ashby", "slug": "acme", "host": "jobs.ashbyhq.com"}
-state, postings = boards.fetch(board)                           # "ok", [{"id", "title", "url", "hosted", "location", "remote", "posted", "text"}]
+state, postings = boards.fetch(board)                           # "ok", [{"id", "title", "url", "hosted", "location", "remote", "posted", "text", "listed"}]
 boards.posting_id("https://apply.workable.com/j/5C0FFEE123")    # ("workable", "5C0FFEE123")
 boards.questions("https://job-boards.greenhouse.io/acme/jobs/333")  # [{"question", "required"}]
 ```
@@ -130,7 +130,7 @@ boards.questions("https://job-boards.greenhouse.io/acme/jobs/333")  # [{"questio
 | Function | Purpose |
 |---|---|
 | `board_of(url)` | The board a posting link is on, or `None` for a link on no board with a feed (and for one that names no board, such as `apply.workable.com/j/<id>`). |
-| `fetch(board)` | Every posting the board lists as open now: `(state, postings)`. `state` is `ok`, `missing` (the board does not exist: 404) or `unknown` (the request failed, or the answer is not the feed's format). A posting's `url` is the link the feed names for it, which can be a page of the company's own careers site; `hosted` is the posting on the board's own host. `remote` is `remote`, `hybrid`, `on-site` or empty; `posted` a date or empty; `text` the posting as plain text. |
+| `fetch(board)` | Every posting the board holds as open now: `(state, postings)`. `state` is `ok`, `missing` (the board does not exist: 404) or `unknown` (the request failed, or the answer is not the feed's format). A posting's `url` is the link the feed names for it, which can be a page of the company's own careers site; `hosted` is the posting on the board's own host. `remote` is `remote`, `hybrid`, `on-site` or empty; `posted` a date or empty; `text` the posting as plain text. `listed` is false for a posting that is open by its direct link only (Ashby's unlisted postings): a link to it is live, and it is not one of the roles the board shows. |
 | `posting_id(url)` | Which posting of its board a link is: `(ats, id)`, the same for every form the board gives the link. |
 | `questions(url, board=None)` | The questions a posting's application form asks for a written answer, without the fields for a name, a CV or a link; at most `MAX_QUESTIONS`. `[]` for a board that does not show its form, and when the request fails. |
 | `page(board)`, `label(board)` | The board's own page, and the board in a few words ("Ashby board acme"). |
@@ -138,7 +138,7 @@ boards.questions("https://job-boards.greenhouse.io/acme/jobs/333")  # [{"questio
 - **Feeds.** Ashby's [posting API](https://developers.ashbyhq.com/docs/public-job-posting-api), Greenhouse's [Job Board API](https://developers.greenhouse.io/job-board) (also for its EU boards), Lever's postings API (`api.lever.co`, `api.eu.lever.co` for an EU board), Workable's widget API, SmartRecruiters' posting API, Recruitee's `/api/offers/`, Teamtailor's `/jobs.rss`, Personio's `/xml` and Pinpoint's `/postings.json`. Each was read live against real boards when this was written (November 2026).
 - **What a feed does not have.** SmartRecruiters' list carries no posting text, and answers a company it does not know like one with nothing open, so a board of its without a posting reads as `unknown`. Pinpoint gives no date. Greenhouse and Personio do not say whether a posting is remote: its text does.
 - **Application questions.** Greenhouse answers them in its documented API (`?questions=true`). Ashby's come from the API its own hosted posting page reads its form from, which is not documented: when it changes, `questions` returns `[]`. The other boards do not show their forms without a key.
-- **Untrusted content.** Everything a board returns is a company's text on a web page. Titles are put on one line, markup is reduced to its text, a posting without a usable link is left out, and an XML feed with a document type is not parsed. Callers pass it on as a posting's fields and never as instructions.
+- **Untrusted content.** Everything a board returns is a company's text on a web page. Titles are put on one line, markup is reduced to its text, a posting without a usable link is left out, and an XML feed with a document type is refused by the parser when it meets one, in whatever encoding the feed is written, before anything the document type declares is read. Callers pass it on as a posting's fields and never as instructions.
 - **Requests.** Plain `requests` calls with a 15-second timeout and no retries: a feed that fails is `unknown`, and the caller goes on without it (the run asks its searches, the monitor reports the board and reads it again at the next check).
 - **Tests.** `tests/boards_mock.py` holds each feed's wire format.
 

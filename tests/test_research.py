@@ -611,7 +611,8 @@ def test_a_companys_job_board_supplies_its_open_roles_and_no_other_source_is_ask
                       boards_mock.ashby_job("1111", "Senior Analytics Engineer", text="Own the dbt models. " * 400),
                       boards_mock.ashby_job("4444", "Engineer, Product Analytics", workplace="Hybrid", location="Belgrade",
                                             text="Product metrics."),
-                      boards_mock.ashby_job("5555", "Analytics Engineering Manager"))
+                      boards_mock.ashby_job("5555", "Analytics Engineering Manager"),
+                      boards_mock.ashby_job("6666", "Staff Analytics Engineer", listed=False))  # by direct link only
 
     out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
@@ -687,6 +688,13 @@ def test_a_board_under_another_name_is_not_taken_for_the_companys(exa, http, pro
         ("Acme Analytics", "getacme.com", "https://jobs.ashbyhq.com/acme/1", False),
         ("Acme", "acme.com", "https://acme.com/careers/1", False),  # no board at all
         ("Acme", "acme.com", None, False),
+        # a site under another's name is not registered under the company's: the board named github is GitHub's
+        ("Acme", "acme.github.io", "https://boards.greenhouse.io/github/jobs/123", False),
+        ("Acme", "acme.vercel.app", "https://jobs.ashbyhq.com/vercel/1", False),
+        ("Acme", "acme.ltd.uk", "https://jobs.lever.co/ltd/1", False),
+        ("Acme", "acme.github.io", "https://jobs.ashbyhq.com/acme/1", True),  # its name still names its board
+        ("Über", "uber-example.de", "https://jobs.lever.co/ber/1", False),  # a letter outside ASCII is a letter
+        ("Über", "ueber.de", "https://jobs.lever.co/ueber/1", True),
     ],
 )
 def test_a_board_is_the_companys_when_it_carries_its_name_or_its_domain(name, domain, link, is_its):

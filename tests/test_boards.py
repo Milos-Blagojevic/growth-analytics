@@ -57,7 +57,8 @@ def test_an_ashby_board_lists_its_open_postings_with_their_text(http):
     boards_mock.ashby(http, "acme",
                       boards_mock.ashby_job(UUID.upper(), "  Senior\nAnalytics   Engineer ", text="Own the dbt models.\nRemote in the EU."),
                       boards_mock.ashby_job("2222", "Account Executive", workplace="OnSite", location="New York"),
-                      {"id": "3333"})  # nothing but an id: still open
+                      {"id": "3333"},  # nothing but an id: still open
+                      boards_mock.ashby_job("4444", "Staff Analytics Engineer", listed=False))  # open by direct link only
 
     state, postings = boards.fetch(ACME)
 
@@ -65,10 +66,13 @@ def test_an_ashby_board_lists_its_open_postings_with_their_text(http):
     assert postings[0] == {
         "id": UUID, "title": "Senior Analytics Engineer", "url": f"https://jobs.ashbyhq.com/acme/{UUID.upper()}",
         "hosted": f"https://jobs.ashbyhq.com/acme/{UUID.upper()}", "location": "Remote - Europe", "remote": "remote",
-        "posted": "2026-11-20", "text": "Own the dbt models.\nRemote in the EU.",
+        "posted": "2026-11-20", "text": "Own the dbt models.\nRemote in the EU.", "listed": True,
     }
     assert (postings[1]["title"], postings[1]["remote"], postings[1]["location"]) == ("Account Executive", "on-site", "New York")
     assert (postings[2]["id"], postings[2]["title"], postings[2]["url"]) == ("3333", "", "https://jobs.ashbyhq.com/acme/3333")
+    # a posting the board keeps off its list is open all the same, and told apart from the listed ones
+    assert [(posting["id"], posting["listed"]) for posting in postings] == [
+        (UUID, True), ("2222", True), ("3333", True), ("4444", False)]
     # the id is the one a link to the posting carries
     assert boards.posting_id(postings[0]["url"]) == ("ashby", postings[0]["id"])
 
@@ -87,7 +91,7 @@ def test_a_greenhouse_board_gives_the_companys_own_page_for_a_posting_and_the_bo
     assert postings[0] == {
         "id": "333", "title": "Senior Data Engineer", "url": "https://acme.com/careers/job?gh_jid=333",
         "hosted": "https://job-boards.eu.greenhouse.io/acme/jobs/333", "location": "Berlin, Germany", "remote": "",
-        "posted": "2026-11-18", "text": "Build dbt models & marts.\nSQL",
+        "posted": "2026-11-18", "text": "Build dbt models & marts.\nSQL", "listed": True,
     }
     # a posting the feed names on another of the board's hosts keeps that link; the board's own is its EU host
     assert postings[1]["url"] == "https://job-boards.greenhouse.io/acme/jobs/444"
@@ -116,7 +120,7 @@ def test_a_workable_board_gives_each_posting_its_link_on_the_board(http):
     assert posting == {
         "id": "5C0FFEE123", "title": "Senior BI Engineer", "url": "https://apply.workable.com/acme/j/5c0ffee123",
         "hosted": "https://apply.workable.com/acme/j/5c0ffee123", "location": "Athens, Greece", "remote": "remote",
-        "posted": "2026-11-17", "text": "Looker & dbt",
+        "posted": "2026-11-17", "text": "Looker & dbt", "listed": True,
     }
     assert boards.posting_id(posting["url"]) == ("workable", posting["id"])
 
@@ -160,7 +164,7 @@ def test_a_teamtailor_board_is_read_from_its_feed(http):
     assert state == "ok"
     assert posting == {
         "id": "acme/4321", "title": "Senior Data Engineer", "url": link, "hosted": link, "location": "Stockholm office",
-        "remote": "remote", "posted": "2026-11-18", "text": "Own the warehouse.",
+        "remote": "remote", "posted": "2026-11-18", "text": "Own the warehouse.", "listed": True,
     }
 
 
@@ -174,7 +178,7 @@ def test_a_personio_board_is_read_from_its_feed_on_the_host_its_links_use(http):
     assert posting == {
         "id": "acme/2737184", "title": "Senior Data Engineer (m/w/d)", "url": "https://acme.jobs.personio.com/job/2737184",
         "hosted": "https://acme.jobs.personio.com/job/2737184", "location": "Berlin", "remote": "", "posted": "2026-11-12",
-        "text": "Your tasks\nAirflow",
+        "text": "Your tasks\nAirflow", "listed": True,
     }
 
 
@@ -210,12 +214,23 @@ def test_a_board_that_does_not_answer_with_its_feed_is_told_apart_from_one_that_
     assert boards.fetch(ACME) == (state, [])
 
 
-def test_a_feed_with_a_document_type_is_not_parsed(http):
-    bomb = ('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;">]>'
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_a_feed_with_a_document_type_is_not_parsed(http, encoding):
+    bomb = (f'<?xml version="1.0" encoding="{encoding}"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;">]>'
             "<workzag-jobs><position><id>1</id><name>&lol2;</name></position></workzag-jobs>")
-    http.get(boards_mock.PERSONIO.format("acme"), body=bomb)
+    http.get(boards_mock.PERSONIO.format("acme"), body=bomb.encode(encoding))
 
     assert boards.fetch({"ats": "personio", "slug": "acme", "host": "acme.jobs.personio.de"}) == ("unknown", [])
+
+
+def test_a_feed_in_another_encoding_without_a_document_type_is_read(http):
+    feed = ('<?xml version="1.0" encoding="utf-16"?><workzag-jobs><position><id>7</id><name>Ingénieur Données</name>'
+            "<office>Paris</office></position></workzag-jobs>")
+    http.get(boards_mock.PERSONIO.format("acme"), body=feed.encode("utf-16"))
+
+    state, (posting,) = boards.fetch({"ats": "personio", "slug": "acme", "host": "acme.jobs.personio.de"})
+
+    assert (state, posting["title"], posting["location"]) == ("ok", "Ingénieur Données", "Paris")
 
 
 def test_what_a_board_says_is_kept_as_text_and_a_posting_without_a_usable_link_is_left_out(http):

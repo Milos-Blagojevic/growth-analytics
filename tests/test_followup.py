@@ -284,6 +284,23 @@ def test_an_application_from_an_email_is_looked_up_on_the_board_saved_research_k
     ]
 
 
+def test_a_saved_run_that_did_not_verify_the_company_names_no_board_to_call_an_application_closed(tmp_path, monkeypatch,
+                                                                                                 http, capsys):
+    # such a run is where a namesake's postings are saved: its board, which does not list the role, says nothing
+    monkeypatch.chdir(tmp_path)
+    unverified = result("Zeta", "zeta.io", roles=[("Growth Analyst", ZETA_JOB, "live")])
+    unverified["research"]["content"]["identity_verified"] = False
+    track(tmp_path, [unverified], [])
+    add_from_email(tmp_path, mail_update(1, "applied", "Zeta Inc.", role="Senior Data Analyst", received_at=days_ago(11))
+                   | {"from": "Zeta Hiring Team <no-reply@us.greenhouse-mail.io>"})
+    for guess in ("zetainc", "zeta-inc"):  # the board is guessed from the email instead; the one named zeta is not asked
+        http.get(GREENHOUSE.format(guess), status=404)
+
+    assert hunt.cmd_followup(followup_args(dry_run=True)) == 0
+
+    assert printed(capsys)[2:4] == ["Could not check:", "- Zeta Inc.: Senior Data Analyst (applied 11 days ago)"]
+
+
 @pytest.fixture
 def eta(tmp_path, monkeypatch):
     """An application to Eta Labs, known from its confirmation email only (Greenhouse, 11 days ago). No saved run

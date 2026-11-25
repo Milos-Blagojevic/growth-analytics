@@ -5,8 +5,8 @@
     python hunt.py run --research-only       # Exa research only (no Claude, no Telegram)
     python hunt.py run --fiber               # also take open roles from Fiber's jobs database (paid agent runs)
     python hunt.py send [out/<run>]          # send a saved run's notification to Telegram (default: latest)
-    python hunt.py monitor-sync              # keep one Exa monitor per company in monitors.csv (Exa runs them)
-    python hunt.py monitor [--dry-run]       # send the suitable new postings the monitors found (Claude)
+    python hunt.py monitor-sync              # watch each company in monitors.csv: its job board, or an Exa monitor
+    python hunt.py monitor [--dry-run]       # send the suitable new postings the boards and monitors found (Claude)
     python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
     python hunt.py mail [--dry-run]          # find application confirmations, rejections and interview invites in new email (Claude)
     python hunt.py followup [--dry-run]      # list the applications without a reply for 8 days, and whether each is still open
@@ -519,10 +519,13 @@ def cmd_monitor_sync(args):
     # With nothing listed and a folder id, the sync still runs: a monitor whose create lost its reply may be left.
     saved = runs.saved_postings(OUT_DIR)
     on_board = {}  # the companies whose job board has a public feed: read from it, with no monitor
+    unread = []  # the companies whose board did not answer: nothing is decided from that
     for name, domain in companies:
-        found = monitor.board(name, domain, state["monitors"].get(domain), saved.get(domain, {}).get("links", ()))
+        found, failed = monitor.board(name, domain, state["monitors"].get(domain), saved.get(domain, {}).get("links", ()))
         if found:
             on_board[domain] = found
+        if failed:
+            unread.append(f"{name} ({domain})")
     try:
         # only a company that gets a monitor needs the address; deleting the last ones needs none
         needs_monitor = any(domain not in on_board for _, domain in companies)
@@ -535,6 +538,8 @@ def cmd_monitor_sync(args):
                                    on_board)
     for line in lines:
         print(line)
+    for company in unread:
+        print(f"{company}: a job board of its did not answer, so nothing was decided from it; the next sync reads it again")
     for problem in problems:
         logger.warning("monitor-sync: %s", problem)
     on_exa = sum(bool(entry.get("id")) for entry in state["monitors"].values())
@@ -871,12 +876,22 @@ def fetch_posting(url):
     return next(((r.text or "").strip() for r in response.results if (r.text or "").strip()), "")
 
 
+def _saved_runs():
+    """Each saved run with its results, newest first: (run_dir, results). A run that cannot be read (one still being
+    written) is passed by."""
+    for run_dir in reversed(runs.run_dirs(OUT_DIR)):
+        try:
+            yield run_dir, runs.load_results(run_dir)
+        except (OSError, ValueError):
+            continue
+
+
 def company_notes(domain):
     """What earlier runs found about the company: summary, signals and the fit judgement, or None."""
     if not domain:
         return None
-    for run_dir in reversed(runs.run_dirs(OUT_DIR)):
-        for r in runs.load_results(run_dir):
+    for run_dir, results in _saved_runs():
+        for r in results:
             if r.get("domain") == domain and "research" in r:
                 content, fit = r["research"].get("content", {}), r.get("fit") or {}
                 return {
@@ -948,8 +963,8 @@ def cmd_interview_review(args):
 
 def _scored_posting(domain):
     """The company's newest saved result whose fit names a best role with a posting link: (result, run), or None."""
-    for run_dir in reversed(runs.run_dirs(OUT_DIR)):
-        for r in runs.load_results(run_dir):
+    for run_dir, results in _saved_runs():
+        for r in results:
             best = (r.get("fit") or {}).get("best_role_url")
             if runs.normalize_domain(str(r.get("domain") or "")) == domain and isinstance(best, str) and best.strip():
                 return r, run_dir.name
@@ -1048,13 +1063,17 @@ def main():
     send.add_argument("run_dir", nargs="?", help="a directory under out/; default: the latest run")
     send.set_defaults(func=cmd_send)
 
-    sync_cmd = sub.add_parser("monitor-sync", help="create, update and delete Exa monitors to match monitors.csv")
+    sync_cmd = sub.add_parser("monitor-sync", help="watch the companies in monitors.csv: read each from its job board, "
+                                                   "or create, update and delete its Exa monitor")
     sync_cmd.add_argument("--companies", default=runs.MONITORS, help="name,domain CSV of the companies to monitor")
-    sync_cmd.add_argument("--state", default=monitor.STATE, help="JSON file of the monitors and the postings judged")
+    sync_cmd.add_argument("--state", default=monitor.STATE,
+                          help="JSON file of the boards, the monitors and the postings judged")
     sync_cmd.set_defaults(func=cmd_monitor_sync)
 
-    monitor_cmd = sub.add_parser("monitor", help="send the suitable new postings your Exa monitors found to Telegram (Claude)")
-    monitor_cmd.add_argument("--state", default=monitor.STATE, help="JSON file of the monitors and the postings judged")
+    monitor_cmd = sub.add_parser("monitor", help="send the suitable new postings the job boards and your Exa monitors "
+                                                 "found to Telegram (Claude)")
+    monitor_cmd.add_argument("--state", default=monitor.STATE,
+                             help="JSON file of the boards, the monitors and the postings judged")
     monitor_cmd.add_argument("--dry-run", action="store_true", help="print the postings; do not send or save state")
     monitor_cmd.set_defaults(func=cmd_monitor)
 

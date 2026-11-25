@@ -133,21 +133,28 @@ def _on_exa(live):
 
 
 def board(name, domain, entry, links):
-    """The job board to read the company's new postings from in place of an Exa monitor, or None.
+    """The job board to read the company's new postings from in place of an Exa monitor: (board, unread).
 
     It is a board with a public feed (clients/boards.py) that a posting link of the company names and that carries
     the company's name (research.company_boards): `links` are the links saved runs hold for the company, next to
     the postings its checks have judged (entry["seen"]) and the board it is read from already. It has to answer
     now and list at least one posting: a company that moved to another job board leaves an empty one behind, and
     an Exa monitor still finds what the company posts elsewhere.
+
+    `unread` is True when no board lists a posting and one of them could not be read (a timeout, a 5xx, a bot
+    check). That decides nothing: a company that is read from the board that did not answer stays on it, and the
+    next sync looks again. A minute's outage at a job board must not give every company on it a billed monitor.
     """
     known = [boards.page(entry["board"])] if entry and entry.get("board") else []
     known += [posting["url"] for posting in (entry or {}).get("seen", [])]
+    unread = []
     for found in research.company_boards(name, domain, [*known, *links]):
-        state, postings = research.board_postings(found)
+        state, postings = research.board_listing(found)
         if state == "ok" and postings:
-            return found
-    return None
+            return found, False
+        if state == "unknown":
+            unread.append(found)
+    return (entry["board"] if entry and entry.get("board") in unread else None), bool(unread)
 
 
 def _judged(entry):
@@ -399,7 +406,7 @@ def board_findings(domain, entry, profile):
     names a target seniority first: the others stay new for the next check.
     problems: the board could not be read, which the next check tries again, or no longer exists.
     """
-    state, postings = research.board_postings(entry["board"])
+    state, postings = research.board_listing(entry["board"])
     if state != "ok":
         gone = ("no longer exists; `python hunt.py monitor-sync` gives the company an Exa monitor in its place"
                 if state == "missing" else "could not be read; the next check tries again")

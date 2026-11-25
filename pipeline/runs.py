@@ -203,8 +203,9 @@ def load_manifest(run_dir):
 def saved_postings(out_dir):
     """What the saved runs hold of each company's postings, by domain: {domain: {"name", "links"}}. `name` is the
     newest run's; `links` are the links of every posting a run kept for the company (its open roles, its dead
-    links, the best role), newest run first, each once. They say where the company posts its jobs. A run that
-    cannot be read (one still being written) is left out."""
+    links, the best role), newest run first, each once. They say where the company posts its jobs, so only a
+    result whose research verified the company counts: an unverified one is where a namesake's postings are saved.
+    A run that cannot be read (one still being written) is left out."""
     companies = {}
     for run_dir in reversed(run_dirs(out_dir)):
         try:
@@ -216,6 +217,8 @@ def saved_postings(out_dir):
                 continue
             research = result.get("research") if isinstance(result.get("research"), dict) else {}
             content = research.get("content") if isinstance(research.get("content"), dict) else {}
+            if content.get("identity_verified") is not True:
+                continue
             roles = [*(content.get("open_roles") or []), *(research.get("dead_roles") or [])]
             links = [role.get("url") for role in roles if isinstance(role, dict)]
             links.append((result.get("fit") or {}).get("best_role_url"))

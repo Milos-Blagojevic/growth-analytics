@@ -430,15 +430,19 @@ def build(root, runner, connection, report_started):
           Telegram) or research_only (no Claude); `fiber` also asks Fiber's jobs database (paid per company);
           `domains` limits it to those companies (leads or researched ones), else every company in companies.csv.
         - discover: suggest new companies; `focus` (optional) and `limit` (1-50).
-        - mail, news, monitor: check email, make the news digest, read the Exa monitors' new postings; `dry_run`
-          prints instead of sending to Telegram and saving state.
+        - mail, news, monitor: check email, make the news digest, read the new postings the job boards and the Exa
+          monitors found; `dry_run` prints instead of sending to Telegram and saving state.
         - followup: list the applications without a reply for 8 days, each once, with whether its posting is still
           open (free); `dry_run` prints instead of sending to Telegram and saving state.
-        - monitor_sync: create, update and delete Exa monitors to match monitors.csv.
-        - new_monitor: add the company `name` (`domain`) to monitors.csv and sync, which creates its monitor.
+        - monitor_sync: make how the companies in monitors.csv are watched match the list: a company whose job board
+          has a public feed is read from the board (free), every other one gets an Exa monitor (created, updated,
+          deleted).
+        - new_monitor: add the company `name` (`domain`) to monitors.csv and sync, which reads its job board or
+          creates its monitor.
         - edit_monitor: change the company monitors.csv lists under `current_domain` (see `list_monitors`) to `name`
           and `domain`, and sync: a new name updates its monitor, a new domain replaces it.
-        - remove_monitors: delete the companies of `domains` from monitors.csv and sync, which deletes their monitors.
+        - remove_monitors: delete the companies of `domains` from monitors.csv and sync, which deletes their monitors
+          and stops reading their boards.
         - interview_prep, interview_review: Claude's prep brief or transcript review for `interview_id`.
         - apply_kit: Claude's application kit for the best role of the company `domain` (see `get_company`): answers
           to the posting's application questions, a note and the CV points to lead with, shown on its dashboard page.

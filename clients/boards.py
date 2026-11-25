@@ -161,10 +161,11 @@ def _plain(text):
     return "\n".join(line for line in lines if line)
 
 
-def _posting(posting_id, title, hosted, given=None, *, location="", remote="", posted="", text=""):
+def _posting(posting_id, title, hosted, given=None, *, location="", remote="", posted="", text="", listed=True):
     """One posting as `fetch` returns it, or None without a usable link. `hosted` is the posting on the board's own
     host; `given` is the link the feed names for it, which can be a page of the company's own careers site. A
-    posting the board gives no title is kept, with "": it is open all the same."""
+    posting the board gives no title is kept, with "": it is open all the same. `listed` is False for a posting
+    that is open by its direct link only and not on the board's list."""
     usable = [link for link in (str(given or "").strip(), str(hosted or "").strip())
               if link.startswith(("https://", "http://")) and not any(char.isspace() for char in link)]
     if not usable:
@@ -178,6 +179,7 @@ def _posting(posting_id, title, hosted, given=None, *, location="", remote="", p
         "remote": remote if remote in ("remote", "hybrid", "on-site") else "",
         "posted": str(posted or "")[:10],
         "text": _plain(text) if text else "",
+        "listed": bool(listed),
     }
 
 
@@ -207,7 +209,8 @@ def _ashby(board):
         _posting(str(job["id"]).lower(), job.get("title"), f"https://{ASHBY_HOST}/{board['slug']}/{job['id']}",
                  job.get("jobUrl"),
                  location=job.get("location"), remote=_workplace(job.get("workplaceType")),
-                 posted=job.get("publishedAt"), text=job.get("descriptionPlain") or job.get("descriptionHtml"))
+                 posted=job.get("publishedAt"), text=job.get("descriptionPlain") or job.get("descriptionHtml"),
+                 listed=job.get("isListed") is not False)  # unlisted: "only available via direct link" (Ashby's docs)
         for job in jobs
     ]
 
@@ -288,12 +291,18 @@ def _recruitee(board):
     return postings
 
 
-def _xml(response):
-    """The feed's XML. One with a document type is refused: a feed has none, and a parser expands what one declares."""
-    if b"<!DOCTYPE" in response.content or b"<!ENTITY" in response.content:
+class _NoDoctype(ElementTree.TreeBuilder):
+    """Builds a feed's XML and refuses one with a document type, in whatever encoding it is written."""
+
+    def doctype(self, name, pubid, system):
         raise _Unreadable("XML with a document type")
+
+
+def _xml(response):
+    """The feed's XML. One with a document type is refused when the parser meets it, before anything it declares
+    is read: a feed has none, and a parser expands the entities one declares."""
     try:
-        return ElementTree.fromstring(response.content)
+        return ElementTree.fromstring(response.content, parser=ElementTree.XMLParser(target=_NoDoctype()))
     except ElementTree.ParseError as exc:
         raise _Unreadable(str(exc)) from exc
 
@@ -350,16 +359,18 @@ FEEDS = {"ashby": _ashby, "greenhouse": _greenhouse, "lever": _lever, "workable"
 
 
 def fetch(board):
-    """Every posting the board lists as open now: (state, postings).
+    """Every posting the board holds as open now: (state, postings).
 
     state: "ok", "missing" (the board does not exist) or "unknown" (the request failed, or the answer is not the
     feed's format; on SmartRecruiters also a board without a posting); postings is empty for the last two.
-    postings: [{"id", "title", "url", "hosted", "location", "remote", "posted", "text"}]. `id` is the second part
-    of `posting_id` for a link to the posting on its board. `url` is the link the feed names for the posting, which
-    can be a page of the company's own careers site; `hosted` is the posting on the board's own host (the same
-    link on most boards). `title` is on one line, "" when the board gives none.
+    postings: [{"id", "title", "url", "hosted", "location", "remote", "posted", "text", "listed"}]. `id` is the
+    second part of `posting_id` for a link to the posting on its board. `url` is the link the feed names for the
+    posting, which can be a page of the company's own careers site; `hosted` is the posting on the board's own
+    host (the same link on most boards). `title` is on one line, "" when the board gives none.
     `remote` is "remote", "hybrid", "on-site" or "" when the board does not say; `posted` is a date (YYYY-MM-DD) or
-    ""; `text` is the posting as plain text, "" on SmartRecruiters, whose list has none.
+    ""; `text` is the posting as plain text, "" on SmartRecruiters, whose list has none. `listed` is False for a
+    posting that is open by its direct link only (Ashby's unlisted postings): live for a link check, and not one
+    of the roles the board shows.
     """
     try:
         return "ok", [posting for posting in FEEDS[board["ats"]](board) if posting]

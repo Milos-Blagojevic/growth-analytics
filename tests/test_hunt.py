@@ -176,24 +176,48 @@ def test_run_with_fiber_takes_open_roles_from_fiber_and_records_it(exa, http, wo
     assert "roles: 1 (source: fiber)\n  - Data Engineer, Product | Remote | Remote (EU) | https://jobs.ashbyhq.com/acme/3333" in out
 
 
-def test_a_later_run_reads_the_job_board_an_earlier_run_found_and_asks_fiber_nothing(exa, http, workdir, capsys):
-    (workdir / "companies.csv").write_text("Acme,https://www.Acme.com/\n")
+def earlier_run(workdir, *, verified):
+    """A saved run that holds one closed posting on the Ashby board named acme, for Acme at acme.com."""
     earlier = workdir / "out" / "20261101-080000"
     earlier.mkdir(parents=True)
     (earlier / "acme.com.json").write_text(json.dumps({"name": "Acme", "domain": "acme.com", "research": {
-        "content": {"open_roles": []}, "dead_roles": [{"title": "Closed since", "url": "https://jobs.ashbyhq.com/Acme/0000"}]}}))
+        "content": {"identity_verified": verified, "open_roles": []},
+        "dead_roles": [{"title": "Closed since", "url": "https://jobs.ashbyhq.com/Acme/0000"}]}}))
+
+
+def newest_research(workdir):
+    newest = max(path for path in (workdir / "out").iterdir())
+    return json.loads((newest / "acme.com.json").read_text())["research"]
+
+
+def test_a_later_run_reads_the_job_board_an_earlier_run_found_and_asks_fiber_nothing(exa, http, workdir, capsys):
+    (workdir / "companies.csv").write_text("Acme,https://www.Acme.com/\n")
+    earlier_run(workdir, verified=True)
     exa.on_search(structured_response(company("Acme", "acme.com", [])))  # the search finds no posting this time
     boards_mock.ashby(http, "acme", boards_mock.ashby_job("3333", "Senior Analytics Engineer", text="dbt, Snowflake."))
 
     assert hunt.cmd_run(run_args(research_only=True, fiber=True)) == 0
 
-    newest = max(path for path in (workdir / "out").iterdir())
-    research = json.loads((newest / "acme.com.json").read_text())["research"]
+    research = newest_research(workdir)
     assert research["role_source"] == "board"
     assert [(r["title"], r["url"], r["description"]) for r in research["content"]["open_roles"]] == [
         ("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/3333", "dbt, Snowflake.")]
     assert exa.requests(AGENT_URL) == [] and len(exa.requests()) == 1  # no Fiber agent run, no ATS search
     assert "roles: 1 (source: board)" in capsys.readouterr().out
+
+
+def test_a_saved_run_that_did_not_verify_the_company_names_no_job_board(exa, http, workdir):
+    # an unverified result is where a namesake's postings are saved, and the namesake's board carries the same name
+    (workdir / "companies.csv").write_text("Acme,acme.com\n")
+    earlier_run(workdir, verified=False)
+    exa.on_search(structured_response(company("Acme", "acme.com", [])))
+
+    assert hunt.cmd_run(run_args(research_only=True)) == 0
+
+    research = newest_research(workdir)
+    assert (research["role_source"], research["content"]["open_roles"]) == ("none", [])
+    assert not [call.request.url for call in http.calls if "ashbyhq.com" in call.request.url]  # the board is not asked
+    assert len(exa.requests()) == 2  # the main search and the ATS search, as for a company without a board
 
 
 def test_ctrl_c_during_a_run_cancels_the_agent_runs_its_workers_wait_for(exa, http, workdir):

@@ -206,6 +206,9 @@ def test_apply_kit_drafts_from_the_saved_posting_and_the_forms_questions_with_on
                gap_note="Thin on Looker.")
     # A later run that failed for the company: the kit is for the role its last scoring chose.
     write_run(workdir, "20261008-090000", [result("Acme", "acme.com", error="Exa timed out")])
+    # And a run that is still being written: a file that is no JSON yet is passed by.
+    (workdir / "out" / "20261015-090000").mkdir()
+    (workdir / "out" / "20261015-090000" / "acme.com.json").write_text('{"name": "Ac')
     http.get(GH_FORM, json=greenhouse_form(), match=[matchers.query_param_matcher({"questions": "true"})])
 
     assert hunt.cmd_apply_kit(kit_args("https://www.Acme.com/careers")) == 0

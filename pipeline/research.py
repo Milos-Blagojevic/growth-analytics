@@ -212,9 +212,16 @@ def _board(ats, slug, host):
 
 
 def board_postings(board):
-    """What a job board lists as open now, read once per run: (state, [posting]) as boards.fetch returns them."""
+    """What a job board holds as open now, read once per run: (state, [posting]) as boards.fetch returns them."""
     state, postings = _board(board["ats"], board["slug"], board["host"])
     return state, list(postings)
+
+
+def board_listing(board):
+    """What a job board shows on its list of open jobs: board_postings without the postings that are open by a
+    direct link only (Ashby's unlisted ones), which the company does not offer to whoever reads its board."""
+    state, postings = board_postings(board)
+    return state, [posting for posting in postings if posting["listed"]]
 
 
 _OPENS_RE = re.compile(r"<!--|</?[a-zA-Z]")  # where a comment or a tag starts
@@ -651,15 +658,20 @@ def find_roles_on_fiber(name, domain, profile):
 
 
 def _letters(text):
-    return re.sub(r"[^a-z0-9]", "", text.casefold())
+    """The letters and digits of a name, in one case. Letters of any alphabet are kept: "Über" is not "ber"."""
+    return "".join(char for char in text.casefold() if char.isalnum())
 
 
 def _carries_name(board, name, domain):
     """True when a job board is named for the company: its name on the board, letters and digits only, is the
     company's name, the name its domain is registered under, or that domain whole (acme, or acmeio for acme.io).
     A board named anything else is left alone, also acme-labs or acmepay for Acme: a search that takes another
-    company's posting for this one's must not bring that company's whole board with it."""
-    return _letters(board["slug"]) in {_letters(name), _letters(_registered(domain)[0]), _letters(domain)} - {""}
+    company's posting for this one's must not bring that company's whole board with it. A site under another's
+    name (acme.github.io, acme.vercel.app) is not registered under the company's: the board named github is
+    GitHub's, as in _posts_own_jobs."""
+    registered, under = _registered(domain)
+    names = {_letters(name), _letters(domain)} | ({_letters(registered)} if not under else set())
+    return _letters(board["slug"]) in names - {""}
 
 
 def company_boards(name, domain, links):
@@ -711,7 +723,7 @@ def _on_boards(name, domain, links):
     """
     roles, pages, problems = {}, [], []
     for board in company_boards(name, domain, links):
-        state, postings = board_postings(board)
+        state, postings = board_listing(board)
         if state == "unknown":
             logger.warning("%s: %s could not be read", name, boards.label(board))
             problems.append(f"Job board could not be read: {boards.label(board)}")
