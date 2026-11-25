@@ -10,6 +10,12 @@
 <section class="block">
   <h2>From your email <span class="count">{{ mail_suggestions | length }}</span></h2>
   <p class="muted small">Application confirmations, rejections and interview invites <code>hunt.py mail</code> found. Nothing changes until you confirm.</p>
+  {% if mail_confirmable >= 2 %}
+  <p>
+    <button class="btn sm" type="button" hx-post="/mail/confirm-applied">Add all {{ mail_confirmable }} application confirmations</button>
+    <span class="muted small">Each goes to Applied with the date of its email. One that matches several of your applications stays here.</span>
+  </p>
+  {% endif %}
   <div class="suggestions">
     {% for s in mail_suggestions %}
     <article class="suggestion">

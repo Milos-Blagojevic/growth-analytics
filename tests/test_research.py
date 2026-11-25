@@ -3,6 +3,7 @@ import time
 import pytest
 import requests
 
+import boards_mock
 from pipeline import research
 from exa_mock import AGENT_URL, CONTENTS_URL, agent_run, contents_response, error, grounded, result, structured_response
 
@@ -28,6 +29,23 @@ def ashby_board(http, board, *job_ids):
     http.get(ASHBY_API.format(board), json={"jobs": [{"id": j, "title": "t"} for j in job_ids]})
 
 
+BOARD_FEEDS = {
+    "greenhouse": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+    "lever": "https://api.lever.co/v0/postings/acme",
+    "workable": "https://apply.workable.com/api/v1/widget/accounts/acme",
+    "personio": "https://acme.jobs.personio.com/xml",
+}
+# Fiber and the ATS search are asked only for a company whose job board is not read. In their tests Acme's
+# postings are on an Ashby board under another name, which is not taken for Acme's (research._carries_name).
+ELSEWHERE = "acme-talent"
+
+
+def no_feed(http, *kinds):
+    """Acme has no job board of these kinds (any more): the feed answers 404, so there is no board to read."""
+    for kind in kinds:
+        http.get(BOARD_FEEDS[kind], status=404)
+
+
 def test_research_drops_dead_links_and_describes_live_roles(exa, http, profile):
     live = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")
     closed_on_ashby = role("Lead Growth Engineer", "https://jobs.ashbyhq.com/acme/2222")
@@ -46,6 +64,7 @@ def test_research_drops_dead_links_and_describes_live_roles(exa, http, profile):
         )
     )
     ashby_board(http, "acme", "1111")
+    no_feed(http, "greenhouse", "lever", "workable")
     http.get(not_found["url"], status=404)
     http.get(soft_404["url"], status=302, headers={"Location": "https://jobs.lever.co/acme"})
     http.get("https://jobs.lever.co/acme", status=200)
@@ -138,6 +157,7 @@ def test_ats_fallback_when_main_search_has_no_live_roles(exa, http, profile):
     exa.on_contents(contents_response([result(found["url"], text="SQL and dbt.")]))
     http.get(stale["url"], status=404)
     ashby_board(http, "acme", "1111")
+    no_feed(http, "greenhouse")
 
     out = research.research_company("Acme", "acme.com", profile)
 
@@ -155,6 +175,7 @@ def test_ats_fallback_failure_keeps_the_main_research(exa, http, profile):
     main = structured_response(company([stale]))
     exa.on_search(lambda body: error(500) if "includeDomains" in body else main)
     http.get(stale["url"], status=404)
+    no_feed(http, "greenhouse")
 
     out = research.research_company("Acme", "acme.com", profile)
 
@@ -185,7 +206,7 @@ def test_no_ats_fallback_for_unverified_identity(exa, http, profile):
 
 
 def test_a_posting_on_a_third_party_site_is_looked_for_where_the_company_posts_its_jobs(exa, http, profile):
-    on_ashby = role("Metadata Analyst", "https://jobs.ashbyhq.com/acme/1111")
+    on_ashby = role("Metadata Analyst", f"https://jobs.ashbyhq.com/{ELSEWHERE}/1111")
     gateway = role("Lead Growth Engineer", "https://rockethunt.ai/en/vacancies/1dc282ff")  # an account to see where to apply
     part_of_a_word = role("Data Analyst", "https://hirify.me/jobs/2")  # not the Metadata Analyst posting
     other_level = role("Senior Metadata Analyst", "https://hirify.me/jobs/4")  # nor is this one
@@ -204,7 +225,7 @@ def test_a_posting_on_a_third_party_site_is_looked_for_where_the_company_posts_i
     )
     exa.on_search(lambda body: fallback if "includeDomains" in body else main)
     exa.on_contents(contents_response())
-    ashby_board(http, "acme", "1111")
+    ashby_board(http, ELSEWHERE, "1111")
     for page in (gateway, part_of_a_word, other_level, behind_it):
         http.get(page["url"], status=200)
 
@@ -273,6 +294,7 @@ def test_a_careers_site_under_the_companys_name_on_another_domain_is_its_own(exa
     exa.on_contents(contents_response())
     for posting in listed:
         http.get(posting["url"], status=200)
+    no_feed(http, "personio")
 
     out = research.research_company("Acme", "acme.com", profile)
 
@@ -313,16 +335,16 @@ def test_a_posting_open_under_one_link_is_not_dead_for_its_other_link(exa, http,
 
 
 def test_fiber_roles_come_first_and_the_main_searchs_other_roles_follow(exa, http, profile):
-    from_main = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")
+    from_main = role("Senior Analytics Engineer", f"https://jobs.ashbyhq.com/{ELSEWHERE}/1111")
     # the same posting as each source names it: the main search links the application form, on a capitalised board
-    in_both_main = role("Growth Engineer", "https://jobs.ashbyhq.com/Acme/2222/application")
-    in_both_fiber = role("Growth Engineer", "https://jobs.ashbyhq.com/acme/2222/")
-    only_fiber = role("Data Engineer, Product", "https://jobs.ashbyhq.com/acme/3333/application", location="New York")
+    in_both_main = role("Growth Engineer", f"https://jobs.ashbyhq.com/{ELSEWHERE.title()}/2222/application")
+    in_both_fiber = role("Growth Engineer", f"https://jobs.ashbyhq.com/{ELSEWHERE}/2222/")
+    only_fiber = role("Data Engineer, Product", f"https://jobs.ashbyhq.com/{ELSEWHERE}/3333/application", location="New York")
     own_site = role("Analytics Engineer", "https://careers.acme.com/jobs/77")
-    closed = role("Lead Data Analyst", "https://jobs.ashbyhq.com/acme/4444")
+    closed = role("Lead Data Analyst", f"https://jobs.ashbyhq.com/{ELSEWHERE}/4444")
     # an aggregator's page answers 200 for a job the company never posted: never checked, never kept
     aggregator = role("Staff Data Engineer", "https://agraph.ai/jobs/j_acme_2")
-    posting = "https://jobs.ashbyhq.com/acme/3333"  # the posting behind the application form
+    posting = f"https://jobs.ashbyhq.com/{ELSEWHERE}/3333"  # the posting behind the application form
     exa.on_search(structured_response(company([from_main, in_both_main]), [grounded("open_roles[0].url", from_main["url"])]))
     exa.on_agent(agent_run(
         {"open_roles": [only_fiber, in_both_fiber, aggregator, own_site, closed, role("No link", " "), only_fiber]},
@@ -330,7 +352,7 @@ def test_fiber_roles_come_first_and_the_main_searchs_other_roles_follow(exa, htt
         partners={"fiber": 0.18},
     ))  # fmt: skip
     exa.on_contents(contents_response())
-    ashby_board(http, "acme", "1111", "2222", "3333")
+    ashby_board(http, ELSEWHERE, "1111", "2222", "3333")
     http.get(own_site["url"], status=200)
 
     out = research.research_company("Acme", "acme.com", profile, fiber=True)
@@ -352,12 +374,12 @@ def test_fiber_roles_come_first_and_the_main_searchs_other_roles_follow(exa, htt
 
 
 def test_fiber_alone_supplies_the_roles_when_the_main_search_has_none(exa, http, profile):
-    listed = [role(f"Data Engineer {n}", f"https://jobs.ashbyhq.com/acme/{n}") for n in range(10)]
-    closed = role("Lead Data Analyst", "https://jobs.ashbyhq.com/acme/closed")
+    listed = [role(f"Data Engineer {n}", f"https://jobs.ashbyhq.com/{ELSEWHERE}/{n}") for n in range(10)]
+    closed = role("Lead Data Analyst", f"https://jobs.ashbyhq.com/{ELSEWHERE}/closed")
     exa.on_search(structured_response(company([closed]), [grounded("open_roles[0].url", closed["url"])]))
     exa.on_agent(agent_run({"open_roles": listed}))
     exa.on_contents(contents_response())
-    ashby_board(http, "acme", *(str(n) for n in range(10)))
+    ashby_board(http, ELSEWHERE, *(str(n) for n in range(10)))
 
     out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
@@ -509,12 +531,12 @@ def test_postings_named_by_their_query_string_are_not_taken_for_one(exa, http, p
 
 
 def test_an_unchecked_fiber_link_never_comes_before_or_pushes_out_a_live_role(exa, http, profile):
-    live = [role(f"Analytics Engineer {n}", f"https://jobs.ashbyhq.com/acme/{n}") for n in range(research.MAX_ROLES)]
+    live = [role(f"Analytics Engineer {n}", f"https://jobs.ashbyhq.com/{ELSEWHERE}/{n}") for n in range(research.MAX_ROLES)]
     unchecked = role("Data Engineer", "https://acme.com/careers")  # a careers page: no posting to confirm
     exa.on_search(lambda body: structured_response(company(live[:1] if "Acme" in body["query"] else live)))
     exa.on_agent(agent_run({"open_roles": [unchecked]}))
     exa.on_contents(contents_response())
-    ashby_board(http, "acme", *(str(n) for n in range(research.MAX_ROLES)))
+    ashby_board(http, ELSEWHERE, *(str(n) for n in range(research.MAX_ROLES)))
 
     one_live = research.research_company("Acme", "acme.com", profile, fiber=True)
     all_live = research.research_company("Busy", "acme.com", profile, fiber=True)
@@ -540,11 +562,11 @@ def test_an_unchecked_fiber_link_never_comes_before_or_pushes_out_a_live_role(ex
     ids=["none-listed", "null-list", "run-failed", "not-enabled"],
 )
 def test_without_fiber_roles_the_main_searchs_roles_stand(exa, http, profile, answer, warning):
-    from_main = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")
+    from_main = role("Senior Analytics Engineer", f"https://jobs.ashbyhq.com/{ELSEWHERE}/1111")
     exa.on_search(structured_response(company([from_main])))
     exa.on_agent(answer)
     exa.on_contents(contents_response())
-    ashby_board(http, "acme", "1111")
+    ashby_board(http, ELSEWHERE, "1111")
 
     out = research.research_company("Acme", "acme.com", profile, fiber=True)
 
@@ -575,6 +597,212 @@ def test_fiber_is_not_asked_about_a_company_whose_identity_is_not_verified(exa, 
     research.research_company("Acme", "acme.com", profile, fiber=True)
 
     assert exa.requests(AGENT_URL) == []  # an agent run costs 10 to 30 times the main search
+
+
+# open roles from the company's job board, in place of Fiber and the ATS search -------------------------
+
+
+def test_a_companys_job_board_supplies_its_open_roles_and_no_other_source_is_asked(exa, http, profile):
+    from_main = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/Acme/1111/application")
+    exa.on_search(structured_response(company([from_main]), [grounded("open_roles[0].url", from_main["url"], confidence="medium")]))
+    boards_mock.ashby(http, "acme",
+                      boards_mock.ashby_job("2222", "Growth Engineer", text="Experiments and funnels."),
+                      boards_mock.ashby_job("3333", "Office Manager", workplace="OnSite", location="Berlin"),
+                      boards_mock.ashby_job("1111", "Senior Analytics Engineer", text="Own the dbt models. " * 400),
+                      boards_mock.ashby_job("4444", "Engineer, Product Analytics", workplace="Hybrid", location="Belgrade",
+                                            text="Product metrics."),
+                      boards_mock.ashby_job("5555", "Analytics Engineering Manager"),
+                      boards_mock.ashby_job("6666", "Staff Analytics Engineer", listed=False))  # by direct link only
+
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
+
+    # the target roles on the board, a title that names a target seniority first; a posting both list keeps the main
+    # search's link, with the board's text of it
+    assert [(r["title"], r["url"], r["link_status"]) for r in out["content"]["open_roles"]] == [
+        ("Senior Analytics Engineer", from_main["url"], "live"),
+        ("Growth Engineer", "https://jobs.ashbyhq.com/acme/2222", "live"),
+        ("Engineer, Product Analytics", "https://jobs.ashbyhq.com/acme/4444", "live"),
+    ]
+    first, second, third = out["content"]["open_roles"]
+    assert first["description"] == ("Own the dbt models. " * 400).strip()[: research.DESCRIPTION_CHARS]
+    assert (second["description"], second["location"], second["remote_or_relocation"]) == (
+        "Experiments and funnels.", "Remote - Europe", "remote")
+    assert (third["location"], third["remote_or_relocation"]) == ("Belgrade", "hybrid")
+    assert out["role_source"] == "board"
+    assert out["grounding"]["open_roles"] == {"confidence": "medium", "urls": ["https://jobs.ashbyhq.com/acme", from_main["url"]]}
+    assert (out["dead_roles"], out["third_party_roles"], out["warnings"]) == ([], [], [])
+    # the board is the whole list: no Fiber agent run, no ATS search, and no fetch of a text the board gave
+    assert len(exa.requests()) == 1 and exa.requests(AGENT_URL) == [] and exa.requests(CONTENTS_URL) == []
+
+
+def test_a_board_is_known_from_the_links_earlier_runs_saved_when_the_search_finds_no_posting(exa, http, profile):
+    exa.on_search(structured_response(company([])))
+    exa.on_contents(contents_response([result("https://job-boards.greenhouse.io/acme/jobs/444", text="Funnels.")]))
+    boards_mock.greenhouse(http, "acme",
+                           boards_mock.greenhouse_job(333, "Senior Analytics Engineer", content="&lt;p&gt;dbt&lt;/p&gt;",
+                                                      url="https://acme.com/careers/job?gh_jid=333"),
+                           # a careers site that is not the company's by its name: the posting on the board is the link
+                           boards_mock.greenhouse_job(444, "Lead Growth Engineer", url="https://careers.parentgroup.io/jobs/444"),
+                           boards_mock.greenhouse_job(555, "Recruiter"))
+    saved = ["https://example.org/not-a-board", "https://job-boards.greenhouse.io/acme/jobs/1", "https://boards.greenhouse.io/acme/jobs/2"]
+
+    out = research.research_company("Acme", "acme.com", profile, known_links=saved)
+
+    assert [(r["title"], r["url"], r.get("description")) for r in out["content"]["open_roles"]] == [
+        ("Senior Analytics Engineer", "https://acme.com/careers/job?gh_jid=333", "dbt"),
+        ("Lead Growth Engineer", "https://job-boards.greenhouse.io/acme/jobs/444", "Funnels."),
+    ]
+    assert out["role_source"] == "board"
+    assert out["grounding"]["open_roles"] == {"confidence": "high", "urls": ["https://job-boards.greenhouse.io/acme"]}
+    # the one posting the board has no text of is fetched, as any live role's
+    assert [body["urls"] for body in exa.requests(CONTENTS_URL)] == [["https://job-boards.greenhouse.io/acme/jobs/444"]]
+    assert len(exa.requests()) == 1  # no ATS search, though the main search found no role
+    assert len([call for call in http.calls if "greenhouse" in call.request.url]) == 1  # one board, read once
+
+
+def test_a_board_under_another_name_is_not_taken_for_the_companys(exa, http, profile):
+    from_main = role("Senior Analytics Engineer", f"https://jobs.ashbyhq.com/{ELSEWHERE}/1111")
+    exa.on_search(structured_response(company([from_main])))
+    exa.on_contents(contents_response())
+    boards_mock.ashby(http, ELSEWHERE, boards_mock.ashby_job("1111", "Senior Analytics Engineer", board=ELSEWHERE),
+                      boards_mock.ashby_job("2222", "Lead Growth Engineer", board=ELSEWHERE))
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    # its feed says the main search's link is live, as before; its other postings are not Acme's to list
+    assert [r["url"] for r in out["content"]["open_roles"]] == [from_main["url"]]
+    assert out["role_source"] == "main"
+
+
+@pytest.mark.parametrize(
+    ("name", "domain", "link", "is_its"),
+    [
+        ("Acme", "acme.com", "https://jobs.ashbyhq.com/Acme/1", True),
+        ("Acme Analytics", "getacme.com", "https://jobs.lever.co/acme-analytics/1", True),  # the name
+        ("Acme Analytics", "getacme.com", "https://getacme.recruitee.com/o/x", True),  # the domain's
+        ("Acme", "acme.io", "https://apply.workable.com/acmeio/j/1", True),
+        ("Acme", "acme.co.uk", "https://acme.teamtailor.com/jobs/1-x", True),
+        ("n8n", "n8n.io", "https://jobs.ashbyhq.com/n8n/1", True),  # a short name, when it is the whole board name
+        ("Acme", "acme.com", "https://jobs.ashbyhq.com/acme-labs/1", False),  # another company
+        ("Acme", "acme.com", "https://jobs.ashbyhq.com/acmepay/1", False),
+        ("Acme Analytics", "getacme.com", "https://jobs.ashbyhq.com/acme/1", False),
+        ("Acme", "acme.com", "https://acme.com/careers/1", False),  # no board at all
+        ("Acme", "acme.com", None, False),
+        # a site under another's name is not registered under the company's: the board named github is GitHub's
+        ("Acme", "acme.github.io", "https://boards.greenhouse.io/github/jobs/123", False),
+        ("Acme", "acme.vercel.app", "https://jobs.ashbyhq.com/vercel/1", False),
+        ("Acme", "acme.ltd.uk", "https://jobs.lever.co/ltd/1", False),
+        ("Acme", "acme.github.io", "https://jobs.ashbyhq.com/acme/1", True),  # its name still names its board
+        ("Über", "uber-example.de", "https://jobs.lever.co/ber/1", False),  # a letter outside ASCII is a letter
+        ("Über", "ueber.de", "https://jobs.lever.co/ueber/1", True),
+    ],
+)
+def test_a_board_is_the_companys_when_it_carries_its_name_or_its_domain(name, domain, link, is_its):
+    assert bool(research.company_boards(name, domain, [link])) is is_its
+
+
+def test_a_board_that_cannot_be_read_is_a_warning_and_the_searches_are_asked_as_before(exa, http, profile):
+    from_main = role("Senior Analytics Engineer", "https://job-boards.greenhouse.io/acme/jobs/333")
+    exa.on_search(structured_response(company([from_main])))
+    exa.on_agent(agent_run({"open_roles": []}))
+    exa.on_contents(contents_response())
+    http.get(from_main["url"], status=200)
+    http.get(boards_mock.GREENHOUSE.format("acme"), status=503)
+
+    out = research.research_company("Acme", "acme.com", profile, fiber=True)
+
+    assert out["warnings"] == ["Job board could not be read: Greenhouse board acme"]
+    assert [r["url"] for r in out["content"]["open_roles"]] == [from_main["url"]] and out["role_source"] == "main"
+    assert len(exa.requests(AGENT_URL)) == 1  # Fiber is asked, since no board answered
+
+
+def test_a_board_that_lists_nothing_is_not_taken_for_all_the_company_has_open(exa, http, profile):
+    # a company that moved to another job board leaves an empty one behind
+    stale = role("Senior Data Engineer", f"https://jobs.lever.co/acme/{'0' * 8}-0000-4000-8000-{'0' * 12}")
+    found = role("Senior Analytics Engineer", "https://careers.acme.com/jobs/77")
+    fallback = structured_response({"open_roles": [{**found, "company_verified": True}]})
+    exa.on_search(lambda body: fallback if "includeDomains" in body else structured_response(company([stale])))
+    exa.on_contents(contents_response())
+    http.get(stale["url"], status=404)
+    http.get(found["url"], status=200)
+    http.get(boards_mock.LEVER.format("acme"), json=[])
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    assert out["role_source"] == "ats_fallback" and [r["url"] for r in out["content"]["open_roles"]] == [found["url"]]
+    assert out["warnings"] == []
+
+
+def test_a_posting_seen_on_a_third_party_site_is_looked_for_on_the_board_without_a_search(exa, http, profile):
+    on_board = role("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1111")
+    gateway = role("Head of Data", "https://rockethunt.ai/en/vacancies/1dc282ff")
+    not_there = role("Staff Data Scientist", "https://hirify.me/jobs/2")
+    exa.on_search(structured_response(company([on_board, gateway, not_there])))
+    boards_mock.ashby(http, "acme", boards_mock.ashby_job("1111", "Senior Analytics Engineer", text="dbt."),
+                      boards_mock.ashby_job("5555", "Head of Data (Remote, Europe)", text="Lead the team."),
+                      boards_mock.ashby_job("6666", "Data Scientist", text="Models."))
+    for page in (gateway, not_there):
+        http.get(page["url"], status=200)
+
+    out = research.research_company("Acme", "acme.com", profile)
+
+    # not one of the target roles by its title, but the listing a search found is this posting
+    assert [r["url"] for r in out["content"]["open_roles"]] == [on_board["url"], "https://jobs.ashbyhq.com/acme/5555"]
+    assert out["third_party_roles"] == [not_there]  # the board does not list it: a lead, and no search looks for it
+    assert out["role_source"] == "board" and len(exa.requests()) == 1
+
+
+def test_no_board_is_read_for_a_company_whose_identity_is_not_verified(exa, http, profile):
+    listed = role("Senior Analytics Engineer", "https://job-boards.greenhouse.io/acme/jobs/333")
+    exa.on_search(structured_response(company([listed], verified=False)))
+    exa.on_contents(contents_response())
+    http.get(listed["url"], status=200)
+
+    out = research.research_company("Acme", "acme.com", profile, known_links=["https://jobs.lever.co/acme/1"])
+
+    assert out["role_source"] == "main"  # and no feed was asked: the http fixture fails a request nothing mocks
+
+
+@pytest.mark.parametrize(
+    ("title", "targeted"),
+    [
+        ("Senior Analytics Engineer", True),
+        ("Engineer, Growth (m/f/d)", True),  # every word of a target role, in any order
+        ("Staff Engineer - Product Analytics", True),
+        ("ANALYTICS-ENGINEER", True),
+        ("Analytics Engineering Manager", False),  # another word
+        ("Growth Marketing Manager", False),
+        ("Data Engineer", False),  # not one of this profile's roles
+        ("", False),
+    ],
+)
+def test_a_boards_posting_is_one_of_the_target_roles_by_the_words_of_its_title(profile, title, targeted):
+    assert research.targets_role(title, profile) is targeted
+
+
+SAME_ID = "0a1b2c3d-0000-4000-8000-000000000000"
+
+
+@pytest.mark.parametrize(
+    ("one", "other", "same"),
+    [
+        ("https://apply.workable.com/j/5C0FFEE123", "https://apply.workable.com/acme/j/5c0ffee123/", True),
+        (f"https://jobs.lever.co/acme/{SAME_ID}/apply", f"https://jobs.lever.co/acme/{SAME_ID}", True),
+        ("https://boards.greenhouse.io/acme/jobs/333", "https://job-boards.eu.greenhouse.io/acme/jobs/333?gh_src=x", True),
+        ("https://acme.com/careers/job?gh_jid=333&utm_source=x", "https://job-boards.greenhouse.io/acme/jobs/333", True),
+        ("https://jobs.smartrecruiters.com/Acme/744000158320111-senior-data-engineer", "https://jobs.smartrecruiters.com/Acme/744000158320111", True),
+        ("https://acme.teamtailor.com/jobs/4321-data-engineer", "https://acme.teamtailor.com/jobs/4321", True),
+        (f"https://acme.com/careers/{SAME_ID}", f"https://jobs.ashbyhq.com/acme/{SAME_ID}/application", True),
+        ("https://jobs.ashbyhq.com/acme/1111/application", "https://jobs.ashbyhq.com/Acme/1111", True),
+        ("https://jobs.ashbyhq.com/acme/1", "https://jobs.ashbyhq.com/othercompany/1", False),  # not an id: a link like any
+        ("https://acme.com/careers/job?gh_jid=333", "https://acme.com/careers/job?gh_jid=334", False),
+        ("https://acme.recruitee.com/o/data-engineer", "https://other.recruitee.com/o/data-engineer", False),
+        ("https://acme.teamtailor.com/jobs/4321-x", "https://other.teamtailor.com/jobs/4321-x", False),
+    ],
+)
+def test_two_links_are_one_posting_when_its_board_gives_them_the_same_id(one, other, same):
+    assert research.is_listed(one, [{"url": other}]) is same
+    assert research.is_listed(other, [{"url": one}]) is same
 
 
 @pytest.mark.parametrize(

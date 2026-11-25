@@ -20,8 +20,10 @@ jobs/
 .hunt.lock
 interviews/
 mail/
+kits/
 mail_state.json*
 news_state.json*
+followup_state.json*
 outlook_token.json*
 gmail_token.json*
 prospects.toml

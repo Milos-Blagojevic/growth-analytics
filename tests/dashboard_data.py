@@ -1,5 +1,5 @@
-"""Builders for pipeline files (out/<run>/, watch_state.json, discovered.csv, interviews/, mail/) and a dashboard test
-client."""
+"""Builders for pipeline files (out/<run>/, watch_state.json, discovered.csv, interviews/, mail/, kits/) and a dashboard
+test client."""
 
 import json
 
@@ -166,4 +166,25 @@ def write_interview(root, interview_id="20261020-se-ranking-senior-data-analyst"
                                                        "metrics": {"word_share": 0.6, "time_share": 0.62,
                                                                    "longest_answer_s": 359, "fillers_per_100_words": 4.3},
                                                        "review": review})
+    return path
+
+
+KIT = {
+    "lead_with": ["The dbt platform at Tenderly: the posting asks for expert dbt."],
+    "note": "Hello,\n\nI built the data layer at Tenderly and would like to do the same at Acme.",
+    "answers": [{"question": "Why do you want to work at Acme?", "answer": "For its data team. [add: notice period]"}],
+    "check": ["[add: notice period] in the first answer"],
+}
+
+
+def write_kit(root, domain="acme.com", *, kit=KIT, **fields):
+    """kits/<domain>.json as `hunt.py apply-kit` saves it."""
+    (root / "kits").mkdir(exist_ok=True)
+    path = root / "kits" / f"{domain}.json"
+    path.write_text(json.dumps({
+        "created_at": "2026-10-19T09:00:00", "model": "m", "usage": {"input_tokens": 4000, "output_tokens": 700},
+        "domain": domain, "company": "Acme", "title": "Analytics Engineer", "url": "https://acme.com/2",
+        "run": "20261001-090000", "posting_source": "saved",
+        "questions": [{"question": a["question"], "required": True} for a in kit.get("answers", [])],
+        "kit": kit, **fields}))
     return path

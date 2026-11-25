@@ -313,6 +313,45 @@ def test_a_job_starts_only_from_a_preview_and_each_preview_starts_one(root, monk
             call(c, "start_job", token=call(c, "preview_job", kind="monitor")["token"])
 
 
+def test_an_application_kit_is_a_job_for_a_company_whose_latest_result_names_a_posting(root):
+    with served(make_app(root)) as c:
+        preview = call(c, "preview_job", kind="apply_kit", domain="https://www.Acme.com/")
+        assert (preview["label"], preview["command"]) == ("Application kit · Acme", "python hunt.py apply-kit acme.com")
+        assert preview["estimate"] and preview["companies"] is None
+        assert "Sends your profile, CV, the posting and its application questions to Claude." in preview["warnings"]
+        for domain, refusal in (("gamma.dev", "Gamma has no posting to apply to"),  # check careers: no posting
+                                ("nope.com", "unknown company: nope.com"),
+                                ("--help", "domain cannot start with a dash"),
+                                ("", "is not a domain")):
+            with pytest.raises(Refused, match=refusal):
+                call(c, "preview_job", kind="apply_kit", domain=domain)
+        assert jobs_started(root) == []  # a preview starts nothing
+
+        job = call(c, "start_job", token=preview["token"])
+        assert finished(root, job["job_id"])["status"] == "succeeded"
+        assert 'args: ["apply-kit", "acme.com"]' in call(c, "get_job", job_id=job["job_id"])["log"]
+        assert [(j["kind"], j["label"]) for j in call(c, "list_jobs")["jobs"]] == [
+            ("apply_kit", "MCP · Application kit · Acme")]
+
+
+def test_follow_ups_are_a_job_that_costs_nothing_and_says_what_it_sends(root):
+    with served(make_app(root)) as c:
+        preview = call(c, "preview_job", kind="followup")
+        assert (preview["label"], preview["command"]) == ("Follow-ups", "python hunt.py followup")
+        assert preview["estimate"][0].startswith("Free: no Exa, Jev or Claude call.")
+        assert ["Telegram" in warning and "followup_state.json" in warning for warning in preview["warnings"]] == [True]
+        dry = call(c, "preview_job", kind="followup", dry_run=True)
+        assert (dry["label"], dry["command"], dry["warnings"]) == (
+            "Follow-ups (dry run)", "python hunt.py followup --dry-run", [])
+        assert jobs_started(root) == []  # a preview starts nothing
+
+        job = call(c, "start_job", token=dry["token"])
+        assert finished(root, job["job_id"])["status"] == "succeeded"
+        assert 'args: ["followup", "--dry-run"]' in call(c, "get_job", job_id=job["job_id"])["log"]
+        assert [(j["kind"], j["label"]) for j in call(c, "list_jobs")["jobs"]] == [
+            ("followup", "MCP · Follow-ups (dry run)")]
+
+
 def test_a_new_monitor_is_added_to_monitors_csv_only_when_its_sync_starts(root):
     with served(make_app(root)) as c:
         preview = call(c, "preview_job", kind="new_monitor", name="Acme", domain="https://acme.com/")
@@ -329,8 +368,8 @@ def test_the_monitored_companies_are_listed_and_edited_or_removed_only_when_thei
     (root / "monitors.csv").write_text("Acme,acme.com\nBeta,beta.io\n")
     with served(make_app(root)) as c:
         assert call(c, "list_monitors") == {"monitors": [
-            {"name": "Acme", "domain": "acme.com", "on_exa": False, "since": None},
-            {"name": "Beta", "domain": "beta.io", "on_exa": False, "since": None}], "error": None}
+            {"name": "Acme", "domain": "acme.com", "on_exa": False, "board": None, "since": None},
+            {"name": "Beta", "domain": "beta.io", "on_exa": False, "board": None, "since": None}], "error": None}
         edit = call(c, "preview_job", kind="edit_monitor", current_domain="acme.com", name="Acme", domain="acme.io")
         assert (edit["label"], edit["command"]) == ("Edit monitor: Acme (acme.io)", "python hunt.py monitor-sync")
         assert "The sync deletes the monitor of acme.com and creates one for acme.io" in edit["warnings"][1]

@@ -10,6 +10,7 @@ Your Outlook and Gmail mailboxes: the browser sign-in, reading mail through the 
 | `outlook.py` | Outlook through Microsoft Graph: browser sign-in, token refresh, recent messages for `mail`, and search, full text and drafts for `chat`; never sends |
 | `gmail.py` | Gmail through the Gmail API: browser sign-in, token refresh, search, full text and drafts for `chat`; never sends |
 | `mail.py` | Email updates: which emails go to Jev and Claude, `mail_state.json`, the saved `mail/` files; shared by `hunt.py` and the dashboard |
+| `followup.py` | Follow-ups: which applications have waited 8 days for a reply, whether each posting is still open, `followup_state.json`; reads the dashboard's `hunt.db` read-only, no paid clients |
 | `mail_labels.py` | Jev drops clear non-updates, then Claude labels application emails: applied, rejected, interview or other (structured output) |
 | `chat.py` | The Telegram chat bot: the Pydantic AI agent, its mail tools and its news digest tool, the conversation and the polling loop |
 
@@ -27,6 +28,8 @@ Your Outlook and Gmail mailboxes: the browser sign-in, reading mail through the 
 
 On **Pipeline**, "From your email" lists each update (subject, sender, Claude's summary, an Open in Outlook link) with the tracked applications it matches: items you marked saved or beyond whose company name matches the one in the email, or extends it at the end ("Acme" and "Acme Analytics", but not "Analytics Co"; suffixes like Inc or GmbH are ignored, and "SE Ranking" also matches `seranking.com`), or whose domain the email was sent from. Applications whose title shares words with the role in the email come first. **Mark applied**, **Mark rejected** or **Mark interviewing** sets that status on one application; **Dismiss** hides the update. An update never moves an application backwards (an application confirmation only moves one you marked saved, and an interview invite does not touch one at offer), and it is hidden when the applications it matches already have that status or a later one. An update that matches nothing you track (an application you made outside the board) has **Add to pipeline as applied**, **Add to pipeline as rejected** or **Add to pipeline as interviewing**: it adds a card to Pipeline with that status, the company and role as the email names them (the sender when it names no company) and a link to the email. Matching looks only at what you track, so when the company is on the Board and you set no status there, set it on the Board instead: Add would make a second card. The added card has a status menu like the others, without New: no Board card stands behind it, so Dismissed takes it off Pipeline for good. Later emails that name the same company match it, so an application added from its confirmation is moved by the company's later rejection or invite; an email that names no company does not. Your answers and the added applications are kept in `hunt.db`.
 
+Confirming an application confirmation (**Mark applied** or **Add to pipeline as applied**) dates the application by its email: the card's applied date is when the confirmation came, not when you clicked, unless the application had a date already. With two or more confirmations waiting, **Add all N application confirmations** confirms them in one click: one that matches nothing you track is added, one that matches exactly one application is set on it, and one that matches several stays for you to pick. When two confirmations are about the same new application, it is added once, with the date of the first.
+
 Setup, once:
 
 1. Register an app in the [Microsoft Entra admin center](https://entra.microsoft.com) (**App registrations → New registration**). Any name; for an outlook.com or hotmail.com address choose an account type that includes personal Microsoft accounts.
@@ -35,6 +38,48 @@ Setup, once:
 4. `python hunt.py outlook-login` opens the Microsoft sign-in in your browser (and prints the address in case it cannot): sign in and allow reading your mail and creating drafts; the tab ends on "Signed in". It waits up to 15 minutes, and a declined or refused sign-in shows the reason in the tab and in the terminal. Sign in on the laptop: the redirect goes to the machine running the command. The sign-in is saved to `outlook_token.json` (git-ignored, readable only by you: the file is created with mode 0600 before anything is written to it). Treat that file like a password: it gives read access to your mail and lets drafts be created in it. Each `mail` and each `chat` token refresh replaces it with the new token Microsoft returns. Microsoft ends the sign-in after 90 days without use, after a password change, or when you remove the app's access in your Microsoft account; then run `outlook-login` again (if you signed in before this version asked for `Mail.ReadWrite`, sign in again too, or `chat` cannot create drafts).
 
 On Railway, add `OUTLOOK_CLIENT_ID` (and `OUTLOOK_TENANT` if you set it) to the service variables, run `outlook-login` on the laptop and upload the file: `railway volume files upload outlook_token.json /outlook_token.json`. Run `mail` in one place only (as with `monitor`), or both will send the same updates. The dashboard refuses to start a `mail` job until `outlook_token.json` exists.
+
+## Follow-ups
+
+`python hunt.py followup` sends one Telegram message listing your applications that have had no reply for 8 days or more, split by whether the posting is still open: the ones worth a follow-up email, the ones to let go, and the ones it could not check. It writes no email and asks no model. Reading the dashboard's database, the saved email updates, posting pages and job boards' public feeds is free.
+
+```
+Follow-ups: 3 application(s) without a reply for 8+ days
+
+Still open, worth a follow-up:
+- Acme: Analytics Engineer (applied 12 days ago)
+https://jobs.ashbyhq.com/acme/1111
+
+Posting closed, move on:
+- Beta: Data Engineer (applied 10 days ago)
+https://beta.io/jobs/1
+
+Could not check:
+- Gamma: Check careers page (applied 9 days ago)
+
+Pipeline: https://your-dashboard/pipeline
+```
+
+- **What counts as waiting.** The applications are the items in status Applied on the dashboard's Pipeline, read from `hunt.db` in the data folder. The file is opened read-only and as it is: the command never changes it and does not read new files into it, so titles and company names are as the dashboard last showed them. An application waits when it was sent at least 8 days ago (`followup.SILENT_DAYS`) and no rejection or interview invite from the same company has come since. The applied date is the day you set the status, or the date of the confirmation email when you confirmed the application from one. Replies are read from the `mail/` files `hunt.py mail` saved, and a reply counts whether or not you have confirmed it on Pipeline. Companies are matched as on Pipeline (see [Email updates](#email-updates)), so a reply that names no company only counts when it was sent from the company's own domain.
+- **Once each.** Every application is reported once. `followup_state.json` (git-ignored) holds the ones already reported and when. It is saved only after the message was sent, so a failed send is reported again by the next check. To hear about an application again, delete its entry or the file. A file that cannot be read stops the command with the file named.
+- **Still open, worth a follow-up.** The posting's link answers as an open posting: the link check a run makes, with plain HTTP and without the Exa fetch a run adds for unclear links. For an application added from a confirmation email: a job board lists a posting whose title holds the role the email names.
+- **Posting closed, move on.** The link is dead: a 404, a redirect away from the posting, a page that says the posting has closed, or an Ashby board that no longer lists it. For an application added from a confirmation email: the company's job board answered with postings and none has a title like the role, and only when a saved run found that board for the company.
+- **Could not check.** Everything else: a link that answers with a bot check, a login or an error; a company tracked without a posting ("Check careers page"); an application from an email that names no role, or whose company has no job board the command can find, or whose board did not answer or lists nothing.
+
+An application added from a confirmation email has no posting link, so its role is looked for on the company's job board (the boards with a public feed: Ashby, Greenhouse, Lever, Workable, SmartRecruiters, Recruitee, Teamtailor, Personio, Pinpoint). The board is the one the posting links of a saved run name for the same company (`out/`), when exactly one researched company matches the email's. Only a run whose research verified the company counts: an unverified result is where a namesake's postings are saved. Otherwise it is guessed from the job board that sent the confirmation: the board named like the company (its letters and digits, with and without hyphens between its words) at that job board's standard address, or for Teamtailor the board named in the sender's address. A guessed board may not exist or may be another company's, so it can show an application as open but never as closed. On a known board, a posting whose title is only part of the role as the email names it ("Data Analyst" for "Senior Data Analyst") leaves the application under Could not check.
+
+Limits: a posting whose page stays up after the job was filled counts as open, and a company that takes a posting down and keeps reading applications counts as closed. Company names and titles come from web pages and emails; each goes into the message on one line, and nothing in them is followed as an instruction.
+
+`--dry-run` prints the message and sends and saves nothing. Without it the command needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. In a folder without a `hunt.db` it says that nothing is tracked yet and exits. `--state FILE` and `--db FILE` name another state file or database.
+
+On the dashboard, **Follow-ups** on the Runs page starts it, and a `HUNT_SCHEDULE` entry runs it on a schedule. Every morning at 9, after an email check at 8 so that new replies are counted:
+
+```
+0 8 * * * mail
+0 9 * * * followup
+```
+
+Most days it sends nothing, since each application is reported once. Run it where the dashboard's `hunt.db` is, and in one place only: the state file belongs to the folder.
 
 ## Chat with your mail
 

@@ -1,9 +1,11 @@
-"""The Monitors block on Runs: the companies in monitors.csv, which of them have a monitor on Exa, New, Edit and Remove.
+"""The Monitors block on Runs: the companies in monitors.csv, which of them have a monitor on Exa or are read from
+their job board, New, Edit and Remove.
 
 New adds a company to monitors.csv, Edit changes a company's row and Remove deletes the rows of the companies
-picked; each then starts `hunt.py monitor-sync`, which creates, updates and deletes the monitors to match, so the next
-scheduled `monitor` reads what they find. The list is changed only once the sync is sure to start
-(`jobs.Spec.prepare`, under the runner's lock): a start that is refused leaves the list as it was.
+picked; each then starts `hunt.py monitor-sync`, which creates, updates and deletes the monitors to match (a
+company whose job board has a public feed gets none: its board is read), so the next scheduled `monitor` reads
+what they find. The list is changed only once the sync is sure to start (`jobs.Spec.prepare`, under the runner's
+lock): a start that is refused leaves the list as it was.
 
 The sync deletes the monitor of every company monitors.csv leaves out. So New never creates the file while
 monitor_state.json lists monitors: a list of the new company alone would delete the others, which is also why
@@ -22,9 +24,10 @@ SHOWN = 10  # companies the block lists before "Show all"
 
 
 def listing(root):
-    """(companies, error). companies: monitors.csv's, each {"name", "domain", "on_exa", "since"}: whether
-    monitor_state.json lists its monitor, and when Exa created it. error: why New cannot add a company (monitors.csv
-    cannot be read, or is missing while monitors run), or None."""
+    """(companies, error). companies: monitors.csv's, each {"name", "domain", "on_exa", "board", "since"}: whether
+    monitor_state.json lists its monitor, the host of the job board it is read from instead (None for a company
+    on a monitor), and since when. error: why New cannot add a company (monitors.csv cannot be read, or is missing
+    while monitors run), or None."""
     try:
         companies = runs.read_monitors(Path(root) / runs.MONITORS)
     except ValueError as exc:
@@ -34,7 +37,8 @@ def listing(root):
         missing = _missing(root, synced)
         if missing:
             return [], missing
-    return [{"name": name, "domain": domain, "on_exa": domain in synced, "since": synced.get(domain)}
+    return [{"name": name, "domain": domain, "on_exa": domain in synced and not synced[domain]["board"],
+             "board": synced.get(domain, {}).get("board"), "since": synced.get(domain, {}).get("since")}
             for name, domain in companies], None
 
 
@@ -56,10 +60,16 @@ def _read(root):
 
 
 def _synced(path):
-    """{domain: created_at} of the monitors in monitor_state.json; {} when it is missing or not what a sync writes."""
+    """{domain: {"since", "board"}} of the companies in monitor_state.json: when Exa created the company's monitor,
+    or the host of the job board it is read from and since when. {} when the file is missing or not what a sync
+    writes."""
     try:
         monitors = json.loads(path.read_text())["monitors"]
-        return {domain: str(entry.get("created_at") or "") for domain, entry in monitors.items()}
+        return {
+            domain: {"since": str(entry.get("since" if entry.get("board") else "created_at") or ""),
+                     "board": str(entry["board"].get("host") or "") if entry.get("board") else None}
+            for domain, entry in monitors.items()
+        }
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {}
 

@@ -24,7 +24,7 @@
     <div class="eyebrow">Best role</div>
     {% if r.best_role_url %}
     <a class="role-link" href="{{ r.best_role_url }}" target="_blank" rel="noopener">{{ r.best_role_title }} <span>↗</span></a>
-    <div class="muted small">{{ r.best_role_url | host }}{% if r.role_source and r.role_source != 'none' %} · found by {{ r.role_source | replace('_', ' ') }} search{% endif %}</div>
+    <div class="muted small">{{ r.best_role_url | host }}{% if r.role_source == 'board' %} · listed on its job board{% elif r.role_source == 'board+main' %} · roles from its job board and the main search{% elif r.role_source and r.role_source != 'none' %} · found by {{ r.role_source | replace('_', ' ') }} search{% endif %}</div>
     {% else %}
     <div class="role-link">{{ r.best_role_title }}</div>
     {% endif %}
@@ -64,6 +64,35 @@
   <section>
     <div class="eyebrow">Side-project ideas</div>
     <ul class="ideas">{% for x in r.proof_ideas %}<li>{{ x }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+
+  {% if kit %}
+  {% set k = kit.kit %}
+  <section>
+    <div class="eyebrow">Application kit</div>
+    <p class="muted small">For
+      {% if kit.url and kit.url.startswith(('https://', 'http://')) %}<a href="{{ kit.url }}" target="_blank" rel="noopener">{{ kit.title or kit.url }} ↗</a>
+      {% else %}{{ kit.title or 'the best role' }}{% endif %}
+      · written {{ kit.created_at | ago }}{% if kit.posting_source == 'none' %} · without the posting text{% endif %}</p>
+    {% if kit.url != (r.best_role_url or '') | trim %}
+    <div class="note">Written for another posting than the current best role. “Rewrite application kit…” below writes one for the current role.</div>
+    {% endif %}
+    <div class="kit-part">Lead with</div>
+    <ul class="ideas">{% for x in k.lead_with %}<li>{{ x }}</li>{% endfor %}</ul>
+    <div class="kit-part">Note</div>
+    <p class="kit-text">{{ k.note }}</p>
+    {% for a in k.answers %}
+    <div class="kit-part">{{ a.question }}</div>
+    <p class="kit-text">{{ a.answer }}</p>
+    {% else %}
+    <p class="muted small">No written questions were found on the posting's application form.</p>
+    {% endfor %}
+    {% if k.check %}
+    <div class="kit-part">Before you send</div>
+    <ul class="plain warn">{% for x in k.check %}<li>{{ x }}</li>{% endfor %}</ul>
+    {% endif %}
+    <p class="muted small">{{ '{:,}'.format(kit.usage.input_tokens) }} / {{ '{:,}'.format(kit.usage.output_tokens) }} tokens</p>
   </section>
   {% endif %}
 
@@ -160,11 +189,15 @@
 
   <section class="actions">
     <div class="eyebrow">Research again</div>
-    <p class="muted small">Runs <code>hunt.py run</code> for {{ r.name }} only. You choose the mode and see the cost before it starts.</p>
+    <p class="muted small">Runs <code>hunt.py run</code> for {{ r.name }} only. You choose the mode and see the cost before it starts.{% if r.best_role_url %} The application kit drafts answers to the posting's application questions, a note and the CV points to lead with (<code>hunt.py apply-kit</code>).{% endif %}</p>
     <div class="btn-row">
       <button class="btn" type="button" hx-post="/runs/preview" hx-target="#panel"
               hx-vals='{{ {"kind": "run", "domains": r.domain} | tojson }}'>Re-run {{ r.name }}…</button>
       <button class="btn" type="button" hx-get="/interviews/new?domain={{ r.domain | urlencode }}" hx-target="#panel">Prepare an interview…</button>
+      {% if r.best_role_url %}
+      <button class="btn" type="button" hx-post="/runs/preview" hx-target="#panel"
+              hx-vals='{{ {"kind": "apply_kit", "domain": r.domain} | tojson }}'>{{ 'Rewrite application kit…' if kit else 'Write application kit…' }}</button>
+      {% endif %}
     </div>
   </section>
 </div>

@@ -1,8 +1,11 @@
-"""Saved-run format, the domain normaliser, the monitors list and the run lock, shared by hunt.py and the dashboard.
+"""Saved-run format, the domain normaliser, the monitors list, the application kit files and the run lock, shared by
+hunt.py and the dashboard.
 
 out/<%Y%m%d-%H%M%S>/ holds one <domain>.json per company and the MANIFEST (mode, times, counts, costs).
 Domains name those files, so companies.csv, discover and the dashboard all normalise them the same way here.
-MONITORS lists the companies `monitor-sync` keeps an Exa monitor for; the dashboard's New, Edit and Remove change it.
+MONITORS lists the companies `monitor-sync` has watched for new postings, each from its job board or by an Exa
+monitor; the dashboard's New, Edit and Remove change it.
+KITS holds one <domain>.json per company: the application kit `apply-kit` wrote for its best role.
 LOCK_FILE lets one hunt.py command run at a time, whether started from a shell, cron or the dashboard.
 """
 
@@ -17,6 +20,7 @@ from pathlib import Path
 
 MANIFEST = "_run.json"  # the underscore keeps it apart from <domain>.json files
 MONITORS = "monitors.csv"
+KITS = "kits"
 MONITOR_NAME_CHARS = 100  # the name goes into the monitor's Exa query and every Telegram line about the company
 HOST_NAME = re.compile(r"[\w-]+(\.[\w-]+)+")  # labels of letters, digits and hyphens, joined by dots
 LOCK_FILE = ".hunt.lock"
@@ -194,3 +198,71 @@ def load_manifest(run_dir):
     """The run's MANIFEST, or None for runs saved before it existed."""
     path = Path(run_dir) / MANIFEST
     return json.loads(path.read_text()) if path.exists() else None
+
+
+def saved_postings(out_dir):
+    """What the saved runs hold of each company's postings, by domain: {domain: {"name", "links"}}. `name` is the
+    newest run's; `links` are the links of every posting a run kept for the company (its open roles, its dead
+    links, the best role), newest run first, each once. They say where the company posts its jobs, so only a
+    result whose research verified the company counts: an unverified one is where a namesake's postings are saved.
+    A run that cannot be read (one still being written) is left out."""
+    companies = {}
+    for run_dir in reversed(run_dirs(out_dir)):
+        try:
+            results = load_results(run_dir)
+        except (OSError, ValueError):
+            continue
+        for result in results:
+            if not isinstance(result, dict) or not isinstance(result.get("domain"), str):
+                continue
+            research = result.get("research") if isinstance(result.get("research"), dict) else {}
+            content = research.get("content") if isinstance(research.get("content"), dict) else {}
+            if content.get("identity_verified") is not True:
+                continue
+            roles = [*(content.get("open_roles") or []), *(research.get("dead_roles") or [])]
+            links = [role.get("url") for role in roles if isinstance(role, dict)]
+            links.append((result.get("fit") or {}).get("best_role_url"))
+            company = companies.setdefault(normalize_domain(result["domain"]),
+                                           {"name": str(result.get("name") or ""), "links": []})
+            company["links"] += [link for link in dict.fromkeys(links)
+                                 if isinstance(link, str) and link and link not in company["links"]]
+    return companies
+
+
+def kit_path(root, domain):
+    """kits/<domain>.json under `root`, where a company's application kit is saved. The domain is normalised; one
+    that is no bare host name (no dot, a space, a backslash, nothing at all) raises ValueError, so a form field can
+    never name a file outside kits/."""
+    domain = normalize_domain(str(domain))
+    if not HOST_NAME.fullmatch(domain):
+        raise ValueError(f"{domain[:80]!r} is not a domain such as acme.com")
+    return Path(root) / KITS / f"{domain}.json"
+
+
+def load_kit(root, domain):
+    """The company's saved application kit (see save_kit for its fields), or None when it has none."""
+    path = kit_path(root, domain)
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def save_kit(root, domain, kit):
+    """Saves the company's application kit in place of the one it had and returns its path. Written whole at once,
+    so the dashboard never reads half a file.
+
+    `kit` is what `hunt.py apply-kit` wrote: {"created_at", "model", "usage": {"input_tokens", "output_tokens"},
+    "domain", "company", "title", "url" (the posting), "run" (the saved run the role came from), "posting_source"
+    ("saved": the run's own text, "board": the company's job board, "fetched": Exa, "none"), "questions"
+    ([{"question", "required"}], as the application form asks them), "kit" (pipeline/kit.py's Kit: "lead_with",
+    "note", "answers": [{"question", "answer"}], "check")}."""
+    path = kit_path(root, domain)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(kit, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def kit_files(root):
+    """The saved application kits, one file per company, sorted by domain."""
+    directory = Path(root) / KITS
+    return sorted(directory.glob("*.json")) if directory.is_dir() else []

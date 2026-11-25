@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -18,6 +19,8 @@ REJECTED_ETA = mail_update(6, "rejected", "Eta GmbH", role="Data Analyst")
 APPLIED_BETA = mail_update(8, "applied", "Beta", role="Data Engineer")  # confirms an application you saved
 APPLIED_IOTA = mail_update(9, "applied", "Iota", role="Growth Analyst")  # sent outside the board
 APPLIED_ACME = mail_update(10, "applied", "Acme", received_at="2026-10-19T09:00:00")  # Acme is marked applied already
+APPLIED_KAPPA = mail_update(11, "applied", "Kappa", role="Data Analyst", received_at="2026-10-12T08:30:00")
+IOTA_AGAIN = mail_update(12, "applied", "Iota", role="Growth Analyst", received_at="2026-10-20T10:00:00")  # sent twice
 
 
 @pytest.fixture
@@ -140,6 +143,54 @@ def test_an_application_confirmation_suggests_marking_applied(root, app_client):
     assert ("posting", "Data Engineer", "Beta", BETA_URL) in applied
     assert ("email", "Growth Analyst", "Iota", "https://outlook.live.com/9") in applied
     assert [s for s in suggested(root) if s[1] == "applied"] == []
+
+
+def test_a_confirmed_application_is_dated_by_its_confirmation_email(root, app_client):
+    app_client.post("/track", data={"kind": "company", "ref": "kappa.io", "status": "saved"})
+    long_ago = (datetime.now() - timedelta(days=20)).isoformat(timespec="seconds")
+    applied_lambda = mail_update(13, "applied", "Lambda", received_at=long_ago)
+    write_mail(root, "20261017-090000", [APPLIED_KAPPA, applied_lambda, INVITE_ETA])
+
+    assert decide(app_client, APPLIED_KAPPA, "apply", kind="company", ref="kappa.io").status_code == 204
+    assert decide(app_client, applied_lambda, "add").status_code == 204
+    assert decide(app_client, INVITE_ETA, "add").status_code == 204
+
+    conn = db.connect(root)
+    kappa = tracking.get(conn, "company", "kappa.io")
+    added, invited = tracking.get(conn, "email", applied_lambda["id"]), tracking.get(conn, "email", INVITE_ETA["id"])
+    conn.close()
+    assert (kappa["status"], kappa["applied_at"]) == ("applied", APPLIED_KAPPA["received_at"])
+    assert added["applied_at"] == long_ago and "applied 20d ago" in app_client.get("/pipeline").text
+    assert invited["applied_at"] == invited["updated_at"]  # an invite does not say when you applied: dated by the click
+
+
+def test_application_confirmations_are_added_in_one_click_and_one_that_matches_several_stays(root, app_client):
+    assert app_client.post("/mail/confirm-applied").status_code == 409  # rejections and invites wait, no confirmation
+    for kind, ref in (("company", "kappa.io"), ("posting", ACME_URL), ("posting", ACME_WATCH_URL)):
+        app_client.post("/track", data={"kind": kind, "ref": ref, "status": "saved"})
+    write_mail(root, "20261017-090000", [APPLIED_KAPPA, APPLIED_IOTA, IOTA_AGAIN, APPLIED_ACME])
+    page = app_client.get("/pipeline").text
+    assert ">Add all 3 application confirmations</button>" in page  # Kappa's and Iota's two; Acme's matches two cards
+
+    response = app_client.post("/mail/confirm-applied")
+
+    assert response.status_code == 204 and response.headers["HX-Refresh"] == "true"
+    applied = cards(root, "applied")
+    assert ("company", "Check careers page", "kappa.io", "https://kappa.io") in applied  # set on the one it matches
+    # Added once: the second email from Iota needs nothing once the application is there.
+    assert [card for card in applied if card[0] == "email"] == [
+        ("email", "Growth Analyst", "Iota", "https://outlook.live.com/9")]
+    conn = db.connect(root)
+    dates = [tracking.get(conn, kind, ref)["applied_at"]
+             for kind, ref in (("company", "kappa.io"), ("email", APPLIED_IOTA["id"]))]
+    answered = conn.execute("SELECT COUNT(*) FROM mail_decisions").fetchone()[0]
+    conn.close()
+    assert dates == [APPLIED_KAPPA["received_at"], APPLIED_IOTA["received_at"]]  # Iota's by the first of its emails
+    assert answered == 2
+    assert [(s[0], len(s[2])) for s in suggested(root) if s[1] == "applied"] == [("Acme", 2)]  # yours to pick
+    page = app_client.get("/pipeline").text
+    assert "Add all" not in page and page.count(">Mark applied</button>") == 2
+    assert app_client.post("/mail/confirm-applied").status_code == 409
 
 
 def test_an_added_application_keeps_its_card_without_the_mail_file(root, app_client):

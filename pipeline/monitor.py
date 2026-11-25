@@ -1,9 +1,11 @@
-"""Exa Monitors for job postings: one monitor per company in monitors.csv (runs.MONITORS).
+"""New postings at the companies in monitors.csv (runs.MONITORS), from the company's job board or an Exa Monitor.
 
-Exa runs each monitor by itself every PERIOD and returns only the pages its earlier runs did not. `sync` makes the
-monitors on Exa match the list; `findings` reads what a company's monitor found since the last check, as one
-research per new posting for the scorer. STATE keeps each company's monitor, the last run read and the postings
-already judged, and the id that marks the monitors on Exa as this data folder's.
+A company whose job board has a public feed (clients/boards.py) is read from the board: it lists every posting
+that is open, so nothing is missed or late, and it is free. Every other company gets an Exa Monitor, which Exa
+runs by itself every PERIOD and which returns only the pages its earlier runs did not. `sync` settles which of the
+two a company gets and makes the monitors on Exa match; `findings` and `board_findings` read what is new since
+the last check, as one research per new posting for the scorer. STATE keeps each company's monitor or board, the
+last run read and the postings already judged, and the id that marks the monitors on Exa as this data folder's.
 """
 
 import json
@@ -14,7 +16,7 @@ from itertools import islice, takewhile
 from pathlib import Path
 from urllib.parse import urlparse
 
-from clients import exa_client
+from clients import boards, exa_client
 from pipeline import research, runs
 
 logger = logging.getLogger("monitor")
@@ -25,17 +27,27 @@ RUN_DOLLARS = 0.002  # what Exa bills a run that returns up to RESULTS pages
 RESULTS = 10
 MAX_RUNS = 60  # runs read per monitor in one check: thirty days of them
 MAX_TRIES = 3  # checks in a row that may fail to read one run, or to score one posting, before it is given up
+MAX_NEW = research.MAX_ROLES  # postings of one job board judged in one check; the others wait for the next
 ENDED = ("completed", "failed", "cancelled")
 SOURCE = "hunt.py"  # in each monitor's metadata: tells these monitors from others on the Exa account
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
 
 
+def _is_board(board):
+    return (isinstance(board, dict) and board.get("ats") in boards.FEEDS
+            and all(isinstance(board.get(key), str) and board[key] for key in ("slug", "host")))
+
+
 def _is_entry(entry):
-    """True for a monitor's entry as `sync` and the checks leave it: what they read without looking again."""
+    """True for a company's entry as `sync` and the checks leave it: what they read without looking again. It has
+    an Exa monitor ("id", "params") or a job board ("board"), never both."""
+    if not isinstance(entry, dict):
+        return False
+    on_exa = isinstance(entry.get("id"), str) and isinstance(entry.get("params"), dict)
     return (
-        isinstance(entry, dict)
-        and all(isinstance(entry.get(key), str) for key in ("id", "name"))
-        and isinstance(entry.get("params"), dict)
+        isinstance(entry.get("name"), str)
+        and on_exa != _is_board(entry.get("board"))
+        and (on_exa or "id" not in entry)
         and isinstance(entry.get("last_run", ""), str)
         and isinstance(entry.get("seen", []), list)
         and all(isinstance(posting, dict) and isinstance(posting.get("url"), str) for posting in entry.get("seen", []))
@@ -45,12 +57,14 @@ def _is_entry(entry):
 
 
 def load_state(path):
-    """{"folder": id, "monitors": {domain: {"id", "name", "params", "created_at", "last_run", "unread", "unscored",
-    "seen": [{"title", "url", "first_seen", "verdict", "score"}]}}}; no file is no monitors. "folder" is set by
-    the first sync (see `sync`). In an entry, "last_run" is missing until a check has read a run, "seen" until one
-    has judged a posting; "unread" ({run id: checks}) and "unscored" ({posting link: checks}) count the checks
-    that failed to read a run or to score a posting (see `findings`, `remember`). Raises ValueError for a file
-    that is not that: an id that is no id would make other folders' monitors pass for this one's."""
+    """{"folder": id, "monitors": {domain: entry}}; no file is no monitors. "folder" is set by the first sync (see
+    `sync`). An entry is a company's Exa monitor, {"id", "name", "params", "created_at", "last_run", "unread",
+    "unscored", "seen": [{"title", "url", "first_seen", "verdict", "score"}]}, or its job board, {"name", "board":
+    {"ats", "slug", "host"}, "since", "unscored", "seen"}. "last_run" is missing until a check has read a run,
+    "seen" until one has judged a posting; "unread" ({run id: checks}) and "unscored" ({posting link: checks})
+    count the checks that failed to read a run or to score a posting (see `findings`, `remember`). Raises
+    ValueError for a file that is not that: an id that is no id would make other folders' monitors pass for this
+    one's."""
     path = Path(path)
     if not path.exists():
         return {"monitors": {}}
@@ -118,24 +132,73 @@ def _on_exa(live):
     return {key: dump.get(key) for key in ("name", "search", "trigger", "outputSchema", "metadata", "webhook")}
 
 
+def board(name, domain, entry, links):
+    """The job board to read the company's new postings from in place of an Exa monitor: (board, unread).
+
+    It is a board with a public feed (clients/boards.py) that a posting link of the company names and that carries
+    the company's name (research.company_boards): `links` are the links saved runs hold for the company, next to
+    the postings its checks have judged (entry["seen"]) and the board it is read from already. It has to answer
+    now and list at least one posting: a company that moved to another job board leaves an empty one behind, and
+    an Exa monitor still finds what the company posts elsewhere.
+
+    `unread` is True when no board lists a posting and one of them could not be read (a timeout, a 5xx, a bot
+    check). That decides nothing: a company that is read from the board that did not answer stays on it, and the
+    next sync looks again. A minute's outage at a job board must not give every company on it a billed monitor.
+    """
+    known = [boards.page(entry["board"])] if entry and entry.get("board") else []
+    known += [posting["url"] for posting in (entry or {}).get("seen", [])]
+    unread = []
+    for found in research.company_boards(name, domain, [*known, *links]):
+        state, postings = research.board_listing(found)
+        if state == "ok" and postings:
+            return found, False
+        if state == "unknown":
+            unread.append(found)
+    return (entry["board"] if entry and entry.get("board") in unread else None), bool(unread)
+
+
+def _judged(entry):
+    """What an entry knows of the postings judged, kept when the company gets another source."""
+    return {key: entry[key] for key in ("seen", "unscored") if entry and entry.get(key)}
+
+
+def _to_board(name, domain, found, entries, save):
+    """Has the company read from its job board; returns what was done. The Exa monitor it had is deleted first:
+    when that fails the company stays on it, and the error is raised."""
+    entry = entries.get(domain)
+    if entry and entry.get("board") == found and entry["name"] == name:
+        return f"reads its {boards.label(found)}"
+    had = bool(entry and entry.get("id"))
+    if had:
+        exa_client.delete_monitor(entry["id"])
+    same = entry and entry.get("board") == found
+    entries[domain] = {"name": name, "board": found,
+                       "since": entry["since"] if same else datetime.now().isoformat(timespec="seconds"), **_judged(entry)}
+    save()
+    return f"reads its {boards.label(found)}" + ("; its Exa monitor is deleted" if had else "")
+
+
 def _sync_one(name, domain, wanted, entries, mine, save):
     """Creates or updates one company's monitor; returns (what was done, the monitor as Exa has it now).
 
     A company without a monitor in the state (or with one Exa no longer has) takes over the monitor that this
     folder created for its domain and lost track of, when `mine` holds one: the reply to a create was lost, or
     the state file is an older copy. Only when there is none is a monitor created, so a company never gets two.
+    A company that was read from its job board gets a monitor the same way: the board no longer lists a posting.
     """
     entry = entries.get(domain)
-    live = exa_client.get_monitor(entry["id"]) if entry else None
+    was_on_board = bool(entry and entry.get("board"))
+    live = exa_client.get_monitor(entry["id"]) if entry and not was_on_board else None
     done = None
     if live is None:
-        judged = {"seen": entry["seen"]} if entry and entry.get("seen") else {}  # kept: no run of the old one is read
+        judged = _judged(entry) if was_on_board else {"seen": entry["seen"]} if entry and entry.get("seen") else {}
         twin = next((m for m in mine if m.metadata.get("domain") == domain), None)
         if twin is None:
             created = exa_client.create_monitor(wanted)
             entries[domain] = {"id": created.id, "name": name, "params": wanted, "created_at": created.created_at, **judged}
             save()
-            done = "created again (Exa no longer had it)" if entry else "created"
+            done = ("created (its job board lists no posting now)" if was_on_board
+                    else "created again (Exa no longer had it)" if entry else "created")
             return done, exa_client.get_monitor(created.id) or created  # the next run is set a moment after the create
         mine.remove(twin)
         entry = entries[domain] = {"id": twin.id, "name": name, "params": _on_exa(twin), "created_at": twin.created_at, **judged}
@@ -150,10 +213,15 @@ def _sync_one(name, domain, wanted, entries, mine, save):
     return done or f"updated ({', '.join(changed)})", exa_client.get_monitor(entry["id"]) or live
 
 
-def sync(companies, profile, webhook, state, save):
+def sync(companies, profile, webhook, state, save, on_board=None):
     """Makes this folder's monitors on Exa match `companies`: creates the missing ones, updates those whose search
     no longer matches the profile, deletes those of companies no longer listed. `state` is changed in place and
     `save()`d after every change on Exa, so an interrupted sync never loses track of a monitor it created.
+
+    `on_board` is {domain: board} for the companies to read from their job board (see `board`): such a company
+    gets no monitor and the one it had is deleted, with the postings judged for it kept. A company that is read
+    from a board and is no longer in `on_board` gets a monitor again. `webhook` is needed only when a company is
+    to have a monitor.
 
     A monitor is this folder's when its metadata carries the state's "folder" id, made up by the first sync. One
     that the state does not list (a create whose reply was lost) is taken over by its company, or deleted when
@@ -167,6 +235,7 @@ def sync(companies, profile, webhook, state, save):
     the others. When the account's monitors cannot be listed nothing is changed: a create could then give a
     company a second monitor.
     """
+    on_board = on_board or {}
     entries = state["monitors"]
     lines, problems = [], []
     if "folder" not in state:
@@ -176,23 +245,27 @@ def sync(companies, profile, webhook, state, save):
         ours = [m for m in exa_client.monitors() if (m.metadata or {}).get("source") == SOURCE]
     except Exception as exc:
         return [], [f"the account's monitors could not be listed, so nothing was changed ({type(exc).__name__}: {exc})"]
-    known = {entry["id"] for entry in entries.values()}
+    known = {entry["id"] for entry in entries.values() if entry.get("id")}
     mine = [m for m in ours if m.id not in known and m.metadata.get("folder") == state["folder"]]
     others = [m for m in ours if m.id not in known and m.metadata.get("folder") != state["folder"]]
     listed = {domain for _, domain in companies}
     for domain in [d for d in entries if d not in listed]:
         entry = entries[domain]
-        try:
-            exa_client.delete_monitor(entry["id"])
-        except Exception as exc:
-            problems.append(f"{entry['name']} ({domain}): monitor {entry['id']} not deleted ({type(exc).__name__}: {exc})")
-            continue
+        if entry.get("id"):
+            try:
+                exa_client.delete_monitor(entry["id"])
+            except Exception as exc:
+                problems.append(f"{entry['name']} ({domain}): monitor {entry['id']} not deleted ({type(exc).__name__}: {exc})")
+                continue
         del entries[domain]
         save()
-        lines.append(f"{entry['name']} ({domain}): deleted")
+        lines.append(f"{entry['name']} ({domain}): {'deleted' if entry.get('id') else 'no longer read from its job board'}")
     unsettled = set()  # companies whose monitor could not be looked at: a second one of theirs is left alone
     for name, domain in companies:
         try:
+            if domain in on_board:
+                lines.append(f"{name} ({domain}): {_to_board(name, domain, on_board[domain], entries, save)}")
+                continue
             wanted = params(name, domain, profile, webhook, state["folder"])
             done, live = _sync_one(name, domain, wanted, entries, mine, save)
         except Exception as exc:  # one company's failure must not stop the others
@@ -321,6 +394,35 @@ def findings(domain, entry):
     usable = [role if "description" in role else next(fetched) for role in usable]
     found = [_as_research(entry["name"], domain, role, cited[role["url"]]) for role in usable]
     return found, dead, {"last_run": last_run, "unread": unread}, problems
+
+
+def board_findings(domain, entry, profile):
+    """What the company's job board lists that no check has judged: (found, problems).
+
+    found: one research per new posting, as `findings` gives them: the postings in the profile's target roles
+    (research.targets_role) that no earlier check judged (entry["seen"]), live because the board lists them, with
+    the board's text of the posting. A board lists every posting that is open, so the first check of a board also
+    finds the ones that were open before it, which a monitor never reports. MAX_NEW at most, those whose title
+    names a target seniority first: the others stay new for the next check.
+    problems: the board could not be read, which the next check tries again, or no longer exists.
+    """
+    state, postings = research.board_listing(entry["board"])
+    if state != "ok":
+        gone = ("no longer exists; `python hunt.py monitor-sync` gives the company an Exa monitor in its place"
+                if state == "missing" else "could not be read; the next check tries again")
+        return [], [f"its {boards.label(entry['board'])} {gone}"]
+    roles = []
+    for posting in postings:
+        role = _one_line(research.board_role(posting, entry["board"], domain))
+        if (role and research.targets_role(role["title"], profile)
+                and not research.is_listed(role["url"], [*entry.get("seen", []), *roles])):
+            roles.append(role)
+    roles = research.seniority_first(roles, profile)[:MAX_NEW]
+    # a board without the postings' texts (SmartRecruiters): each posting's page is fetched, as for a monitor's
+    fetched = iter(research.attach_descriptions([role for role in roles if "description" not in role], limit=None))
+    roles = [role if "description" in role else next(fetched) for role in roles]
+    cited = {"confidence": "high", "urls": [boards.page(entry["board"])]}
+    return [_as_research(entry["name"], domain, role, cited) for role in roles], []
 
 
 def _put(entry, key, value):

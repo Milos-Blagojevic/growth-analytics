@@ -3,6 +3,8 @@
 {% block content %}
 {% if job.kind.startswith('interview') and job.args | length > 1 %}
 <a class="back" href="/{{ job.args[1] }}">← Interview</a>
+{% elif job.kind == 'apply_kit' and job.args | length > 1 %}
+<a class="back" href="/c/{{ job.args[1] | urlencode }}">← Company</a>
 {% else %}
 <a class="back" href="/runs">← Runs</a>
 {% endif %}

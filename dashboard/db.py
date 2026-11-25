@@ -2,7 +2,7 @@
 
 Two kinds of tables:
 - Derived (DERIVED_TABLES): copies of the pipeline files (out/, discovered.csv, watch_state.json, companies.csv,
-  interviews/, mail/), rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
+  interviews/, mail/, kits/), rebuilt by `ingest`. A schema change bumps SCHEMA_VERSION, which drops and recreates them.
 - User (tracking, side_projects, jobs, mail_decisions, mail_applications): the owner's statuses, notes, side
   projects, dashboard-started jobs, answers to email suggestions and the applications added from them. They cannot
   be rebuilt, so they are never dropped; change them only by appending to USER_MIGRATIONS.
@@ -12,9 +12,9 @@ import sqlite3
 from pathlib import Path
 
 DB_FILE = "hunt.db"
-SCHEMA_VERSION = 7  # 7: mail_updates can hold "applied"; a rollback to 6 rebuilds them without those rows
+SCHEMA_VERSION = 8  # 8: the kits table (application kits, kits/<domain>.json); a rollback to 7 leaves it unread
 
-DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "meta")
+DERIVED_TABLES = ("runs", "results", "roles", "watch_postings", "leads", "interviews", "mail_updates", "kits", "meta")
 
 # Applied in order, each once; the number applied is kept in user_schema. Never edit an applied entry.
 USER_MIGRATIONS = [
@@ -190,6 +190,13 @@ CREATE TABLE mail_updates (
     company TEXT NOT NULL,        -- as the email names it; "" if it does not
     role TEXT NOT NULL,
     summary TEXT NOT NULL
+);
+CREATE TABLE kits (
+    domain TEXT PRIMARY KEY,      -- kits/<domain>.json: one application kit per company, the latest written
+    created_at TEXT NOT NULL,
+    url TEXT,                     -- the posting it was written for
+    title TEXT,
+    kit TEXT NOT NULL             -- JSON: the saved file
 );
 CREATE TABLE meta (
     key TEXT PRIMARY KEY,
