@@ -207,13 +207,18 @@ def test_sync_moves_monitors_made_with_another_period_to_this_one(account, profi
     state = {"monitors": {}}
     monitor.sync(COMPANIES, profile, WEBHOOK, state, lambda: None)
     monkeypatch.setattr(monitor, "PERIOD", period)
+    judged = {"last_run": "run_9", "seen": [{"title": "Senior Analytics Engineer", "url": AE, "verdict": "apply",
+                                             "score": 82, "first_seen": "2026-11-20T08:00:00"}]}
+    state["monitors"]["acme.com"].update(judged)
 
     lines, problems = monitor.sync(COMPANIES, profile, WEBHOOK, state, lambda: None)
 
     assert [account.calls("PATCH", f"/{mid}") for mid in ("mon_1", "mon_2")] == [
         [{"trigger": {"type": "interval", "period": period}}]] * 2
     assert account.monitors["mon_1"]["trigger"] == {"type": "interval", "period": period}
+    acme = state["monitors"]["acme.com"]
     assert [entry["params"]["trigger"]["period"] for entry in state["monitors"].values()] == [period] * 2
+    assert (acme["id"], {key: acme[key] for key in judged}) == ("mon_1", judged)
     assert len(account.calls("POST")) == 2 and problems == []  # updated, not created again
     assert all("updated (trigger)" in line for line in lines)
 
