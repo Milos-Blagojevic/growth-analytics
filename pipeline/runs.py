@@ -2,13 +2,15 @@
 
 out/<%Y%m%d-%H%M%S>/ holds one <domain>.json per company and the MANIFEST (mode, times, counts, costs).
 Domains name those files, so companies.csv, discover and the dashboard all normalise them the same way here.
-MONITORS lists the companies `monitor-sync` keeps an Exa monitor for; the dashboard's New adds to it.
+MONITORS lists the companies `monitor-sync` keeps an Exa monitor for; the dashboard's New, Edit and Remove change it.
 LOCK_FILE lets one hunt.py command run at a time, whether started from a shell, cron or the dashboard.
 """
 
 import csv
 import fcntl
+import io
 import json
+import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -82,24 +84,34 @@ def read_monitors(path):
     [] when the file is missing. Raises ValueError for a file that cannot be read, a row `monitored` refuses and a
     domain listed twice: `monitor-sync` deletes the monitor of every company the list leaves out, so a row is never
     skipped."""
+    return [company for _, _, company in _monitor_records(path) if company]
+
+
+def _monitor_records(path):
+    """monitors.csv as [(text, fields, company)]: each record with the lines it spans as they are written, its fields,
+    and the (name, domain) it lists, None for a blank line or a '#' comment; [] when the file is missing. Raises
+    ValueError as `read_monitors` does."""
     path = Path(path)
     if not path.exists():
         return []
     try:
         with open(path, newline="", encoding="utf-8-sig") as f:
-            rows = list(csv.reader(f))
+            lines = f.readlines()
+        reader = csv.reader(lines)
+        rows = [(row, reader.line_num) for row in reader]  # line_num: the lines read so far, a quoted newline included
     except (OSError, UnicodeDecodeError, csv.Error) as exc:  # a directory, a field beyond csv's limit, ...
         raise ValueError(f"cannot be read: {exc}") from exc
-    companies, listed = [], set()
-    for row in rows:
-        if not "".join(row).strip() or row[0].strip().startswith("#"):
-            continue
-        name, domain = monitored(*(row + ["", ""])[:2])
-        if domain in listed:
-            raise ValueError(f"{domain} is listed twice")
-        listed.add(domain)
-        companies.append((name, domain))
-    return companies
+    records, start, listed = [], 0, set()
+    for row, end in rows:
+        company = None
+        if "".join(row).strip() and not row[0].strip().startswith("#"):
+            company = monitored(*(row + ["", ""])[:2])
+            if company[1] in listed:
+                raise ValueError(f"{company[1]} is listed twice")
+            listed.add(company[1])
+        records.append(("".join(lines[start:end]), row, company))
+        start = end
+    return records
 
 
 def add_monitor(path, name, domain):
@@ -115,6 +127,56 @@ def add_monitor(path, name, domain):
             f.write("\n")
         csv.writer(f, lineterminator="\n").writerow([name, domain])
     return name, domain
+
+
+def edit_monitor(path, current, name, domain):
+    """Changes the monitors.csv row of the company listed under the domain `current` to `name` and `domain`, keeping
+    its extra columns and every other line as written; returns (name, domain) as written. Raises ValueError for a
+    company `monitored` refuses, a `current` the file does not list, a `domain` another row lists, a row that would
+    stay as it is and a file `read_monitors` cannot read."""
+    name, domain = monitored(name, domain)
+    current = normalize_domain(str(current))
+    records = _monitor_records(path)
+    listed = {company[1] for _, _, company in records if company}
+    if current not in listed:
+        raise ValueError(f"{current} is not listed")
+    if domain != current and domain in listed:
+        raise ValueError(f"{domain} is monitored already")
+    texts = []
+    for text, row, company in records:
+        if company and company[1] == current:
+            if company == (name, domain):
+                raise ValueError(f"{name} ({domain}) is listed so already")
+            out = io.StringIO()
+            csv.writer(out, lineterminator="").writerow([name, domain, *row[2:]])
+            text = out.getvalue() + text[len(text.rstrip("\r\n")):]  # the line ending it had
+        texts.append(text)
+    _replace_monitors(path, texts)
+    return name, domain
+
+
+def remove_monitors(path, domains):
+    """Deletes the monitors.csv rows of `domains`, keeping every other line as written; returns the (name, domain) of
+    each, in the file's order. Raises ValueError for no domain, a domain the file does not list and a file
+    `read_monitors` cannot read."""
+    wanted = {normalize_domain(str(domain)) for domain in domains if str(domain).strip()}
+    if not wanted:
+        raise ValueError("no company to remove")
+    records = _monitor_records(path)
+    unknown = wanted - {company[1] for _, _, company in records if company}
+    if unknown:
+        raise ValueError(f"not listed: {', '.join(sorted(unknown))}")
+    _replace_monitors(path, [text for text, _, company in records if not (company and company[1] in wanted)])
+    return [company for _, _, company in records if company and company[1] in wanted]
+
+
+def _replace_monitors(path, texts):
+    """Writes monitors.csv anew at once: a crash never leaves half a list, which the next sync would take for the
+    companies to keep and delete the monitors of the rest."""
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text("".join(texts), encoding="utf-8", newline="")
+    os.replace(tmp, path)
 
 
 def run_dirs(out_dir):

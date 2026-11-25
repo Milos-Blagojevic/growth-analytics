@@ -74,9 +74,12 @@ class Spec:
     # How it was started, for PostHog (app.py sends it with hunt_run_started): values from fixed sets, booleans and
     # counts. Never a field's text: a focus is reported as given or not, and no company, run or interview is named.
     options: dict = field(default_factory=dict)
-    # Called by Runner.start once no other command runs, before the job starts: New on Runs adds its company to
-    # monitors.csv here, so a sync that is refused leaves the list as it was. Raises ValueError to refuse the job.
+    # Called by Runner.start once no other command runs, before the job starts: New, Edit and Remove under Monitors
+    # change monitors.csv here, so a sync that is refused leaves the list as it was. Raises ValueError to refuse it.
     prepare: object = None
+    # (name, properties) of the PostHog event of the action that starts the job, sent before its hunt_run_started:
+    # New, Edit and Remove under Monitors. Properties follow `options`' rule.
+    event: tuple = None
 
 
 def _now():

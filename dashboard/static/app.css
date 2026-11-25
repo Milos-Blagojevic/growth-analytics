@@ -381,6 +381,9 @@ ul.plain.warn li::before { content: "⚠ "; color: var(--stretch); }
 .run-meta.live { color: var(--stretch); }
 .run-meta.live:hover { color: #fff; }
 .sheet-body section.actions { border-bottom: 0; }
+.table.monitors td { vertical-align: middle; }  /* each row holds an Edit button */
+.table tbody + tbody tr:first-child td { border-top: 1px solid var(--border); }  /* Monitors: the rows "Show all" adds */
+.show-more { margin-top: 10px; }
 
 /* leads selection */
 .selection-bar { position: sticky; top: 62px; z-index: 5; display: flex; align-items: center; gap: 14px; margin-top: 14px; padding: 10px 14px; border-radius: 12px; background: rgba(21, 25, 35, 0.92); backdrop-filter: blur(8px); border: 1px solid var(--border); }

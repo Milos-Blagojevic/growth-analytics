@@ -31,6 +31,9 @@ def test_pages_and_actions_need_the_login(client):
     # A valid CSRF token is not enough: a POST without the session cookie starts nothing.
     assert client.post("/runs", data={"kind": "news", "dry_run": "1"}).status_code == 401
     assert client.post("/runs/monitors", data={"name": "Acme", "domain": "acme.com"}).status_code == 401
+    assert client.post("/runs/monitors/edit", data={"current": "acme.com", "name": "Acme", "domain": "acme.io"}).status_code == 401
+    assert client.post("/runs/monitors/remove", data={"domains": ["acme.com"]}).status_code == 401
+    assert client.get("/runs/monitors/remove?domains=acme.com", follow_redirects=False).status_code == 303
     assert client.get("/static/app.css").status_code == 200
     assert 'type="password"' in client.get("/login").text
 

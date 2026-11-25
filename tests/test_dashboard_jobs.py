@@ -275,6 +275,108 @@ def test_new_monitor_never_starts_a_list_that_would_make_its_sync_delete_the_mon
     assert runs.read_monitors(root / "monitors.csv") == [("Acme", "acme.com"), ("Beta", "beta.io"), ("Gamma", "gamma.dev")]
 
 
+def test_edit_changes_a_monitored_company_and_syncs(root, app):
+    c = client(app)
+    (root / "monitors.csv").write_text("# name,domain\nAcme,acme.com\nBeta,beta.io\n")
+
+    form = c.get("/runs/monitors/edit", params={"domain": "beta.io"}).text
+    assert 'hx-post="/runs/monitors/edit"' in form and 'name="current" value="beta.io"' in form
+    assert 'name="name" required maxlength="100" placeholder="e.g. Acme" value="Beta"' in form and "Save and sync" in form
+    renamed = finished(root, started_job_id(c.post("/runs/monitors/edit", data={"current": "beta.io", "name": "Beta Labs",
+                                                                                "domain": "beta.io"})))
+    moved = finished(root, started_job_id(c.post("/runs/monitors/edit", data={  # a typo in the domain
+        "current": "acme.com", "name": "Acme", "domain": "https://www.Acme.io/"})))
+
+    assert [(job["kind"], job["args"], job["label"]) for job in (renamed, moved)] == [
+        ("monitor_sync", ["monitor-sync"], "Edit monitor: Beta Labs (beta.io)"),
+        ("monitor_sync", ["monitor-sync"], "Edit monitor: Acme (acme.io)")]
+    assert (root / "monitors.csv").read_text() == "# name,domain\nAcme,acme.io\nBeta Labs,beta.io\n"
+    missing = c.get("/runs/monitors/edit", params={"domain": "acme.com"})
+    assert (missing.status_code, missing.text) == (404, "acme.com is not in monitors.csv")
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"current": "gamma.dev", "name": "Gamma", "domain": "gamma.dev"}, "gamma.dev is not in monitors.csv"),
+        ({"current": "acme.com", "name": "Acme", "domain": "www.beta.io"}, "beta.io is monitored already"),
+        ({"current": "acme.com", "name": " Acme ", "domain": "https://acme.com"}, "Nothing to change"),
+        ({"current": "acme.com", "name": "", "domain": "acme.com"}, "needs a name and a domain"),
+        ({"current": "acme.com", "name": "Acme", "domain": "acme.com/jobs"}, "needs a name and a domain"),
+    ],
+)
+def test_edit_refuses_a_change_it_cannot_make_and_writes_nothing(root, app, change, message):
+    (root / "monitors.csv").write_text("Acme,acme.com\nBeta,beta.io\n")
+
+    response = client(app).post("/runs/monitors/edit", data=change)
+
+    assert response.status_code == 400 and message in response.text
+    assert (root / "monitors.csv").read_text() == "Acme,acme.com\nBeta,beta.io\n"
+    conn = db.connect(root)
+    assert jobs.recent(conn) == []  # no sync started
+    conn.close()
+
+
+def test_remove_confirms_the_companies_picked_then_removes_them_and_syncs(root, app):
+    c = client(app)
+    (root / "monitors.csv").write_text("# name,domain\nAcme,acme.com\nBeta,beta.io\nGamma,gamma.dev\n")
+
+    confirm = c.get("/runs/monitors/remove", params={"domains": ["gamma.dev", "acme.com"]}).text
+    assert "<h2>Remove 2 monitors</h2>" in confirm and "python hunt.py monitor-sync" in confirm
+    assert "Removes Acme (acme.com), Gamma (gamma.dev) from monitors.csv." in confirm
+    assert "The sync deletes their monitors on Exa, which stops the billing" in confirm
+    assert re.search(r'hx-post="/runs/monitors/remove">\s*<input type="hidden" name="domains" value="acme.com">\s*'
+                     r'<input type="hidden" name="domains" value="gamma.dev">', confirm)
+    assert "Remove and sync" in confirm
+    assert runs.read_monitors(root / "monitors.csv") == [("Acme", "acme.com"), ("Beta", "beta.io"), ("Gamma", "gamma.dev")]
+
+    several = finished(root, started_job_id(c.post("/runs/monitors/remove", data={"domains": ["acme.com", "gamma.dev"]})))
+    assert (several["args"], several["label"]) == (["monitor-sync"], "Remove 2 monitors")
+    assert (root / "monitors.csv").read_text() == "# name,domain\nBeta,beta.io\n"
+    one = finished(root, started_job_id(c.post("/runs/monitors/remove", data={"domains": ["beta.io"]})))
+    assert one["label"] == "Remove monitor: Beta (beta.io)"
+    assert (root / "monitors.csv").read_text() == "# name,domain\n"
+    assert "No companies monitored yet." in c.get("/runs").text
+
+
+def test_remove_refuses_companies_it_does_not_list_and_nothing_changes_while_another_command_runs(root, app):
+    c = client(app)
+    (root / "monitors.csv").write_text("Acme,acme.com\nBeta,beta.io\n")
+
+    assert "Not in monitors.csv: nope.io" in c.get("/runs/monitors/remove", params={"domains": ["acme.com", "nope.io"]}).text
+    response = c.post("/runs/monitors/remove", data={"domains": ["acme.com", "nope.io"]})
+    assert response.status_code == 400 and "Not in monitors.csv: nope.io" in response.text
+    assert c.post("/runs/monitors/remove", data={}).text == "Pick the companies to remove."
+    with runs.lock(root):  # the list changes only with the sync that makes Exa match it
+        assert c.post("/runs/monitors/remove", data={"domains": ["acme.com"]}).status_code == 409
+        assert c.post("/runs/monitors/edit", data={"current": "acme.com", "name": "Acme", "domain": "acme.io"}).status_code == 409
+
+    assert (root / "monitors.csv").read_text() == "Acme,acme.com\nBeta,beta.io\n"
+    conn = db.connect(root)
+    assert jobs.recent(conn) == []
+    conn.close()
+
+
+def test_runs_lists_the_first_ten_monitored_companies_and_the_rest_behind_show_all(root, app):
+    c = client(app)
+    companies = [(f"Company {i:02}", f"company{i:02}.com") for i in range(1, 13)]
+    (root / "monitors.csv").write_text("".join(f"{name},{domain}\n" for name, domain in companies))
+
+    page = c.get("/runs").text
+    first, rest = page.split("<h2>Monitors")[1].split('<tbody id="more-monitors" hidden>')
+    assert [d for _, d in companies if f">{d}<" in first] == [d for _, d in companies[:10]]
+    assert [d for _, d in companies if f">{d}<" in rest.split("</tbody>")[0]] == ["company11.com", "company12.com"]
+    assert 'aria-controls="more-monitors" aria-expanded="false"' in page and ">Show all 12</button>" in page
+    # Hidden or not, every company can be picked for Remove and edited.
+    assert page.count('name="domains" value="company') == 12
+    assert page.count('hx-get="/runs/monitors/edit?domain=company') == 12
+
+    (root / "monitors.csv").write_text("".join(f"{name},{domain}\n" for name, domain in companies[:10]))
+    page = c.get("/runs").text
+    assert 'id="more-monitors"' not in page and "Show all" not in page
+    assert page.count('name="domains" value="company') == 10
+
+
 def test_one_command_at_a_time(root, app, monkeypatch):
     c = client(app)
     with runs.lock(root):  # e.g. a hunt.py command from a shell
@@ -314,6 +416,11 @@ def test_requests_from_other_sites_are_refused(root, app):
     assert c.post("/runs/monitors", data={"name": "Beta", "domain": "beta.io"},
                   headers={"Origin": "https://evil.example"}).status_code == 403
     assert c.post("/runs", data=form, headers={"Origin": "https://evil.example"}).status_code == 403
+    (root / "monitors.csv").write_text("Acme,acme.com\n")
+    assert c.post("/runs/monitors/edit", data={"current": "acme.com", "name": "Acme", "domain": "acme.io"},
+                  headers={"Origin": "https://evil.example"}).status_code == 403
+    assert c.post("/runs/monitors/remove", data={"domains": ["acme.com"]}, headers={"X-CSRF-Token": "stale"}).status_code == 403
+    assert (root / "monitors.csv").read_text() == "Acme,acme.com\n"
     assert c.post("/track", data={"kind": "company", "ref": "acme.com", "status": "saved"},
                   headers={"X-CSRF-Token": ""}).status_code == 403
     assert c.get("/", headers={"Host": "evil.example"}).status_code == 400  # DNS rebinding

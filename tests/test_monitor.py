@@ -97,6 +97,62 @@ def test_add_monitor_appends_one_row_that_reads_back_and_refuses_one_listed_alre
     assert runs.read_monitors(path) == [("Acme, Inc.", "acme.com"), ("Beta", "beta.io")]
 
 
+# The owner's own file: a byte-order mark, comments, a quoted name with a comma and one across two lines, an extra
+# column, Windows line endings and no newline at the end.
+HAND_WRITTEN = ('\ufeff# name,domain,notes\r\n"Acme, Inc.",acme.com,keep this\r\n\r\n"Beta\r\nLabs",beta.io\r\n'
+                "# paused: Gamma,gamma.dev\r\nDelta,delta.ai")
+
+
+def test_edit_monitor_changes_one_row_and_keeps_every_other_line_as_written(tmp_path):
+    path = tmp_path / "monitors.csv"
+    path.write_bytes(HAND_WRITTEN.encode())
+
+    assert runs.edit_monitor(path, "acme.com", " Acme  EU ", "https://www.Acme.eu/") == ("Acme EU", "acme.eu")
+    assert runs.edit_monitor(path, "https://delta.ai", "Delta AI", "delta.ai") == ("Delta AI", "delta.ai")
+
+    assert path.read_bytes().decode() == ('# name,domain,notes\r\nAcme EU,acme.eu,keep this\r\n\r\n"Beta\r\nLabs",beta.io\r\n'
+                                          "# paused: Gamma,gamma.dev\r\nDelta AI,delta.ai")
+    assert runs.read_monitors(path) == [("Acme EU", "acme.eu"), ("Beta Labs", "beta.io"), ("Delta AI", "delta.ai")]
+    assert [p.name for p in tmp_path.iterdir()] == ["monitors.csv"]  # written whole, through a file of its own
+
+
+@pytest.mark.parametrize(
+    "current, name, domain, message",
+    [
+        ("gamma.dev", "Gamma", "gamma.dev", "gamma.dev is not listed"),  # in a comment only
+        ("acme.com", "Acme", "https://beta.io", "beta.io is monitored already"),
+        ("acme.com", " Acme,  Inc. ", "www.acme.com", "is listed so already"),
+        ("acme.com", "Acme", "acme.com/careers", "needs a name and a domain"),
+        ("acme.com", "# Acme", "acme.com", "needs a name and a domain"),  # the file would read a comment
+    ],
+)
+def test_edit_monitor_refuses_a_change_it_cannot_make_and_leaves_the_file_as_it_was(tmp_path, current, name, domain,
+                                                                                   message):
+    path = tmp_path / "monitors.csv"
+    path.write_bytes(HAND_WRITTEN.encode())
+
+    with pytest.raises(ValueError, match=message):
+        runs.edit_monitor(path, current, name, domain)
+    assert path.read_bytes() == HAND_WRITTEN.encode()
+
+
+def test_remove_monitors_deletes_their_rows_and_keeps_every_other_line_as_written(tmp_path):
+    path = tmp_path / "monitors.csv"
+    path.write_bytes(HAND_WRITTEN.encode())
+
+    assert runs.remove_monitors(path, ["https://www.Delta.ai/", "beta.io"]) == [("Beta Labs", "beta.io"), ("Delta", "delta.ai")]
+    assert path.read_bytes().decode() == '# name,domain,notes\r\n"Acme, Inc.",acme.com,keep this\r\n\r\n# paused: Gamma,gamma.dev\r\n'
+
+    for domains, message in ((["acme.com", "gamma.dev"], "not listed: gamma.dev"), (["", " "], "no company to remove")):
+        with pytest.raises(ValueError, match=message):
+            runs.remove_monitors(path, domains)
+    assert runs.read_monitors(path) == [("Acme, Inc.", "acme.com")]
+
+    assert runs.remove_monitors(path, ["acme.com"]) == [("Acme, Inc.", "acme.com")]
+    assert runs.read_monitors(path) == []  # comments only: the sync deletes every monitor
+    assert [p.name for p in tmp_path.iterdir()] == ["monitors.csv"]
+
+
 @pytest.mark.parametrize("address", ["http://127.0.0.1:8000", "https://localhost:8000", "http://hunt.example.org", "hunt.example.org"])
 def test_an_address_exa_would_refuse_for_a_monitor_is_refused_before_asking(address):
     with pytest.raises(ValueError, match="DASHBOARD_URL"):
