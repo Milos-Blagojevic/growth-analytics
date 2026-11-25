@@ -55,7 +55,7 @@
   <h2>Monitors <span class="count">{{ monitored | length }}</span>
     <button class="btn primary sm" type="button" hx-get="/runs/monitors/new" hx-target="#panel" {{ 'disabled' if monitors_error }}>New monitor</button>
   </h2>
-  <p class="muted small">Exa searches each company's own site and job boards for new postings in your target roles every 4 hours, about $0.36 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>: New, Edit and Remove change it and start <code>monitor-sync</code>, which creates, updates and deletes the monitors to match.</p>
+  <p class="muted small">Exa searches each company's own site and job boards for new postings in your target roles every 12 hours, about $0.12 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>: New, Edit and Remove change it and start <code>monitor-sync</code>, which creates, updates and deletes the monitors to match.</p>
   {% if monitors_error %}
   <div class="note error">{{ monitors_error }}</div>
   {% elif monitored %}

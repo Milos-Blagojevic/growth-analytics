@@ -20,10 +20,10 @@ from pipeline import research, runs
 logger = logging.getLogger("monitor")
 
 STATE = "monitor_state.json"
-PERIOD = "4h"  # between a monitor's runs (Exa's shortest is 1h); Exa picks the minute the cycle starts at
+PERIOD = "12h"  # between a monitor's runs (Exa's shortest is 1h); Exa picks the minute the cycle starts at
 RUN_DOLLARS = 0.002  # what Exa bills a run that returns up to RESULTS pages
 RESULTS = 10
-MAX_RUNS = 60  # runs read per monitor in one check: ten days of them
+MAX_RUNS = 60  # runs read per monitor in one check: thirty days of them
 MAX_TRIES = 3  # checks in a row that may fail to read one run, or to score one posting, before it is given up
 ENDED = ("completed", "failed", "cancelled")
 SOURCE = "hunt.py"  # in each monitor's metadata: tells these monitors from others on the Exa account
