@@ -91,6 +91,21 @@ def test_back_to_new_without_notes_forgets_the_item(root, app_client):
     conn.close()
 
 
+def test_an_application_keeps_the_date_it_was_sent_when_that_is_known(root):
+    sent = "2026-01-02T09:00:00"
+    conn = db.connect(root)
+
+    assert tracking.update(conn, "posting", ACME_URL, status="saved", applied_at=sent)["applied_at"] is None  # not sent yet
+    assert tracking.update(conn, "posting", ACME_URL, status="applied", applied_at=sent)["applied_at"] == sent
+    # The first date stays: a later one does not replace it, and neither does a later status.
+    assert tracking.update(conn, "posting", ACME_URL, status="interviewing", applied_at="2026-01-05T09:00:00")["applied_at"] == sent
+    assert tracking.update(conn, "posting", ACME_URL, status="rejected")["applied_at"] == sent
+    # Without a known date it is the moment the status is set, as before.
+    gamma = tracking.update(conn, "company", "gamma.dev", status="applied")
+    assert gamma["applied_at"] == gamma["updated_at"]
+    conn.close()
+
+
 def test_existing_watch_postings_remain_in_pipeline(root, app_client):
     url = "https://jobs.ashbyhq.com/acme/w1"
     conn = db.connect(root)

@@ -50,8 +50,8 @@ MIN_TOKEN_LENGTH = 32
 PREVIEW_SECONDS = 15 * 60  # how long a preview's token can start its job
 MAX_PREVIEWS = 50  # tokens kept at once; the oldest goes first
 LOG_CHARS = 20_000  # of a job's log, the end
-JOB_KINDS = ("run", "discover", "mail", "news", "monitor", "monitor_sync", "interview_prep", "interview_review",
-             "new_monitor", "edit_monitor", "remove_monitors")
+JOB_KINDS = ("run", "discover", "mail", "followup", "news", "monitor", "monitor_sync", "interview_prep",
+             "interview_review", "apply_kit", "new_monitor", "edit_monitor", "remove_monitors")
 INSTRUCTIONS = """The owner's job-hunt dashboard: companies researched and scored for fit, the pipeline of their \
 applications, email updates, interviews, side projects, and saved runs and their costs. Start with `overview`.
 
@@ -231,10 +231,10 @@ def build(root, runner, connection, report_started):
 
     @tool(READ)
     def list_monitors() -> dict:
-        """The companies in monitors.csv, whose new postings Exa monitors watch, each with whether its monitor runs on
-        Exa (`on_exa`) and since when. `error` says why the list cannot be changed now (monitors.csv cannot be read,
-        or is missing while monitors run). `preview_job` kinds new_monitor, edit_monitor and remove_monitors change
-        it."""
+        """The companies in monitors.csv, whose new postings are watched, each with whether its monitor runs on Exa
+        (`on_exa`) or it is read from its job board (`board`, the board's host) and since when. `error` says why
+        the list cannot be changed now (monitors.csv cannot be read, or is missing while monitors run).
+        `preview_job` kinds new_monitor, edit_monitor and remove_monitors change it."""
         companies, error = monitors.listing(root)
         return {"monitors": companies, "error": error}
 
@@ -432,19 +432,24 @@ def build(root, runner, connection, report_started):
         - discover: suggest new companies; `focus` (optional) and `limit` (1-50).
         - mail, news, monitor: check email, make the news digest, read the Exa monitors' new postings; `dry_run`
           prints instead of sending to Telegram and saving state.
+        - followup: list the applications without a reply for 8 days, each once, with whether its posting is still
+          open (free); `dry_run` prints instead of sending to Telegram and saving state.
         - monitor_sync: create, update and delete Exa monitors to match monitors.csv.
         - new_monitor: add the company `name` (`domain`) to monitors.csv and sync, which creates its monitor.
         - edit_monitor: change the company monitors.csv lists under `current_domain` (see `list_monitors`) to `name`
           and `domain`, and sync: a new name updates its monitor, a new domain replaces it.
         - remove_monitors: delete the companies of `domains` from monitors.csv and sync, which deletes their monitors.
-        - interview_prep, interview_review: Claude's prep brief or transcript review for `interview_id`."""
+        - interview_prep, interview_review: Claude's prep brief or transcript review for `interview_id`.
+        - apply_kit: Claude's application kit for the best role of the company `domain` (see `get_company`): answers
+          to the posting's application questions, a note and the CV points to lead with, shown on its dashboard page.
+          The company's latest scored result has to name a posting."""
         fields = {
             "new_monitor": {"name": name, "domain": domain},
             "edit_monitor": {"current": current_domain, "name": name, "domain": domain},
             "remove_monitors": {"domains": domains or []},
         }.get(kind) or {
             "kind": kind, "mode": mode, "fiber": "1" if fiber else "", "domains": domains or [], "focus": focus,
-            "limit": str(limit), "dry_run": "1" if dry_run else "", "interview": interview_id}
+            "limit": str(limit), "dry_run": "1" if dry_run else "", "interview": interview_id, "domain": domain}
         with connection() as conn:
             spec = spec_for(conn, kind, fields)
         token = secrets.token_urlsafe(16)

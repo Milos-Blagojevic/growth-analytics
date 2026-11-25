@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
-from clients import ashby, exa_client
+from clients import boards, exa_client
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
@@ -205,10 +205,16 @@ def _location_clause(profile):
 
 
 @lru_cache(maxsize=None)
-def _ashby_board(board):
-    """(state, listed job ids), cached per run; see ashby.fetch_board for states."""
-    state, jobs = ashby.fetch_board(board)
-    return state, frozenset(job["id"] for job in jobs)
+def _board(ats, slug, host):
+    """(state, postings) of a job board's feed, read once per run; see boards.fetch for both."""
+    state, postings = boards.fetch({"ats": ats, "slug": slug, "host": host})
+    return state, tuple(postings)
+
+
+def board_postings(board):
+    """What a job board lists as open now, read once per run: (state, [posting]) as boards.fetch returns them."""
+    state, postings = _board(board["ats"], board["slug"], board["host"])
+    return state, list(postings)
 
 
 _OPENS_RE = re.compile(r"<!--|</?[a-zA-Z]")  # where a comment or a tag starts
@@ -298,17 +304,15 @@ def check_posting(url):
     """
     parsed = urlparse(url)
     segments = [s for s in parsed.path.split("/") if s]
-    if len(segments) < 2 and parsed.netloc != ashby.HOST:
+    if len(segments) < 2:
         return "unknown"
-    if parsed.netloc == ashby.HOST:
-        if len(segments) < 2:
-            return "unknown"
-        state, listed = _ashby_board(segments[0].lower())
+    if parsed.netloc == boards.ASHBY_HOST:
+        state, listed = _board("ashby", segments[0].lower(), boards.ASHBY_HOST)
         if state == "missing":
             return "dead"
         if state == "unknown":
             return "unknown"
-        return "live" if segments[1].lower() in listed else "dead"
+        return "live" if any(posting["id"] == segments[1].lower() for posting in listed) else "dead"
     try:
         response = requests.get(url, headers=BROWSER_HEADERS, timeout=15, allow_redirects=True)
     except requests.RequestException:
@@ -383,12 +387,13 @@ def _third_party_leads(roles):
 
 
 def attach_descriptions(roles, *, limit=MAX_DESCRIBED_ROLES):
-    """Add the posting text as `description` to the first `limit` live roles (all of them with limit=None).
+    """Add the posting text as `description` to the first `limit` live roles that have none (all of them with
+    limit=None): a role a job board listed comes with its text.
 
     Search summaries rarely contain a posting's responsibilities and required tools, which the scorer
     needs. Costs about $0.001 per page. Failures are logged and the roles are returned unchanged.
     """
-    targets = [r for r in roles if r.get("link_status") == "live"][:limit]
+    targets = [r for r in roles if r.get("link_status") == "live" and not r.get("description")][:limit]
     if not targets:
         return roles
     try:
@@ -445,35 +450,51 @@ def _posting_url(url):
     (.../<id>/application, whatever follows it), port or upper-case host. Any other URL as it is."""
     url = url.strip()
     parsed = urlparse(url)
-    if parsed.hostname != ashby.HOST:
+    if parsed.hostname != boards.ASHBY_HOST:
         return url
-    return f"https://{ashby.HOST}{parsed.path.rstrip('/').removesuffix('/application')}"
+    return f"https://{boards.ASHBY_HOST}{parsed.path.rstrip('/').removesuffix('/application')}"
 
 
 _UUID_RE = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
 
+def _board_key(ats, posting):
+    """A job board's id for a posting, as a key: the id alone when it is a UUID, since a careers page that embeds the
+    board carries it too."""
+    return posting if _UUID_RE.fullmatch(posting) else f"{ats}:{posting}"
+
+
 def _posting_key(url):
     """What two links to one posting share (compared within one company's postings only).
 
-    Host and path count without letter case, "www.", a trailing slash or Ashby's application-form suffix: the
-    main search returns jobs.ashbyhq.com/Notion/<id>/application for jobs.ashbyhq.com/notion/<id>. The query and
-    the fragment count as they are, apart from utm_ parameters: some career sites name the posting there
-    (/careers/job?gh_jid=123), and merging two of those would drop a real role.
+    A link on a job board with a feed counts by the board's own id for the posting, whatever form the board gives
+    the link (boards.posting_id): jobs.ashbyhq.com/Notion/<id>/application for jobs.ashbyhq.com/notion/<id>,
+    apply.workable.com/j/<id> for apply.workable.com/acme/j/<id>, jobs.lever.co/acme/<id>/apply for
+    jobs.lever.co/acme/<id>. A careers page that embeds a board names the posting by the same id: where its path
+    ends in the id and it says nothing more, when the id is a UUID (linear.app/careers/<id> for
+    jobs.ashbyhq.com/linear/<id>), or as ?ashby_jid=<id> or ?gh_jid=<id>.
 
-    A job board's posting id (a UUID) is the key by itself when the link ends in it and says nothing more, or
-    carries it as ?ashby_jid=: a careers page that embeds the board links the posting that way
-    (linear.app/careers/<id> for jobs.ashbyhq.com/linear/<id>).
+    Any other link counts by its host and path, without letter case, "www." or a trailing slash. Its query and its
+    fragment count as they are, apart from utm_ parameters: some career sites name the posting there
+    (/careers/job?id=123), and merging two of those would drop a real role.
     """
-    parsed = urlparse(_posting_url(url))
+    url = _posting_url(url)
+    on_board = boards.posting_id(url)
+    # Ashby's and Lever's ids are UUIDs: anything else in an id's place is compared as the link it is.
+    if on_board and (on_board[0] not in ("ashby", "lever") or _UUID_RE.fullmatch(on_board[1])):
+        return _board_key(*on_board)
+    parsed = urlparse(url)
     host = (parsed.hostname or "").removeprefix("www.")
     path = parsed.path.rstrip("/").lower()
     parts = sorted(part for part in parsed.query.split("&") if part and not part.lower().startswith("utm_"))
-    posting_ids = [part.partition("=")[2].lower() for part in parts if part.lower().startswith("ashby_jid=")]
-    if not parts and not parsed.fragment:
-        posting_ids.append(path.rpartition("/")[2])
-    if posting_ids and _UUID_RE.fullmatch(posting_ids[0]):
-        return posting_ids[0]
+    for part in parts:
+        name, _, value = part.lower().partition("=")
+        if name == "ashby_jid" and _UUID_RE.fullmatch(value):
+            return value
+        if name == "gh_jid" and value.isdigit():
+            return _board_key("greenhouse", value)
+    if not parts and not parsed.fragment and _UUID_RE.fullmatch(path.rpartition("/")[2]):
+        return path.rpartition("/")[2]
     return f"{host}{path}?{'&'.join(parts)}#{parsed.fragment}"
 
 
@@ -566,11 +587,16 @@ def _title_key(title):
     return f" {words} "
 
 
+def title_holds(title, wanted):
+    """True when a posting's title holds `wanted` word for word: "Senior Data Analyst (Remote, EU)" holds "Senior
+    Data Analyst", "Data Analyst" does not. False for a `wanted` without a word."""
+    return bool(_title_key(wanted).strip()) and _title_key(wanted) in _title_key(title)
+
+
 def _not_found(leads, roles):
     """The third-party listings that none of the kept postings stands for. A posting does when its title holds the
-    listing's, word for word: "Senior Data Analyst (Remote, EU)" for "Senior Data Analyst", not "Data Analyst"."""
-    titles = [_title_key(role["title"]) for role in roles]
-    return [lead for lead in leads if not any(_title_key(lead["title"]) in title for title in titles)]
+    listing's, word for word (title_holds)."""
+    return [lead for lead in leads if not any(title_holds(role["title"], lead["title"]) for role in roles)]
 
 
 def _cited(groundings):
@@ -624,21 +650,136 @@ def find_roles_on_fiber(name, domain, profile):
     return list(roles.values()), grounding.get("open_roles")
 
 
-def research_company(name, domain, profile, *, fiber=False, search_type="auto"):
+def _letters(text):
+    return re.sub(r"[^a-z0-9]", "", text.casefold())
+
+
+def _carries_name(board, name, domain):
+    """True when a job board is named for the company: its name on the board, letters and digits only, is the
+    company's name, the name its domain is registered under, or that domain whole (acme, or acmeio for acme.io).
+    A board named anything else is left alone, also acme-labs or acmepay for Acme: a search that takes another
+    company's posting for this one's must not bring that company's whole board with it."""
+    return _letters(board["slug"]) in {_letters(name), _letters(_registered(domain)[0]), _letters(domain)} - {""}
+
+
+def company_boards(name, domain, links):
+    """The job boards with a public feed where the company posts its jobs, as `links` (links to its postings) name
+    them: each board once, in the links' order, and only when it carries the company's name (_carries_name)."""
+    found = {}
+    for link in links:
+        board = boards.board_of(link) if isinstance(link, str) else None
+        if board and _carries_name(board, name, domain):
+            found.setdefault((board["ats"], board["slug"]), board)
+    return list(found.values())
+
+
+def _words(text):
+    return set(re.findall(r"[a-z0-9]+", text.casefold()))
+
+
+def targets_role(title, profile):
+    """True when a posting's title holds every word of one of the profile's target roles, in any order: "Senior
+    Engineer, Data Platform" for "data engineer", not "Data Engineering Manager". A job board lists every job of
+    the company, where a search is asked for the target roles; the screen and the scorer judge what passes."""
+    words = _words(title)
+    return any(wanted and wanted <= words for wanted in map(_words, profile["search"]["roles"]))
+
+
+def board_role(posting, board, domain):
+    """A job board's posting as an open role, live because the board lists it, with the board's text of it as
+    `description`. Its link is the one the board gives when that is on a site where the company posts its jobs
+    itself (a board can name the posting's page on the company's own careers site), else the posting on the board."""
+    role = {
+        "title": posting["title"],
+        "url": posting["url"] if _posts_own_jobs(posting["url"], domain) else posting["hosted"],
+        "location": posting["location"] or "unknown",
+        "remote_or_relocation": posting["remote"] or "unknown",
+        "link_status": "live",
+    }
+    if posting["text"]:
+        role["description"] = posting["text"][:DESCRIPTION_CHARS]
+    return role
+
+
+def _on_boards(name, domain, links):
+    """What the company's job boards list as open now: (roles, pages, problems).
+
+    roles: every posting of the boards that answered and list at least one, each as `board_role` gives it, each
+    posting once; [] when no board is known or none answered. A board that lists nothing is not counted as read:
+    a company that moved to another board leaves an empty one behind.
+    pages: the address of each board read. problems: a line for each board whose feed could not be read.
+    """
+    roles, pages, problems = {}, [], []
+    for board in company_boards(name, domain, links):
+        state, postings = board_postings(board)
+        if state == "unknown":
+            logger.warning("%s: %s could not be read", name, boards.label(board))
+            problems.append(f"Job board could not be read: {boards.label(board)}")
+        if not postings:
+            continue
+        pages.append(boards.page(board))
+        for posting in postings:
+            if posting["title"]:
+                role = board_role(posting, board, domain)
+                roles.setdefault(_posting_key(role["url"]), role)
+    return list(roles.values()), pages, problems
+
+
+def seniority_first(roles, profile):
+    """Roles with the ones whose title names a target seniority first, otherwise in the order given (a job board
+    lists its newest first)."""
+    wanted = set().union(*map(_words, profile["search"]["seniority"]))
+    return sorted(roles, key=lambda role: not wanted & _words(role["title"]))
+
+
+def _joined(roles, listed):
+    """The open roles of the main search and of a second source that lists the company's postings (Fiber, the
+    company's job board), as one list: (kept, theirs, main_links).
+
+    A posting both list keeps the main search's link, unless only the other's is live: that link is the one
+    earlier runs saved, and the dashboard keeps the owner's status and note by link. Checked links come first, so
+    an unverified one never pushes a live one past the cap: the second source's before the main search's that it
+    does not list, MAX_ROLES in all. theirs: how many of the kept are postings the second source lists.
+    main_links: whether a kept link is the main search's.
+    """
+    mains = {}  # the main search's copy of each posting: its live one when it lists a posting twice
+    for role in roles:
+        key = _posting_key(role["url"])
+        if key not in mains or (role["link_status"] == "live" and mains[key]["link_status"] != "live"):
+            mains[key] = role
+    theirs = {}
+    for role in listed:
+        key = _posting_key(role["url"])
+        same = mains.get(key)
+        theirs[key] = same if same and (same["link_status"] == "live" or role["link_status"] != "live") else role
+    only_main = [role for role in roles if _posting_key(role["url"]) not in theirs]
+    kept = sorted([*theirs.values(), *only_main], key=lambda role: role["link_status"] != "live")[:MAX_ROLES]
+    return kept, sum(_posting_key(role["url"]) in theirs for role in kept), any(role is copy for role in kept for copy in roles)
+
+
+def research_company(name, domain, profile, *, fiber=False, search_type="auto", known_links=()):
     """Research one company.
 
     Returns {"name", "domain", "content": <schema dict>, "grounding": {field: {confidence, urls}},
-    "role_source": "main" | "fiber" | "fiber+main" | "ats_fallback" | "none" (or the first three with
-    "+ats_fallback"), "dead_roles": [{"title", "url"}], "third_party_roles": [<role as listed>],
-    "warnings": [str]}.
+    "role_source": "main" | "board" | "board+main" | "fiber" | "fiber+main" | "ats_fallback" | "none" (or "main",
+    "fiber" and "fiber+main" with "+ats_fallback"), "dead_roles": [{"title", "url"}],
+    "third_party_roles": [<role as listed>], "warnings": [str]}.
     Open roles are postings where the company posts its jobs itself (_posts_own_jobs): every such URL is checked
     and dead ones are dropped. A posting the main search lists on a third-party site is never an open role: it is
-    a lead. With fiber (hunt.py run --fiber), a verified company's open postings are also asked from Fiber's jobs
-    database: live links first, Fiber's before the main search's that it does not list, then unverified ones,
-    MAX_ROLES in all. If no live role remains for a verified company, or no open role stands for one of its leads,
-    a second search restricted to its own site and the ATS domains looks for postings (also checked) and adds the
-    ones not listed yet. The leads still not found are returned as "third_party_roles". When the Fiber search or
-    the ATS search fails, the main research is kept and the failure is listed in "warnings".
+    a lead.
+
+    A verified company's job board is read when it has a public feed (clients/boards.py) and the board is known:
+    from a posting link of the main search, or from `known_links`, the posting links earlier runs saved for the
+    company. The board lists every open posting, so its postings in the target roles (targets_role), and the ones
+    a lead names, are the open roles, live without a check and with the board's text: its own before the main
+    search's that it does not list, MAX_ROLES in all. Neither Fiber nor the ATS search is then asked.
+
+    Without a board that answers: with fiber (hunt.py run --fiber), the company's open postings are also asked
+    from Fiber's jobs database, joined the same way; and if no live role remains, or no open role stands for one
+    of its leads, a second search restricted to its own site and the ATS domains looks for postings (also
+    checked) and adds the ones not listed yet. The leads still not found are returned as "third_party_roles".
+    When a board cannot be read, or the Fiber search or the ATS search fails, the main research is kept and the
+    failure is listed in "warnings".
     """
     query = (
         f"{name} ({domain}): what the company does, recent funding and growth signals, and its data/analytics "
@@ -654,45 +795,49 @@ def research_company(name, domain, profile, *, fiber=False, search_type="auto"):
     role_source = "main" if roles else "none"
 
     warnings = []
-    if fiber and content["identity_verified"]:
+    second, listed, listed_grounding = None, [], None  # a second source of the company's postings, and what it lists
+    on_boards, pages = [], []
+    if content["identity_verified"]:
+        on_boards, pages, problems = _on_boards(name, domain, [*(role["url"] for role in own), *known_links])
+        warnings += problems
+    if pages:
+        looked_for = [_title_key(lead["title"]) for lead in _not_found(leads, roles)]
+        listed = seniority_first(
+            [role for role in on_boards if targets_role(role["title"], profile)
+             or any(title in _title_key(role["title"]) for title in looked_for)],
+            profile,
+        )
+        second, listed_grounding = "board", {"confidence": "high", "urls": pages}
+    elif fiber and content["identity_verified"]:
         try:
             listed, listed_grounding = find_roles_on_fiber(name, domain, profile)
         except Exception as exc:  # a second source: the main research is still worth saving
             logger.warning("%s: Fiber job search failed (%s); keeping the main search's roles", name, exc)
             warnings.append(f"Fiber job search failed: {type(exc).__name__}: {exc}")
             listed, listed_grounding = [], None
-        from_fiber, dead = verify_roles(listed)
+        listed, dead = verify_roles(listed)
         dead_roles += [d for d in dead if d not in dead_roles]
-        if from_fiber:
-            mains = {}  # the main search's copy of each posting: its live one when it lists a posting twice
-            for role in roles:
-                key = _posting_key(role["url"])
-                if key not in mains or (role["link_status"] == "live" and mains[key]["link_status"] != "live"):
-                    mains[key] = role
-            # A posting both list keeps the main search's link, unless only Fiber's is live: that link is the one
-            # earlier runs saved, and the dashboard keeps the owner's status and note by link.
-            theirs = {}
-            for role in from_fiber:
-                key = _posting_key(role["url"])
-                same = mains.get(key)
-                theirs[key] = same if same and (same["link_status"] == "live" or role["link_status"] != "live") else role
-            only_main = [role for role in roles if _posting_key(role["url"]) not in theirs]
-            # Checked links first: an unverified one must not push a live one past the cap.
-            kept = sorted([*theirs.values(), *only_main], key=lambda role: role["link_status"] != "live")[:MAX_ROLES]
-            fibers = sum(_posting_key(role["url"]) in theirs for role in kept)
-            if fibers:
-                main_links = any(role is copy for role in kept for copy in roles)
-                roles = content["open_roles"] = kept
-                role_source = "fiber+main" if fibers < len(kept) else "fiber"
-                # Cite what the kept links came from, Fiber's sources first, at the lower of the two confidences.
-                cited = [g for g in (listed_grounding, grounding.get("open_roles") if main_links else None) if g]
-                if cited:
-                    grounding["open_roles"] = _cited(cited)
-                else:
-                    grounding.pop("open_roles", None)
+        second = "fiber"
+    if listed:
+        kept, theirs, main_links = _joined(roles, listed)
+        if theirs:
+            texts = {_posting_key(role["url"]): role["description"] for role in listed if role.get("description")}
+            # a posting under the main search's link gets the text its board has for it
+            roles = content["open_roles"] = [
+                role if role.get("description") or _posting_key(role["url"]) not in texts
+                else {**role, "description": texts[_posting_key(role["url"])]}
+                for role in kept
+            ]
+            role_source = f"{second}+main" if theirs < len(kept) else second
+            # Cite what the kept links came from, the second source's first, at the lower of the two confidences.
+            cited = [g for g in (listed_grounding, grounding.get("open_roles") if main_links else None) if g]
+            if cited:
+                grounding["open_roles"] = _cited(cited)
+            else:
+                grounding.pop("open_roles", None)
 
     wanted = _not_found(leads, roles)
-    if content["identity_verified"] and (not roles or wanted):
+    if content["identity_verified"] and not pages and (not roles or wanted):
         logger.info("%s: %s; trying ATS fallback", name,
                     f"{len(wanted)} posting(s) only on third-party sites" if roles else "no live roles so far")
         try:

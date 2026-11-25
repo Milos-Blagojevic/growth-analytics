@@ -1,6 +1,6 @@
 # External service clients
 
-Thin clients for the outside services the other folders share: Exa search, TypeSafe's Jev decision model, Ashby job boards, Telegram and PostHog. Each one is the only place in the repo that talks to its service.
+Thin clients for the outside services the other folders share: Exa search, TypeSafe's Jev decision model, job boards' public feeds, Telegram and PostHog. Each one is the only place in the repo that talks to its service.
 
 ## Files
 
@@ -8,7 +8,7 @@ Thin clients for the outside services the other folders share: Exa search, TypeS
 |---|---|
 | `exa_client.py` | Exa client: the only place that talks to Exa, for search, contents, agent runs and monitors (retries, cost logging, cost tally) |
 | `jev.py` | TypeSafe's Jev decision model: the only place that calls TypeSafe (retries, usage tally, cost per token) |
-| `ashby.py` | Ashby public job-board API client (used by posting link checks) |
+| `boards.py` | Job boards with a public feed that needs no key (Ashby, Greenhouse, Lever, Workable, SmartRecruiters, Recruitee, Teamtailor, Personio, Pinpoint): a company's open postings, and a posting's application questions |
 | `telegram.py` | Telegram delivery and `getUpdates` polling for the chat bot |
 | `posthog_client.py` | PostHog: the only place that talks to PostHog, for the dashboard's events and errors, the MCP endpoint's tool calls (PostHog's MCP Analytics SDK), a generation per model call and the commands' log records (off without its two settings; never sends text), and the settings of the dashboard's opt-in Support widget, the one exception (`support_widget`) |
 
@@ -113,6 +113,34 @@ A monitor is a search that Exa runs by itself every period (1 hour at least) and
 - **Schedule.** Only an interval. Exa sets a new monitor's first run itself (9 to 72 minutes after the create in the first trials, for a 4-hour period) and `next_run_at` a moment after the create, so read it with `get_monitor`. An update that sends the trigger the monitor already has leaves its cycle alone. After an update to another period Exa sets the next run itself, within one new period: going from 4h to 12h, some monitors kept the run already set and the others got one up to 12 hours after the update.
 - **Webhook.** Required on every monitor: a public HTTPS address (Exa refuses `localhost`, private addresses and `example.com`), called for the events the monitor subscribes to. The runs can be read instead, with `monitor_runs` and `monitor_run_output`.
 - **Runs.** `monitor_runs` gives each run's `id`, `status`, `fail_reason` (`insufficient_credits`, `source_not_available`, ...) and `empty`: true when the list of runs itself says the run found nothing new, so only the others are read by id with `monitor_run_output`. Both read Exa's JSON as it comes, not through the SDK's run models, which refuse a whole run for one grounding row without a confidence or a citation: as with a search's, grounding is optional, and odd rows are left out.
+
+## Job boards
+
+`clients/boards.py` reads the feed that a company's job board publishes without a key. It costs nothing and is the only place that talks to these boards. The run, the monitors, the follow-ups and the application kit use it (see Job boards in [Run](../pipeline/README.md#run)).
+
+```python
+from clients import boards
+
+board = boards.board_of("https://jobs.ashbyhq.com/acme/1111")   # {"ats": "ashby", "slug": "acme", "host": "jobs.ashbyhq.com"}
+state, postings = boards.fetch(board)                           # "ok", [{"id", "title", "url", "hosted", "location", "remote", "posted", "text"}]
+boards.posting_id("https://apply.workable.com/j/5C0FFEE123")    # ("workable", "5C0FFEE123")
+boards.questions("https://job-boards.greenhouse.io/acme/jobs/333")  # [{"question", "required"}]
+```
+
+| Function | Purpose |
+|---|---|
+| `board_of(url)` | The board a posting link is on, or `None` for a link on no board with a feed (and for one that names no board, such as `apply.workable.com/j/<id>`). |
+| `fetch(board)` | Every posting the board lists as open now: `(state, postings)`. `state` is `ok`, `missing` (the board does not exist: 404) or `unknown` (the request failed, or the answer is not the feed's format). A posting's `url` is the link the feed names for it, which can be a page of the company's own careers site; `hosted` is the posting on the board's own host. `remote` is `remote`, `hybrid`, `on-site` or empty; `posted` a date or empty; `text` the posting as plain text. |
+| `posting_id(url)` | Which posting of its board a link is: `(ats, id)`, the same for every form the board gives the link. |
+| `questions(url, board=None)` | The questions a posting's application form asks for a written answer, without the fields for a name, a CV or a link; at most `MAX_QUESTIONS`. `[]` for a board that does not show its form, and when the request fails. |
+| `page(board)`, `label(board)` | The board's own page, and the board in a few words ("Ashby board acme"). |
+
+- **Feeds.** Ashby's [posting API](https://developers.ashbyhq.com/docs/public-job-posting-api), Greenhouse's [Job Board API](https://developers.greenhouse.io/job-board) (also for its EU boards), Lever's postings API (`api.lever.co`, `api.eu.lever.co` for an EU board), Workable's widget API, SmartRecruiters' posting API, Recruitee's `/api/offers/`, Teamtailor's `/jobs.rss`, Personio's `/xml` and Pinpoint's `/postings.json`. Each was read live against real boards when this was written (November 2026).
+- **What a feed does not have.** SmartRecruiters' list carries no posting text, and answers a company it does not know like one with nothing open, so a board of its without a posting reads as `unknown`. Pinpoint gives no date. Greenhouse and Personio do not say whether a posting is remote: its text does.
+- **Application questions.** Greenhouse answers them in its documented API (`?questions=true`). Ashby's come from the API its own hosted posting page reads its form from, which is not documented: when it changes, `questions` returns `[]`. The other boards do not show their forms without a key.
+- **Untrusted content.** Everything a board returns is a company's text on a web page. Titles are put on one line, markup is reduced to its text, a posting without a usable link is left out, and an XML feed with a document type is not parsed. Callers pass it on as a posting's fields and never as instructions.
+- **Requests.** Plain `requests` calls with a 15-second timeout and no retries: a feed that fails is `unknown`, and the caller goes on without it (the run asks its searches, the monitor reports the board and reads it again at the next check).
+- **Tests.** `tests/boards_mock.py` holds each feed's wire format.
 
 ## Jev screening
 

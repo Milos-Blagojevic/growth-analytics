@@ -217,6 +217,10 @@ select { padding: 8px 10px; cursor: pointer; }
 .roles li a:hover { color: var(--accent); }
 .roles.dead li { opacity: 0.6; text-decoration: line-through; text-decoration-color: var(--muted); }
 
+/* application kit in the detail panel */
+.kit-part { margin: 14px 0 6px; font-weight: 600; }
+.kit-text { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); white-space: pre-line; }
+
 .history { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .history svg { overflow: visible; }
 .history polyline { fill: none; stroke: var(--vc, var(--accent)); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
@@ -381,6 +385,7 @@ ul.plain.warn li::before { content: "⚠ "; color: var(--stretch); }
 .run-meta.live { color: var(--stretch); }
 .run-meta.live:hover { color: #fff; }
 .sheet-body section.actions { border-bottom: 0; }
+.actions .btn-row { flex-wrap: wrap; }
 .table.monitors td { vertical-align: middle; }  /* each row holds an Edit button */
 .table tbody + tbody tr:first-child td { border-top: 1px solid var(--border); }  /* Monitors: the rows "Show all" adds */
 .show-more { margin-top: 10px; }

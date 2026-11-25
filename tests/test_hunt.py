@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import boards_mock
 import hunt
 from clients import jev
 from dashboard_data import INTERVIEW_TURNS, PREP, review_fields, wispr, write_interview
@@ -173,6 +174,26 @@ def test_run_with_fiber_takes_open_roles_from_fiber_and_records_it(exa, http, wo
     out = capsys.readouterr().out
     assert "Open roles also come from Fiber's jobs database" in out
     assert "roles: 1 (source: fiber)\n  - Data Engineer, Product | Remote | Remote (EU) | https://jobs.ashbyhq.com/acme/3333" in out
+
+
+def test_a_later_run_reads_the_job_board_an_earlier_run_found_and_asks_fiber_nothing(exa, http, workdir, capsys):
+    (workdir / "companies.csv").write_text("Acme,https://www.Acme.com/\n")
+    earlier = workdir / "out" / "20261101-080000"
+    earlier.mkdir(parents=True)
+    (earlier / "acme.com.json").write_text(json.dumps({"name": "Acme", "domain": "acme.com", "research": {
+        "content": {"open_roles": []}, "dead_roles": [{"title": "Closed since", "url": "https://jobs.ashbyhq.com/Acme/0000"}]}}))
+    exa.on_search(structured_response(company("Acme", "acme.com", [])))  # the search finds no posting this time
+    boards_mock.ashby(http, "acme", boards_mock.ashby_job("3333", "Senior Analytics Engineer", text="dbt, Snowflake."))
+
+    assert hunt.cmd_run(run_args(research_only=True, fiber=True)) == 0
+
+    newest = max(path for path in (workdir / "out").iterdir())
+    research = json.loads((newest / "acme.com.json").read_text())["research"]
+    assert research["role_source"] == "board"
+    assert [(r["title"], r["url"], r["description"]) for r in research["content"]["open_roles"]] == [
+        ("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/3333", "dbt, Snowflake.")]
+    assert exa.requests(AGENT_URL) == [] and len(exa.requests()) == 1  # no Fiber agent run, no ATS search
+    assert "roles: 1 (source: board)" in capsys.readouterr().out
 
 
 def test_ctrl_c_during_a_run_cancels_the_agent_runs_its_workers_wait_for(exa, http, workdir):

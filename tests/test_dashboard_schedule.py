@@ -31,6 +31,9 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
     four_times, dry, sync = schedule.parse("0 8,12,16,20 * * * monitor; 0 9 * * * monitor --dry-run; 30 7 * * 1 monitor-sync")
     assert (four_times.form, four_times.hours) == ({"kind": "monitor", "dry_run": ""}, frozenset({8, 12, 16, 20}))
     assert (dry.form, sync.form) == ({"kind": "monitor", "dry_run": "1"}, {"kind": "monitor_sync"})
+    daily, printed = schedule.parse("0 9 * * * followup; 30 9 * * 1 followup --dry-run")
+    assert (daily.form, daily.hours, daily.minutes) == ({"kind": "followup", "dry_run": ""}, frozenset({9}), frozenset({0}))
+    assert printed.form == {"kind": "followup", "dry_run": "1"}
 
 
 @pytest.mark.parametrize(
@@ -46,6 +49,8 @@ def test_parse_reads_lines_and_semicolons_and_skips_comments():
         ("0 7 * * * discover --verbose", "unsupported command"),
         ("0 7 * * * monitor-sync --dry-run", "unsupported command"),
         ("0 7 * * * monitor --state other.json", "unsupported command"),
+        ("0 7 * * * followup --state other.json", "unsupported command"),
+        ("0 7 * * * followup --db other.db", "unsupported command"),
         ("0 24 * * * run", "hour '24'"),
         ("0 7 * * mon run", "day of week 'mon'"),
         ("0 7 30 2 * run", "never occurs"),

@@ -47,7 +47,7 @@ def _isolate(monkeypatch, http):
     monkeypatch.setattr(jev, "BACKOFF_BASE_SECONDS", 0)
     exa_client.reset_costs()
     jev.reset()
-    research._ashby_board.cache_clear()
+    research._board.cache_clear()
     yield
     posthog_client.shutdown()  # a test that turned PostHog on: what it queued is sent here, into the mock
 

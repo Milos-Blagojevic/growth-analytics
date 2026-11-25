@@ -21,8 +21,12 @@ def get(conn, kind, ref):
     return {"kind": kind, "ref": ref, "status": "new", "notes": "", "applied_at": None, "updated_at": None}
 
 
-def update(conn, kind, ref, *, status=None, notes=None):
-    """Sets the status and/or notes. A "new" item without notes is not stored. Returns the stored state."""
+def update(conn, kind, ref, *, status=None, notes=None, applied_at=None):
+    """Sets the status and/or notes. A "new" item without notes is not stored. Returns the stored state.
+
+    `applied_at` is when the application was sent, if known (ISO local time, such as when its confirmation email
+    came). It is used only when the item has no applied date yet and the new status is one of APPLIED; without it
+    the date is the moment the status is set."""
     if kind not in KINDS or not ref:
         raise ValueError(f"unknown item {kind}:{ref}")
     if status is not None and status not in STATUSES:
@@ -31,7 +35,7 @@ def update(conn, kind, ref, *, status=None, notes=None):
     status = status or current["status"]
     notes = current["notes"] if notes is None else notes.strip()
     now = datetime.now().isoformat(timespec="seconds")
-    applied_at = current["applied_at"] or (now if status in APPLIED else None)
+    applied_at = current["applied_at"] or ((applied_at or now) if status in APPLIED else None)
     with conn:
         if status == "new" and not notes:
             conn.execute("DELETE FROM tracking WHERE kind = ? AND ref = ?", [kind, ref])

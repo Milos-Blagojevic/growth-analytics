@@ -43,6 +43,14 @@
   </form>
 
   <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
+    <input type="hidden" name="kind" value="followup">
+    <h2>Follow-ups</h2>
+    <p class="muted small">Lists the applications on <a class="link" href="/pipeline">Pipeline</a> that have had no reply for 8 days, each once, with whether its posting is still open, and sends the list to Telegram. Free.</p>
+    <label class="check"><input type="checkbox" name="dry_run" value="1"> Dry run (don't send or save)</label>
+    <button class="btn primary" type="submit">Review and start…</button>
+  </form>
+
+  <form class="launcher" hx-post="/runs/preview" hx-target="#panel">
     <input type="hidden" name="kind" value="news">
     <h2>News digest</h2>
     <p class="muted small">Recent articles on your <code>[news].topics</code>, screened and summarised for Telegram. Exa + Jev + Claude.</p>
@@ -55,7 +63,7 @@
   <h2>Monitors <span class="count">{{ monitored | length }}</span>
     <button class="btn primary sm" type="button" hx-get="/runs/monitors/new" hx-target="#panel" {{ 'disabled' if monitors_error }}>New monitor</button>
   </h2>
-  <p class="muted small">Exa searches each company's own site and job boards for new postings in your target roles every 12 hours, about $0.12 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>: New, Edit and Remove change it and start <code>monitor-sync</code>, which creates, updates and deletes the monitors to match.</p>
+  <p class="muted small">New postings in your target roles at the companies you pick. A company whose job board has a public feed is read from the board, free; for every other one Exa searches its own site and job boards every 12 hours, about $0.12 a month per company. <code>monitor</code> in <code>HUNT_SCHEDULE</code> reads what they found and sends the postings that suit you to Telegram. The list is <code>monitors.csv</code>: New, Edit and Remove change it and start <code>monitor-sync</code>, which settles how each company is read and creates, updates and deletes the monitors to match.</p>
   {% if monitors_error %}
   <div class="note error">{{ monitors_error }}</div>
   {% elif monitored %}
@@ -64,7 +72,7 @@
         <td class="pick"><input type="checkbox" name="domains" value="{{ m.domain }}" aria-label="Select {{ m.name }}" onchange="pickMonitors()"></td>
         <td>{{ m.name }}</td>
         <td class="muted">{{ m.domain }}</td>
-        <td class="muted">{% if m.on_exa %}on Exa{% if m.since %} since {{ m.since[:10] }}{% endif %}{% else %}not on Exa yet{% endif %}</td>
+        <td class="muted">{% if m.board %}job board at {{ m.board }}{% elif m.on_exa %}on Exa{% else %}not on Exa yet{% endif %}{% if m.since and (m.board or m.on_exa) %} since {{ m.since[:10] }}{% endif %}</td>
         <td class="nowrap"><button class="btn ghost sm" type="button" hx-get="/runs/monitors/edit?domain={{ m.domain | urlencode }}" hx-target="#panel" aria-label="Edit {{ m.name }}">Edit</button></td>
       </tr>
   {% endmacro %}

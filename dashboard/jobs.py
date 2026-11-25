@@ -44,19 +44,26 @@ FIBER_DOLLARS_PER_COMPANY = (0.09, 0.40)
 MAIL_ESTIMATE = ("Jev (when TYPESAFE_API_KEY is set): one request per application email, a fraction of a cent in total. "
                  "Claude: one call per 20 application emails Jev does not rule out, a few cents each; none when no "
                  "email looks like one. Reading Outlook is free.")
+# inbox/README.md, Follow-ups: no model is asked and no search is made.
+FOLLOWUP_ESTIMATE = ["Free: no Exa, Jev or Claude call. It reads hunt.db, the saved email updates (mail/), job "
+                     "boards' public feeds and the posting pages of your applications."]
 NEWS_ESTIMATE = ["Exa: about $0.007 per search, one per [news].topics entry.",
                  "Jev (when TYPESAFE_API_KEY is set): one request per new article, a fraction of a cent in total.",
                  "Claude: one call, a few cents; none when no new article is relevant."]
 # pipeline/README.md, Monitors: Exa bills the monitors' own runs, not the commands that manage or read them.
-MONITOR_ESTIMATE = ["Exa: reading the monitors' runs is free; about $0.001 for a posting whose link is unclear or "
-                    "whose page a run did not fetch.",
+MONITOR_ESTIMATE = ["Reading the job boards and the monitors' runs is free; Exa: about $0.001 for a posting whose "
+                    "link is unclear or whose text neither a board nor a run has.",
                     "Jev (when TYPESAFE_API_KEY is set): one request per new posting, a fraction of a cent in total.",
                     f"Claude: one call per new posting Jev does not rule out, about ${CLAUDE_DOLLARS_PER_COMPANY:.3f} "
-                    "each (the same call as a company's in a run); none when nothing is new."]
-MONITOR_SYNC_ESTIMATE = ["Free by itself. Exa then bills every monitor $0.002 a run, two runs a day: about $0.12 a "
-                         f"month for each company in {runs.MONITORS}."]
+                    "each (the same call as a company's in a run); none when nothing is new. The first check of a "
+                    "company's job board judges every posting in your target roles that is open there, some of "
+                    "them at later checks when there are many."]
+MONITOR_SYNC_ESTIMATE = ["Free by itself. A company whose job board has a public feed is read from the board, free. "
+                         "Exa bills every other company's monitor $0.002 a run, two runs a day: about $0.12 a month "
+                         "each."]
 MONITOR_SYNC_WARNINGS = [f"Creates, updates and deletes monitors on your Exa account to match {runs.MONITORS}, and "
-                         "records them in monitor_state.json.",
+                         "records them in monitor_state.json. The monitor of a company that is read from its job "
+                         "board is deleted.",
                          "A new monitor runs, billed, every 12 hours until a later sync deletes it."]
 
 
@@ -147,6 +154,13 @@ def build(conn, root, form):
         return Spec("mail", ["mail"] + (["--dry-run"] if dry else []), "Check email" + (" (dry run)" if dry else ""),
                     {"kind": kind, "dry_run": "1" if dry else ""}, estimate=[MAIL_ESTIMATE], warnings=warnings,
                     options={"dry_run": dry})
+    if kind == "followup":
+        dry = form.get("dry_run") == "1"
+        warnings = [] if dry else ["Sends the applications without a reply to Telegram and records them in "
+                                   "followup_state.json, so each is reported once."]
+        return Spec("followup", ["followup"] + (["--dry-run"] if dry else []),
+                    "Follow-ups" + (" (dry run)" if dry else ""), {"kind": kind, "dry_run": "1" if dry else ""},
+                    estimate=FOLLOWUP_ESTIMATE, warnings=warnings, options={"dry_run": dry})
     if kind == "news":
         dry = form.get("dry_run") == "1"
         warnings = [] if dry else ["Sends the digest to Telegram and records the articles in news_state.json."]
@@ -165,6 +179,8 @@ def build(conn, root, form):
                     warnings=MONITOR_SYNC_WARNINGS)
     if kind in ("interview_prep", "interview_review"):
         return _build_interview(root, kind, form.get("interview", ""))
+    if kind == "apply_kit":
+        return _build_apply_kit(conn, root, str(form.get("domain") or ""))
     raise ValueError(f"unknown job kind {kind!r}")
 
 
@@ -199,6 +215,35 @@ def _build_interview(root, kind, interview_id):
         warnings.append("Replaces the current review (the progress table keeps only the latest one).")
     return Spec(kind, args, f"Interview review · {name}", fields,
                 estimate=[f"{CLAUDE_INTERVIEW_ESTIMATE} The transcript has about {words:,} words."], warnings=warnings)
+
+
+APPLY_KIT_ESTIMATE = ["Claude: one call, a few cents; the saved kit records the actual tokens.",
+                      "Exa: about $0.001 when the posting text has to be fetched: the saved run has none and the "
+                      "company's job board does not list it."]
+
+
+def _build_apply_kit(conn, root, given):
+    """The application kit of one company. The command gets the domain as the board spells it, and only that of a
+    company whose latest scored result has a posting link: never the form's own text, which could read as an option
+    of hunt.py or name another file."""
+    domain = runs.normalize_domain(given)
+    if domain.startswith("-"):
+        raise ValueError("domain cannot start with a dash: hunt.py would read it as an option")
+    kit = runs.kit_path(root, domain)
+    row = conn.execute(
+        "SELECT name, best_role_url FROM results WHERE domain = ? AND score IS NOT NULL ORDER BY run_id DESC LIMIT 1",
+        [domain],
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown company: {domain}")
+    if not (row["best_role_url"] or "").strip():
+        raise ValueError(f"{row['name']} has no posting to apply to: its latest scored result names no posting link")
+    warnings = ["Sends your profile, CV, the posting and its application questions to Claude.",
+                "Reads the posting's application form from its job board (Greenhouse and Ashby show the questions)."]
+    if kit.exists():
+        warnings.append("Replaces the current application kit.")
+    return Spec("apply_kit", ["apply-kit", domain], f"Application kit · {row['name']}",
+                {"kind": "apply_kit", "domain": domain}, estimate=APPLY_KIT_ESTIMATE, warnings=warnings)
 
 
 def _build_run(conn, root, form):

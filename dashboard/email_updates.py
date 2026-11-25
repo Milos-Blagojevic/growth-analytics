@@ -76,7 +76,8 @@ def suggestions(conn):
 
 def decide(conn, update_id, action, kind="", ref=""):
     """Applies the suggested status to the tracked item (kind, ref), adds the update to the pipeline as a new item
-    with that status ("add", for an update that matches no tracked item), or dismisses the update.
+    with that status ("add", for an update that matches no tracked item), or dismisses the update. An application
+    confirmation gives the item the email's date as the day it was applied to, unless it has one already.
     Raises LookupError for an unknown or handled update, ValueError for an item the update cannot apply to."""
     if action not in ACTIONS:
         raise ValueError(f"unknown action {action!r}")
@@ -101,9 +102,38 @@ def decide(conn, update_id, action, kind="", ref=""):
             )
     elif not any(i["kind"] == kind and i["ref"] == ref for i in suggestion["targets"]):
         raise ValueError("This email does not match that application.")
-    tracking.update(conn, kind, ref, status=suggestion["status"])
+    # A confirmation says when the application was sent; a rejection or an invite says nothing about that.
+    applied_at = suggestion["received_at"] if suggestion["status"] == "applied" else None
+    tracking.update(conn, kind, ref, status=suggestion["status"], applied_at=applied_at)
     with conn:
         conn.execute(
             "INSERT INTO mail_decisions (update_id, decision, kind, ref, status, decided_at) VALUES (?, 'applied', ?, ?, ?, ?)",
             [update_id, kind, ref, suggestion["status"], now],
         )
+
+
+def confirmable(suggested):
+    """The suggestions `confirm_applied` can answer without asking: application confirmations that match no tracked
+    application or exactly one."""
+    return [s for s in suggested if s["status"] == "applied" and len(s["targets"]) <= 1]
+
+
+def confirm_applied(conn):
+    """Confirms every pending application confirmation in one go, oldest first: one that matches no tracked
+    application is added to the pipeline (as "add" does), one that matches exactly one is applied to it, one that
+    matches several is left for you to pick. Returns how many it confirmed.
+
+    Each is looked at again right before it is confirmed: adding one application can answer a later confirmation
+    from the same company, which then needs nothing and is not counted."""
+    confirmed = 0
+    for update_id in [s["id"] for s in reversed(confirmable(suggestions(conn)))]:
+        current = confirmable([s for s in suggestions(conn) if s["id"] == update_id])
+        if not current:
+            continue
+        targets = current[0]["targets"]
+        if targets:
+            decide(conn, update_id, "apply", targets[0]["kind"], targets[0]["ref"])
+        else:
+            decide(conn, update_id, "add")
+        confirmed += 1
+    return confirmed

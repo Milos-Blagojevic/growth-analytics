@@ -13,7 +13,8 @@ from clients import posthog_client
 from dashboard import __main__ as entry
 from dashboard import db, jobs, projects, queries, schedule
 from dashboard.app import create_app
-from dashboard_data import BASE_URL, INTERVIEW_TURNS, fit, mail_update, result, wispr, write_mail, write_run
+from dashboard_data import BASE_URL, INTERVIEW_TURNS, KIT, fit, mail_update, result, wispr, write_kit, write_mail
+from dashboard_data import write_run
 from dashboard_data import client as make_client
 from test_dashboard_jobs import STUB, finished, started_job_id
 
@@ -133,6 +134,57 @@ def test_third_party_listings_show_on_the_card_and_in_the_details_and_old_result
     assert "Seen only on third-party sites" in page
     assert (f'<a href="{listing[1]}" target="_blank" rel="noopener">Head of Data &lt;b&gt;Science&lt;/b&gt;</a>\n'
             '        <span class="muted small">hirify.me</span>') in page
+
+
+def test_company_panel_offers_an_application_kit_only_with_a_posting_and_shows_the_saved_one_as_text(client, root):
+    page = client.get("/c/acme.com").text
+    assert "Write application kit…" in page and '"kind": "apply_kit"' in page and "Application kit</div>" not in page
+    assert "application kit" not in client.get("/c/gamma.dev").text.lower()  # a skip: no posting to apply to
+
+    write_kit(root, "acme.com", title="Analytics <b>Engineer</b>", kit=KIT | {
+        "lead_with": ["dbt at <i>Tenderly</i>"],
+        "note": "Hello,\n\n<script>alert(1)</script> I built the data layer.",
+        "answers": [{"question": "Why <u>Acme</u>?", "answer": "<img src=x onerror=alert(2)>\nSecond line."}],
+        "check": ["<a href=//evil.example>verify</a> the user count"]})
+    for panel in (client.get("/c/acme.com").text, client.get("/c/acme.com", headers={"HX-Request": "true"}).text):
+        assert "Rewrite application kit…" in panel and "Write application kit…" not in panel
+        assert "Application kit</div>" in panel and "Written for another posting" not in panel
+        assert ('<a href="https://acme.com/2" target="_blank" rel="noopener">Analytics &lt;b&gt;Engineer&lt;/b&gt; ↗</a>'
+                in panel)
+        assert "<li>dbt at &lt;i&gt;Tenderly&lt;/i&gt;</li>" in panel
+        # The note's line breaks are kept as text (the style sheet shows them), and its markup is shown, not run.
+        assert ('<p class="kit-text">Hello,\n\n&lt;script&gt;alert(1)&lt;/script&gt; I built the data layer.</p>'
+                in panel)
+        assert '<div class="kit-part">Why &lt;u&gt;Acme&lt;/u&gt;?</div>' in panel
+        assert '<p class="kit-text">&lt;img src=x onerror=alert(2)&gt;\nSecond line.</p>' in panel
+        assert "<li>&lt;a href=//evil.example&gt;verify&lt;/a&gt; the user count</li>" in panel
+        assert "4,000 / 700 tokens" in panel
+        for markup in ("<script>alert(1)", "<img src=x", "<b>Engineer", "<i>Tenderly", "<u>Acme", "<a href=//evil"):
+            assert markup not in panel, markup
+    assert re.search(r"\.kit-text \{[^}]*white-space: pre-line", client.get("/static/app.css").text)
+
+    write_kit(root, "acme.com", url="https://acme.com/1", kit=KIT | {"answers": []})  # the role of an earlier run
+    page = client.get("/c/acme.com").text
+    assert "Written for another posting than the current best role." in page
+    assert "No written questions were found on the posting's application form." in page
+    write_kit(root, "acme.com", url="javascript:alert(3)")  # a file changed by hand: never a link to follow
+    page = client.get("/c/acme.com").text
+    assert "Application kit</div>" in page and "javascript:alert(3)" not in page
+
+
+def test_an_application_kit_that_cannot_be_read_is_reported_and_the_company_page_still_loads(client, root):
+    (root / "kits").mkdir()
+    (root / "kits" / "acme.com.json").write_text('{"created_at": "2026-10-19T09:00:00", "kit": {"note": "He')
+    write_kit(root, "beta.io", url="https://beta.io/g", kit={"note": "Only a note."})  # an older shape, say
+
+    for domain in ("acme.com", "beta.io"):
+        page = client.get(f"/c/{domain}")
+        assert page.status_code == 200 and "Write application kit…" in page.text
+        assert "Application kit</div>" not in page.text
+        assert "Some saved files could not be read" in page.text
+        assert "kits/acme.com.json: JSONDecodeError" in page.text and "kits/beta.io.json: KeyError" in page.text
+    assert client.get("/c/acme.com", headers={"HX-Request": "true"}).status_code == 200
+    assert client.get("/").status_code == 200
 
 
 def test_inbox_is_removed_and_remaining_sections_stay_in_navigation(client):
@@ -285,6 +337,9 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
     assert c.post("/leads/queue", data={"domains": ["nope.com"]}).status_code == 400
     assert c.post("/mail/decide", data={"update": update["id"], "action": "dismiss"}).status_code == 204
     assert c.post("/mail/decide", data={"update": update["id"], "action": "dismiss"}).status_code == 409
+    assert c.post("/mail/confirm-applied").status_code == 409  # no application confirmation is waiting
+    write_mail(root, "20261016-090000", [mail_update(2, "applied", "PRIVATE-FIRST"), mail_update(3, "applied", "PRIVATE-SECOND")])
+    assert c.post("/mail/confirm-applied").status_code == 204
     assert c.post("/projects", data={"title": "PRIVATE-PROJECT"}).status_code == 204
     assert c.post("/projects", data={"title": "  "}).status_code == 400
     conn = db.connect(root)
@@ -316,8 +371,10 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
                     {"kind": "discover"},
                     {"kind": "monitor", "dry_run": "1"},
                     {"kind": "mail"},
+                    {"kind": "followup", "dry_run": "1"},
                     {"kind": "news", "dry_run": "1"},
-                    {"kind": "monitor_sync"}):
+                    {"kind": "monitor_sync"},
+                    {"kind": "apply_kit", "domain": "epsilon.dev"}):
         finished(root, started_job_id(c.post("/runs", data=started)))
     assert c.post("/runs", data={"kind": "discover", "focus": "PRIVATE-FOCUS", "limit": "500"}).status_code == 400
     # New under Monitors: the company is added and its sync started, and neither names the company.
@@ -350,6 +407,7 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("pipeline_status_updated", {"status": "applied"}),
         ("leads_queued", {"lead_count": 1}),
         ("email_update_decided", {}),
+        ("email_confirmations_added", {"update_count": 2}),
         ("project_created", {}),
         ("project_updated", {}),
         ("project_deleted", {}),
@@ -367,8 +425,10 @@ def test_every_action_of_the_owner_reaches_posthog_as_an_event_that_names_nothin
         ("hunt_run_started", {"kind": "discover", "trigger": "button", "has_focus": False, "limit": 15}),
         ("hunt_run_started", {"kind": "monitor", "trigger": "button", "dry_run": True}),
         ("hunt_run_started", {"kind": "mail", "trigger": "button", "dry_run": False}),
+        ("hunt_run_started", {"kind": "followup", "trigger": "button", "dry_run": True}),
         ("hunt_run_started", {"kind": "news", "trigger": "button", "dry_run": True}),
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
+        ("hunt_run_started", {"kind": "apply_kit", "trigger": "button"}),
         ("monitor_added", {}),
         ("hunt_run_started", {"kind": "monitor_sync", "trigger": "button"}),
         ("monitor_edited", {"name_changed": True, "domain_changed": False}),

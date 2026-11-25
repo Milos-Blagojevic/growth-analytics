@@ -3,7 +3,7 @@ import json
 import pytest
 
 from dashboard import db, ingest, queries
-from dashboard_data import fit, result, write_run
+from dashboard_data import KIT, fit, result, write_kit, write_run
 
 ACME_ROLE = ("Senior Analytics Engineer", "https://jobs.ashbyhq.com/acme/1", "live")
 
@@ -204,6 +204,33 @@ def test_corrupt_watch_state_and_csvs_are_skipped_and_reported(tmp_path, conn):
     ingest.ingest(conn, tmp_path)
     assert [p.split(":")[0] for p in queries.problems(conn)] == ["watch_state.json"]
     assert [(i["domain"], i["status"]) for i in queries.leads(conn)["items"]] == [("delta.ai", "queued")]
+
+
+def test_application_kits_are_ingested_and_one_that_cannot_be_read_is_skipped_and_reported(tmp_path, conn):
+    two_runs(tmp_path)
+    write_kit(tmp_path, "acme.com", title=ACME_ROLE[0], url=ACME_ROLE[1])
+    assert ingest.refresh(conn, tmp_path) is True
+
+    kit = queries.company(conn, "acme.com")["kit"]
+    assert (kit["title"], kit["url"], kit["posting_source"], kit["kit"]) == (*ACME_ROLE[:2], "saved", KIT)
+    assert queries.company(conn, "beta.io")["kit"] is None and queries.problems(conn) == []
+    assert ingest.refresh(conn, tmp_path) is False
+
+    write_kit(tmp_path, "beta.io", kit=KIT | {"answers": []})  # written since: the next page load has it
+    kits = tmp_path / "kits"
+    (kits / "half.io.json").write_text('{"created_at": "2026-10-19T09:00:00", "kit": {"note": "He')  # cut short
+    (kits / "list.io.json").write_text("[]")
+    write_kit(tmp_path, "number.io", kit=KIT | {"note": 5})  # the panel shows the note as text
+    write_kit(tmp_path, "undated.io", created_at="yesterday")
+    write_kit(tmp_path, "unmetered.io", usage={})
+    assert ingest.refresh(conn, tmp_path) is True
+
+    assert [p.split(":")[0].removeprefix("kits/") for p in queries.problems(conn)] == [
+        "half.io.json", "list.io.json", "number.io.json", "undated.io.json", "unmetered.io.json"]
+    assert all(p.startswith("kits/") for p in queries.problems(conn))
+    assert queries.company(conn, "acme.com")["kit"]["kit"] == KIT  # the readable ones are still shown
+    assert queries.company(conn, "beta.io")["kit"]["kit"]["answers"] == []
+    assert conn.execute("SELECT COUNT(*) FROM kits").fetchone()[0] == 2
 
 
 def test_schema_version_change_rebuilds_derived_tables(tmp_path):

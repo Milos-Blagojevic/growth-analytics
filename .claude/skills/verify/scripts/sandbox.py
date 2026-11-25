@@ -6,9 +6,10 @@
 `python -m dashboard` always starts the hunt.py next to the dashboard package (jobs.HUNT_SCRIPT), whatever --root
 is, so a Run button or HUNT_SCHEDULE entry there spends money and can message Telegram. This launcher passes
 `hunt_command` instead: jobs from buttons and from --schedule run DIR/fake_hunt.py, which prints its arguments,
-sleeps FAKE_HUNT_SECONDS (default 1) and exits with FAKE_HUNT_EXIT (default 0). With --chat-bot (CHAT_BOT=1) the
-dashboard keeps `fake_hunt.py chat` running: it prints a line and sleeps FAKE_HUNT_CHAT_SECONDS (default 3600),
-so the Runs page shows a running bot.
+sleeps FAKE_HUNT_SECONDS (default 1) and exits with FAKE_HUNT_EXIT (default 0). For `apply-kit <domain>` it also
+writes a sample kits/<domain>.json for the company's latest best role, so its panel can be looked at. With --chat-bot
+(CHAT_BOT=1) the dashboard keeps `fake_hunt.py chat` running: it prints a line and sleeps FAKE_HUNT_CHAT_SECONDS
+(default 3600), so the Runs page shows a running bot.
 
 DIR must be new or empty, or a folder this script created before (it leaves a .verify-sandbox marker), so it never
 runs migrations on a copy of real data. --code is the code tree to serve (default: the current directory), so the
@@ -26,13 +27,35 @@ from pathlib import Path
 
 MARKER = ".verify-sandbox"
 
-FAKE_HUNT = """import os, sys, time
+FAKE_HUNT = """import glob, json, os, sys, time
 print("fake hunt.py", *sys.argv[1:], flush=True)
 if sys.argv[1:2] == ["chat"]:
     time.sleep(float(os.environ.get("FAKE_HUNT_CHAT_SECONDS", "3600")))
     sys.exit(0)
 time.sleep(float(os.environ.get("FAKE_HUNT_SECONDS", "1")))
-sys.exit(int(os.environ.get("FAKE_HUNT_EXIT", "0")))
+code = int(os.environ.get("FAKE_HUNT_EXIT", "0"))
+if sys.argv[1:2] == ["apply-kit"] and len(sys.argv) == 3 and code == 0:
+    domain, fit = os.path.basename(sys.argv[2]), {}
+    for path in sorted(glob.glob(os.path.join("out", "*", domain + ".json"))):
+        with open(path) as f:
+            fit = json.load(f).get("fit") or fit
+    os.makedirs("kits", exist_ok=True)
+    with open(os.path.join("kits", domain + ".json"), "w") as f:
+        json.dump({
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "fake", "domain": domain, "company": domain,
+            "usage": {"input_tokens": 4200, "output_tokens": 900}, "run": "", "posting_source": "saved",
+            "title": fit.get("best_role_title", ""), "url": fit.get("best_role_url", ""),
+            "questions": [{"question": "Why do you want to work <b>here</b>?", "required": True}],
+            "kit": {
+                "lead_with": ["The dbt platform you built: the posting asks for expert dbt."],
+                "note": "Hello,<br>a sample note from the fake hunt.py." + chr(10) * 2 + "Its second paragraph.",
+                "answers": [{"question": "Why do you want to work <b>here</b>?",
+                             "answer": "A sample answer. Salary expectation: [add: your range]."}],
+                "check": ["[add: your range] in the first answer"],
+            },
+        }, f)
+    print("Saved application kit to kits/" + domain + ".json", flush=True)
+sys.exit(code)
 """
 
 

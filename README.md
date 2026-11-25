@@ -44,8 +44,8 @@ flowchart LR
 | Path | Holds | Docs |
 |---|---|---|
 | `hunt.py` | The CLI entry point: `python hunt.py <command>` | [Commands](#commands) |
-| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, Ashby job boards, Telegram, PostHog | [clients/README.md](clients/README.md) |
-| `pipeline/` | The job hunt: company research, Jev role screen and Claude fit scoring, Exa monitors, news digest, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
+| `clients/` | Clients for the external services the features share: Exa, TypeSafe's Jev, job boards' public feeds, Telegram, PostHog | [clients/README.md](clients/README.md) |
+| `pipeline/` | The job hunt: company research, open roles from the companies' job boards, Jev role screen and Claude fit scoring, new postings at the companies you watch (job boards and Exa monitors), news digest, application kits, saved-run format and lock | [pipeline/README.md](pipeline/README.md) |
 | `inbox/` | Your mailboxes: browser sign-in, Outlook and Gmail APIs, email updates, the Telegram chat bot (your mail, and news digests on request) | [inbox/README.md](inbox/README.md) |
 | `interview/` | Interview files and talk metrics, Claude prep briefs and transcript reviews | [interview/README.md](interview/README.md) |
 | `evals/` | Public, human-labeled AI exams: Jev role-screen runner and reproducible results | [evals/README.md](evals/README.md) |
@@ -92,9 +92,11 @@ python -m clients.exa_client
 | `python hunt.py monitor` | Suitable new postings the monitors found since the last check | Jev, Claude (Exa only for an unclear link or a missing posting text) | Yes, unless `--dry-run` | [Monitors](pipeline/README.md#monitors) |
 | `python hunt.py outlook-login` | Signs in to Outlook once | No | No | [Email updates](inbox/README.md#email-updates) |
 | `python hunt.py mail` | Application confirmations, rejections and interview invites in new email | Jev, Claude | Yes, unless `--dry-run` | [Email updates](inbox/README.md#email-updates) |
+| `python hunt.py followup` | Applications without a reply for 8 days, each once, with whether its posting is still open | No | Yes, unless `--dry-run` | [Follow-ups](inbox/README.md#follow-ups) |
 | `python hunt.py news` | News digest on your `[news].topics` | Exa, Jev, Claude | Yes, unless `--dry-run` | [News digest](pipeline/README.md#news-digest) |
 | `python hunt.py interview-prep` | Prep brief for one interview | Claude (and Exa for the posting) | No | [Interviews](interview/README.md#interviews) |
 | `python hunt.py interview-review` | Review of one interview's transcript | Claude | No | [Interviews](interview/README.md#interviews) |
+| `python hunt.py apply-kit <domain>` | Application kit for a company's best role: drafted answers to the posting's application questions, a short note, the CV points to lead with | Claude (and Exa, about $0.001, when the posting text has to be fetched) | No | [Application kit](pipeline/README.md#application-kit) |
 | `python hunt.py gmail-login` | Signs in to Gmail once | No | No | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
 | `python hunt.py chat` | Telegram chat bot over your mail; makes a news digest when you ask for news | Claude; Exa and Jev for a news digest | Yes, it answers in Telegram | [Chat with your mail](inbox/README.md#chat-with-your-mail) |
 | `python -m dashboard` | Dashboard: results, tracking, starting jobs; with `MCP_TOKEN`, the same as tools for AI clients at `/mcp` | Only the jobs you start | Only the jobs you start | [Dashboard](dashboard/README.md#dashboard), [MCP endpoint](dashboard/README.md#mcp-endpoint) |
@@ -132,7 +134,9 @@ python -m clients.exa_client
 | `gmail_token.json` | Your Gmail sign-in, from `gmail-login` (git-ignored; same access) |
 | `mail/` | Application confirmations, rejections and interview invites `mail` found, one file per check that found some (git-ignored) |
 | `mail_state.json` | When mail was last checked and the emails already labelled (git-ignored) |
+| `followup_state.json` | The applications `followup` has already reported (git-ignored) |
 | `news_state.json` | Articles the news digest has already considered; the empty `news_state.json.lock` next to it is what its two writers, `news` and the chat bot, lock while they update it (git-ignored) |
 | `jobs/` | Logs and company lists of jobs started from the dashboard (git-ignored) |
 | `interviews/` | Your interviews: details, transcripts, prep briefs and reviews (git-ignored) |
+| `kits/` | Application kits `apply-kit` wrote, one `<domain>.json` per company; they hold text drawn from your CV (git-ignored) |
 | `.hunt.lock` | Lock file that lets one `hunt.py` command run at a time (git-ignored) |

@@ -8,7 +8,7 @@ import pytest
 from pipeline import runs
 from dashboard import db, jobs
 from dashboard.app import create_app
-from dashboard_data import BASE_URL, client, fit, result, write_run
+from dashboard_data import BASE_URL, client, fit, result, write_kit, write_run
 
 FIBER_BOX = re.compile(r'<input type="checkbox" name="fiber" value="1"\s*(checked)?\s*>')
 
@@ -184,12 +184,29 @@ def test_email_check_needs_the_outlook_sign_in_and_names_what_claude_sees(root, 
     assert (job["status"], job["args"]) == ("succeeded", ["mail", "--dry-run"])
 
 
+def test_follow_ups_cost_nothing_and_say_what_they_read_and_send(root, app):
+    c = client(app)
+    assert 'name="kind" value="followup"' in c.get("/runs").text
+
+    preview = c.post("/runs/preview", data={"kind": "followup"}).text
+    assert "python hunt.py followup" in preview and "Free: no Exa, Jev or Claude call. It reads hunt.db" in preview
+    assert "Sends the applications without a reply to Telegram and records them in followup_state.json" in preview
+    dry = c.post("/runs/preview", data={"kind": "followup", "dry_run": "1"}).text
+    assert "Telegram" not in dry and "followup_state.json" not in dry
+
+    printed = finished(root, started_job_id(c.post("/runs", data={"kind": "followup", "dry_run": "1"})))
+    assert (printed["status"], printed["args"], printed["label"]) == ("succeeded", ["followup", "--dry-run"],
+                                                                      "Follow-ups (dry run)")
+    sent = finished(root, started_job_id(c.post("/runs", data={"kind": "followup"})))
+    assert (sent["kind"], sent["args"], sent["label"]) == ("followup", ["followup"], "Follow-ups")
+
+
 def test_the_scheduled_monitor_jobs_run_their_commands_and_say_what_exa_bills(root, app):
     c = client(app)
 
     sync = c.post("/runs/preview", data={"kind": "monitor_sync"}).text
     assert "python hunt.py monitor-sync" in sync
-    assert "Exa then bills every monitor $0.002 a run" in sync and "about $0.12 a month for each company in monitors.csv" in sync
+    assert "$0.002 a run" in sync and "$0.12 a month" in sync  # what a monitor costs, before one is created
     assert "Creates, updates and deletes monitors on your Exa account to match monitors.csv" in sync
     check = c.post("/runs/preview", data={"kind": "monitor"}).text
     assert "Sends the suitable new postings to Telegram" in check and "one call per new posting" in check
@@ -208,7 +225,7 @@ def test_new_monitor_adds_the_company_and_syncs_and_runs_shows_which_have_a_moni
         {"folder": "f1", "monitors": {"acme.com": {"id": "mon_1", "name": "Acme", "params": {}, "created_at": "2026-11-02T08:00:00Z"}}}))
 
     form = c.get("/runs/monitors/new").text
-    assert "python hunt.py monitor-sync" in form and "about $0.12 a month for each company" in form
+    assert "python hunt.py monitor-sync" in form and "$0.12 a month" in form
     job = finished(root, started_job_id(c.post("/runs/monitors", data={"name": " Beta  Labs ", "domain": "https://www.Beta.io/"})))
 
     assert (job["kind"], job["args"], job["label"]) == ("monitor_sync", ["monitor-sync"], "New monitor: Beta Labs (beta.io)")
@@ -218,6 +235,16 @@ def test_new_monitor_adds_the_company_and_syncs_and_runs_shows_which_have_a_moni
     assert "Check monitors" not in page and "Sync monitors" not in page and "Resend notification" not in page
     assert re.search(r"Acme</td>\s*<td[^>]*>acme\.com</td>\s*<td[^>]*>on Exa since 2026-11-02</td>", page)
     assert re.search(r"Beta Labs</td>\s*<td[^>]*>beta\.io</td>\s*<td[^>]*>not on Exa yet</td>", page)
+
+
+def test_runs_shows_a_company_that_is_read_from_its_job_board(root, app):
+    (root / "monitors.csv").write_text("Acme,acme.com\n")
+    (root / "monitor_state.json").write_text(json.dumps({"folder": "f1", "monitors": {"acme.com": {
+        "name": "Acme", "since": "2026-11-20T10:00:00", "board": {"ats": "ashby", "slug": "acme", "host": "jobs.ashbyhq.com"}}}}))
+
+    page = client(app).get("/runs").text
+
+    assert re.search(r"Acme</td>\s*<td[^>]*>acme\.com</td>\s*<td[^>]*>job board at jobs\.ashbyhq\.com since 2026-11-20</td>", page)
 
 
 @pytest.mark.parametrize(
@@ -391,6 +418,40 @@ def test_one_command_at_a_time(root, app, monkeypatch):
     assert c.post(f"/runs/jobs/{job_id}/cancel").status_code == 204
     assert finished(root, job_id)["status"] == "cancelled"
     assert c.post(f"/runs/jobs/{job_id}/cancel").status_code == 409
+
+
+def test_an_application_kit_is_written_for_a_known_company_with_a_posting_and_its_domain_is_never_an_option(root, app):
+    """The domain is the one argument of `hunt.py apply-kit` and names the file the kit is saved in."""
+    c = client(app)
+    write_run(root, "20260109-090000", [result("Gamma", "gamma.dev", fit=fit(58, "check_careers", "Head of Data"))])
+
+    preview = c.post("/runs/preview", data={"kind": "apply_kit", "domain": "https://www.Acme.com/careers"}).text
+    assert "Application kit · Acme" in preview and "python hunt.py apply-kit acme.com" in preview
+    assert "Claude: one call, a few cents" in preview
+    assert "Exa: about $0.001 when the posting text has to be fetched" in preview
+    assert "Sends your profile, CV, the posting and its application questions to Claude." in preview
+    assert "application form from its job board" in preview and "Replaces the current application kit." not in preview
+    write_kit(root, "acme.com")
+    again = c.post("/runs/preview", data={"kind": "apply_kit", "domain": "acme.com"}).text
+    assert "Replaces the current application kit." in again
+
+    for domain, refusal in (("nope.com", "unknown company: nope.com"),
+                            ("delta.ai", "unknown company: delta.ai"),  # a lead: never researched
+                            ("gamma.dev", "Gamma has no posting to apply to"),
+                            ("--profile=x.com", "domain cannot start with a dash"),
+                            ("-h", "domain cannot start with a dash"),
+                            ("", "is not a domain"),
+                            ("../../hunt.db", "is not a domain")):
+        assert refusal in c.post("/runs/preview", data={"kind": "apply_kit", "domain": domain}).text, domain
+        assert c.post("/runs", data={"kind": "apply_kit", "domain": domain}).status_code == 400, domain
+    conn = db.connect(root)
+    assert jobs.recent(conn, 10) == []  # a preview and a refusal start nothing
+    conn.close()
+
+    job = finished(root, started_job_id(c.post("/runs", data={"kind": "apply_kit", "domain": "www.acme.com"})))
+    assert (job["kind"], job["args"], job["label"]) == ("apply_kit", ["apply-kit", "acme.com"], "Application kit · Acme")
+    assert (job["status"], job["run_id"]) == ("succeeded", None)
+    assert 'href="/c/acme.com">← Company</a>' in c.get(f"/runs/jobs/{job['id']}").text  # back to where the kit shows
 
 
 def test_jobs_left_running_by_a_previous_process_are_marked_interrupted(root):

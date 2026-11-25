@@ -104,7 +104,8 @@ def latest_failures(conn):
 
 
 def company(conn, domain):
-    """Latest scored result (or latest of any kind if never scored), its roles, and the per-run history."""
+    """Latest scored result (or latest of any kind if never scored), its roles, the per-run history and the
+    application kit saved for the company (the kits/<domain>.json file as a dict, None when there is none)."""
     history = [
         dict(r)
         for r in conn.execute(
@@ -128,7 +129,9 @@ def company(conn, domain):
         )
     ]
     newer = [h for h in history if h["run_id"] > result["run_id"]]
-    return {"result": result, "roles": roles, "history": history, "newer": newer, "sparkline": sparkline(history)}
+    kit = conn.execute("SELECT kit FROM kits WHERE domain = ?", [domain]).fetchone()
+    return {"result": result, "roles": roles, "history": history, "newer": newer, "sparkline": sparkline(history),
+            "kit": json.loads(kit["kit"]) if kit else None}
 
 
 def sparkline(history, width=240, height=64, pad=5):

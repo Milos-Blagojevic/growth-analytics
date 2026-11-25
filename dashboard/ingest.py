@@ -1,7 +1,8 @@
 """Rebuilds the derived tables of hunt.db from the pipeline's files.
 
 Sources (all relative to the project root): out/<run>/*.json, discovered.csv, companies.csv, watch_state.json (the
-postings of the former watch list, so those tracked on Pipeline keep their titles), interviews/<id>/*.json, mail/*.json.
+postings of the former watch list, so those tracked on Pipeline keep their titles), interviews/<id>/*.json, mail/*.json,
+kits/<domain>.json.
 A full rebuild is cheap at this size and keeps ingest idempotent; `refresh` skips it when no source changed.
 """
 
@@ -35,6 +36,7 @@ def signature(root):
     files += [root / name for name in (DISCOVERED, COMPANIES, WATCH_STATE) if (root / name).exists()]
     files += [p for d in interviews.interview_dirs(root) for p in sorted(d.glob("*.json"))]
     files += mail.update_files(root)
+    files += runs.kit_files(root)
     digest = hashlib.sha256()
     for path in files:
         stat = path.stat()
@@ -98,12 +100,36 @@ def ingest(conn, root, sig=None):
             except UNREADABLE as exc:
                 logger.warning("skipping %s: %s", path, exc)
                 problems.append(f"{mail.DIR}/{path.name}: {type(exc).__name__}: {exc}")
+        for path in runs.kit_files(root):
+            try:
+                _ingest_kit(conn, path)
+            except UNREADABLE as exc:
+                logger.warning("skipping %s: %s", path, exc)
+                problems.append(f"{runs.KITS}/{path.name}: {type(exc).__name__}: {exc}")
         meta = {
             "signature": sig or signature(root),
             "ingested_at": datetime.now().isoformat(timespec="seconds"),
             "problems": json.dumps(problems),
         }
         conn.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", meta.items())
+
+
+def _ingest_kit(conn, path):
+    """One kits/<domain>.json, under the domain that names the file. Everything the company panel shows of it is
+    read here first, so a file in another shape is listed as a problem instead of failing the panel."""
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    kit, usage = saved["kit"], saved["usage"]
+    datetime.fromisoformat(saved["created_at"])
+    texts = [kit["note"], saved.get("title") or "", saved.get("url") or "", *kit["lead_with"], *kit["check"],
+             *(text for answer in kit["answers"] for text in (answer["question"], answer["answer"]))]
+    counts = [usage["input_tokens"], usage["output_tokens"]]
+    if not all(isinstance(text, str) for text in texts) or not all(isinstance(count, int) for count in counts):
+        raise ValueError("not an application kit")
+    conn.execute(
+        "INSERT OR REPLACE INTO kits VALUES (?, ?, ?, ?, ?)",
+        [runs.normalize_domain(path.stem), saved["created_at"], saved.get("url") or None, saved.get("title") or None,
+         json.dumps(saved)],
+    )
 
 
 def _ingest_mail(conn, path):

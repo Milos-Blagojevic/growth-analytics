@@ -9,9 +9,11 @@
     python hunt.py monitor [--dry-run]       # send the suitable new postings the monitors found (Claude)
     python hunt.py outlook-login             # sign in to Outlook once, for `mail` and `chat`
     python hunt.py mail [--dry-run]          # find application confirmations, rejections and interview invites in new email (Claude)
+    python hunt.py followup [--dry-run]      # list the applications without a reply for 8 days, and whether each is still open
     python hunt.py news [--dry-run]          # news digest on your [news].topics (Exa + Claude)
     python hunt.py interview-prep <dir>      # prep brief for one interview in interviews/ (Claude)
     python hunt.py interview-review <dir>    # review one interview's transcript (Claude)
+    python hunt.py apply-kit <domain>        # application kit for a company's best role: form answers, a note (Claude)
     python hunt.py gmail-login               # sign in to Gmail once, for `chat`
     python hunt.py chat                      # answer Telegram messages: your mail, drafts, news digests (Claude, Exa)
 """
@@ -31,10 +33,10 @@ from pathlib import Path
 
 import logfire
 
-from clients import exa_client, jev, posthog_client, telegram
-from inbox import chat, gmail, mail, mail_labels, outlook
+from clients import boards, exa_client, jev, posthog_client, telegram
+from inbox import chat, followup, gmail, mail, mail_labels, outlook
 from interview import coaching, interviews
-from pipeline import monitor, news, research, runs, scoring
+from pipeline import kit, monitor, news, research, runs, scoring
 
 logger = logging.getLogger("hunt")
 WORKERS = 4
@@ -99,11 +101,12 @@ def load_companies(path):
     return companies
 
 
-def process_company(name, domain, profile, *, score, fiber=False):
-    """Research (and optionally score) one company. Never raises; errors are returned in the result."""
+def process_company(name, domain, profile, *, score, fiber=False, known_links=()):
+    """Research (and optionally score) one company. Never raises; errors are returned in the result.
+    `known_links` are the posting links earlier runs saved for it: they say which job board it posts on."""
     result = {"name": name, "domain": domain}
     try:
-        result["research"] = research.research_company(name, domain, profile, fiber=fiber)
+        result["research"] = research.research_company(name, domain, profile, fiber=fiber, known_links=known_links)
         if score:
             _score(result, profile)
     except Exception as exc:  # one failing company must not abort the batch
@@ -279,13 +282,18 @@ def cmd_run(args):
     if score and not jev.configured():
         print("TYPESAFE_API_KEY is not set: Claude scores every open role (no Jev screen).")
     if args.fiber:
-        print("Open roles also come from Fiber's jobs database: one Exa agent run per verified company, "
-              "about $0.09 to $0.40 each on top of the usual research.")
+        print("Open roles also come from Fiber's jobs database: one Exa agent run per verified company whose job "
+              "board has no public feed, about $0.09 to $0.40 each on top of the usual research.")
 
     started_at = datetime.now()
+    saved = runs.saved_postings(OUT_DIR)
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         try:
-            results = list(pool.map(lambda c: process_company(*c, profile, score=score, fiber=args.fiber), companies))
+            results = list(pool.map(
+                lambda c: process_company(*c, profile, score=score, fiber=args.fiber,
+                                          known_links=saved.get(c[1], {}).get("links", ())),
+                companies,
+            ))
         except KeyboardInterrupt:
             exa_client.stop_agent_runs()  # Ctrl-C does not reach the workers: their agent runs would be billed on
             raise
@@ -509,22 +517,35 @@ def cmd_monitor_sync(args):
     if not companies and not state["monitors"] and "folder" not in state:
         sys.exit(f"{args.companies}: no companies listed")
     # With nothing listed and a folder id, the sync still runs: a monitor whose create lost its reply may be left.
+    saved = runs.saved_postings(OUT_DIR)
+    on_board = {}  # the companies whose job board has a public feed: read from it, with no monitor
+    for name, domain in companies:
+        found = monitor.board(name, domain, state["monitors"].get(domain), saved.get(domain, {}).get("links", ()))
+        if found:
+            on_board[domain] = found
     try:
-        webhook = monitor.webhook_url(dashboard_url()) if companies else None  # deleting the last ones needs none
+        # only a company that gets a monitor needs the address; deleting the last ones needs none
+        needs_monitor = any(domain not in on_board for _, domain in companies)
+        webhook = monitor.webhook_url(dashboard_url()) if needs_monitor else None
     except ValueError as exc:
         sys.exit(str(exc))
     _require_exa()
 
-    lines, problems = monitor.sync(companies, profile, webhook, state, lambda: monitor.save_state(args.state, state))
+    lines, problems = monitor.sync(companies, profile, webhook, state, lambda: monitor.save_state(args.state, state),
+                                   on_board)
     for line in lines:
         print(line)
     for problem in problems:
         logger.warning("monitor-sync: %s", problem)
-    if state["monitors"]:
-        print(f"\n{len(state['monitors'])} monitor(s). Exa runs each every {monitor.PERIOD} and bills "
-              f"${monitor.RUN_DOLLARS} a run; `python hunt.py monitor` reads what they find.")
-    else:
-        print(f"\nNo monitors: {args.companies} lists none.")
+    on_exa = sum(bool(entry.get("id")) for entry in state["monitors"].values())
+    summary = []
+    if on_exa:
+        summary.append(f"{on_exa} monitor(s). Exa runs each every {monitor.PERIOD} and bills "
+                       f"${monitor.RUN_DOLLARS} a run; `python hunt.py monitor` reads what they find.")
+    if len(state["monitors"]) > on_exa:
+        summary.append(f"{len(state['monitors']) - on_exa} company(ies) read from their job board, free; "
+                       "`python hunt.py monitor` reads what they list.")
+    print("\n" + ("\n".join(summary) or f"No monitors: {args.companies} lists none."))
     return 1 if problems else 0
 
 
@@ -554,7 +575,8 @@ def cmd_monitor(args):
     if not state["monitors"]:
         sys.exit(f"{args.state}: no monitors yet. Add a company with New monitor on the dashboard's Runs page, or "
                  f"list companies in {runs.MONITORS} and run `python hunt.py monitor-sync`.")
-    _require_exa()
+    if any(entry.get("id") for entry in state["monitors"].values()):
+        _require_exa()
     _require_claude()
     if not args.dry_run and not telegram.configured():
         sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
@@ -564,7 +586,12 @@ def cmd_monitor(args):
     results, problems, unreadable = [], [], 0
     for domain, entry in state["monitors"].items():
         try:
-            found, dead, progress, run_problems = monitor.findings(domain, entry)
+            if entry.get("board"):
+                found, run_problems = monitor.board_findings(domain, entry, profile)
+                dead, progress = [], None
+                unreadable += bool(run_problems)  # a board has no partial answer: it was read or it was not
+            else:
+                found, dead, progress, run_problems = monitor.findings(domain, entry)
         except Exception as exc:  # one monitor that cannot be read must not stop the others
             problems.append(f"{entry['name']}: {type(exc).__name__}: {exc}")
             unreadable += 1
@@ -580,7 +607,8 @@ def cmd_monitor(args):
                 title = result["research"]["content"]["open_roles"][0]["title"]
                 problems.append(f"{entry['name']}: {title}: {result['error']}{given_up}")
         # A posting to be scored again keeps the last run read where it was: its run is read again by the next check.
-        monitor.advance(entry, progress, hold=bool(again))
+        if progress is not None:
+            monitor.advance(entry, progress, hold=bool(again))
         results += judged
     for problem in problems:
         logger.warning("monitor: %s", problem)
@@ -737,6 +765,38 @@ def cmd_mail(args):
     return 1 if problems else 0
 
 
+def cmd_followup(args):
+    if not Path(args.db).exists():
+        print(f"{args.db}: nothing is tracked yet. Set an application's status to Applied on the dashboard first.")
+        return 0
+    if not args.dry_run and not telegram.configured():
+        sys.exit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are not set. Add them to .env (or use --dry-run).")
+    try:
+        state = followup.load_state(args.state)
+    except ValueError as exc:
+        sys.exit(f"{args.state}: {exc}. Fix it, or delete it: every waiting application is then reported once more.")
+    now = datetime.now()
+    try:
+        applications = followup.applications(args.db)
+    except ValueError as exc:
+        sys.exit(f"{args.db}: {exc}")
+    waiting = followup.waiting(applications, followup.replies("."), state["nudged"], now)
+    if not waiting:
+        print(f"No application has waited {followup.SILENT_DAYS} days for a reply.")
+        return 0
+    groups = followup.check(waiting)
+    message = followup.format_message(groups, dashboard_url())
+    if args.dry_run:
+        print(message)
+        return 0
+    for part in telegram.pack_blocks([message]):
+        telegram.send(part)
+    print(f"Sent {len(waiting)} follow-up(s) to Telegram.")
+    followup.record(state, groups, now)
+    followup.save_state(args.state, state)  # only after a successful send, so a failed send is reported again
+    return 0
+
+
 def cmd_news(args):
     profile = load_profile(args.profile)
     try:
@@ -780,7 +840,7 @@ def cmd_news(args):
     return 1 if problems else 0
 
 
-POSTING_CHARS = 8000  # posting text sent to the interview prep
+POSTING_CHARS = 8000  # posting text sent to the interview prep and the application kit
 
 
 def _interview_dir(arg):
@@ -886,6 +946,85 @@ def cmd_interview_review(args):
     return 0
 
 
+def _scored_posting(domain):
+    """The company's newest saved result whose fit names a best role with a posting link: (result, run), or None."""
+    for run_dir in reversed(runs.run_dirs(OUT_DIR)):
+        for r in runs.load_results(run_dir):
+            best = (r.get("fit") or {}).get("best_role_url")
+            if runs.normalize_domain(str(r.get("domain") or "")) == domain and isinstance(best, str) and best.strip():
+                return r, run_dir.name
+    return None
+
+
+def _same_posting(url, link):
+    """True when `link`, a saved role's or a job board's, points at the posting `url` does (research.is_listed)."""
+    try:
+        return isinstance(link, str) and bool(link) and research.is_listed(url, [{"url": link}])
+    except ValueError:  # a saved link that is no URL at all
+        return False
+
+
+def cmd_apply_kit(args):
+    profile = load_profile(args.profile)
+    _require_claude()
+    domain = runs.normalize_domain(args.domain)
+    try:
+        runs.kit_path(".", domain)  # hunt.py runs in the data folder
+    except ValueError as exc:
+        sys.exit(str(exc))
+    found = _scored_posting(domain)
+    if found is None:
+        sys.exit(f"No saved result for {domain} names a best role with a posting link. Run it first: add it to "
+                 "companies.csv and use `python hunt.py run`, or Re-run on its dashboard page.")
+    result, run = found
+    fit, name = result["fit"], str(result.get("name") or domain)
+    # The link is kept as the fit spells it: the dashboard tracks the posting by that spelling, and tells by it
+    # whether a kit is for the company's current best role.
+    link = fit["best_role_url"].strip()
+    open_roles = ((result.get("research") or {}).get("content") or {}).get("open_roles") or []
+    role = next((r for r in open_roles if isinstance(r, dict) and _same_posting(link, r.get("url"))), {})
+    title = " ".join(str(role.get("title") or fit.get("best_role_title") or "").split())
+
+    # Posting text, from the cheapest source that has it: the saved run, the company's job board (free), Exa.
+    links = (runs.saved_postings(OUT_DIR).get(domain) or {}).get("links") or []
+    job_boards = research.company_boards(name, domain, links)
+    posting, source = str(role.get("description") or "").strip(), "saved"
+    if not posting:
+        for board in job_boards:
+            _, postings = research.board_postings(board)
+            listed = next((p for p in postings if any(_same_posting(link, p[key]) for key in ("url", "hosted"))), None)
+            if listed and listed["text"].strip():
+                posting, source = listed["text"].strip(), "board"
+                break
+    if not posting and exa_client.configured():
+        posting, source = fetch_posting(link), "fetched"
+    posting = posting[:POSTING_CHARS]
+    questions = boards.questions(link, job_boards[0] if job_boards else None)
+
+    written, usage = kit.write({"title": title, "url": link, "company": name}, posting, questions, profile,
+                               company_notes(domain))
+    path = runs.save_kit(".", domain, {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "model": os.environ.get("SCORING_MODEL", scoring.DEFAULT_MODEL),
+        "usage": usage,
+        "domain": domain,
+        "company": name,
+        "title": title,
+        "url": link,
+        "run": run,
+        "posting_source": source if posting else "none",
+        "questions": questions,
+        "kit": written.model_dump(),
+    })
+    print(f"Saved application kit to {path}")
+    print(f"\n{name}: {title}\n{link}")
+    print(f"Posting text: {source if posting else 'none'}. Application questions found: {len(questions)}.")
+    summary = exa_client.cost_summary()
+    print(f"\nExa: {summary['requests']} requests, ${summary['dollars']:.4f}"
+          f" | Claude: {usage['input_tokens']} input / {usage['output_tokens']} output tokens")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", default="profile.toml")
@@ -931,6 +1070,14 @@ def main():
     mail_cmd.add_argument("--dry-run", action="store_true", help="print the labels; do not save, send or update state")
     mail_cmd.set_defaults(func=cmd_mail)
 
+    followup_cmd = sub.add_parser("followup", help="send the applications without a reply for "
+                                                   f"{followup.SILENT_DAYS} days to Telegram, with whether each "
+                                                   "posting is still open (free)")
+    followup_cmd.add_argument("--state", default=followup.STATE, help="JSON file of the applications already reported")
+    followup_cmd.add_argument("--db", default=followup.DB, help="the dashboard's database, where your statuses are")
+    followup_cmd.add_argument("--dry-run", action="store_true", help="print the message; do not send or save state")
+    followup_cmd.set_defaults(func=cmd_followup)
+
     news_cmd = sub.add_parser("news", help="send a news digest on your [news].topics to Telegram (Exa + Claude)")
     news_cmd.add_argument("--state", default=news.STATE, help="JSON file of articles already considered")
     news_cmd.add_argument("--days", type=int, default=news.DAYS, help="articles published in the last N days")
@@ -944,6 +1091,12 @@ def main():
     review_cmd = sub.add_parser("interview-review", help="review one interview's transcript (Claude)")
     review_cmd.add_argument("interview", help="the interview's folder, interviews/<id>")
     review_cmd.set_defaults(func=cmd_interview_review)
+
+    kit_cmd = sub.add_parser("apply-kit", help="draft what you need to apply to a company's best role: answers to the "
+                                               "posting's application questions, a note, CV points (Claude)")
+    kit_cmd.add_argument("domain", help="the company's domain, as in companies.csv; it needs a scored result with "
+                                        "a posting")
+    kit_cmd.set_defaults(func=cmd_apply_kit)
 
     gmail_cmd = sub.add_parser("gmail-login", help="sign in to Gmail (read, create drafts) for the chat command")
     gmail_cmd.add_argument("--token", default=gmail.TOKEN_FILE, help="where the sign-in is saved")

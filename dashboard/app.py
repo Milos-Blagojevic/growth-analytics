@@ -416,8 +416,9 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
     @app.get("/pipeline", response_class=HTMLResponse)
     def pipeline(request: Request):
         with connection() as conn:
+            suggestions = email_updates.suggestions(conn)
             return render(request, "pipeline.html", conn, page="pipeline", columns=tracking.pipeline(conn),
-                          mail_suggestions=email_updates.suggestions(conn))
+                          mail_suggestions=suggestions, mail_confirmable=len(email_updates.confirmable(suggestions)))
 
     @app.post("/mail/decide")
     async def mail_decide(request: Request):
@@ -433,6 +434,18 @@ def create_app(root=".", *, hunt_command=None, allowed_hosts=LOOPBACK_HOSTS, pas
             except ValueError as exc:
                 return PlainTextResponse(str(exc), status_code=400)
         posthog_client.capture("email_update_decided")
+        return reload()
+
+    @app.post("/mail/confirm-applied")
+    def mail_confirm_applied():
+        """Confirm every pending application confirmation in one click: each is added to the pipeline as applied, or
+        sets that status on the one tracked item it matches; those that match several stay for the owner to pick."""
+        with connection() as conn:
+            confirmed = email_updates.confirm_applied(conn)
+        if not confirmed:
+            return PlainTextResponse("No application confirmation is waiting to be added. Reload the page.",
+                                     status_code=409)
+        posthog_client.capture("email_confirmations_added", {"update_count": confirmed})
         return reload()
 
     @app.get("/projects", response_class=HTMLResponse)
