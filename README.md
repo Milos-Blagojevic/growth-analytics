@@ -7,7 +7,8 @@ I built this job hunting app for my own job search. It uses [Exa](https://exa.ai
 ```mermaid
 flowchart LR
     exa["Exa<br/>search, agent runs, monitors"]
-    mailbox["Outlook, Gmail"]
+    outlook["Outlook"]
+    gmail["Gmail"]
 
     subgraph hunt ["hunt.py"]
         direction LR
@@ -23,8 +24,9 @@ flowchart LR
     mcp["MCP client"]
 
     exa --> research
-    mailbox --> mail
-    mailbox --> chat
+    outlook --> mail
+    outlook --> chat
+    gmail --> chat
     claude --> files
     mail --> files
     coach --> files
